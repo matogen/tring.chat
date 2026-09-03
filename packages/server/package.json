@@ -1,0 +1,18 @@
+{
+  "name": "@tring/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "tring": "./src/index.ts" },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@tring/shared": "*",
+    "@xterm/addon-serialize": "^0.13.0",
+    "@xterm/headless": "^5.5.0",
+    "node-pty": "^1.0.0",
+    "ws": "^8.18.0"
+  }
+}
