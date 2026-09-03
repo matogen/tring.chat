@@ -1,5 +1,6 @@
 import type { ProjectInfo, SessionInfo } from '@tring/shared/protocol'
 import { legendForSlot, SLOT_COUNT } from '@tring/shared/keymap'
+import { api } from './ws-client.ts'
 
 const root = document.getElementById('overlay') as HTMLElement
 
@@ -36,6 +37,70 @@ function el<K extends keyof HTMLElementTagNameMap>(
   if (cls) n.className = cls
   if (text !== undefined) n.textContent = text
   return n
+}
+
+/* ---------- directory browser ---------- */
+
+interface DirListing {
+  path: string
+  parent: string | null
+  entries: { name: string; path: string }[]
+}
+
+/**
+ * A browser can never hand back an absolute filesystem path —
+ * `webkitdirectory` and `showDirectoryPicker()` both withhold it by design —
+ * so the daemon lists directories and this walks them, keeping the text input
+ * in sync. Typing a path still works; this just means you do not have to.
+ */
+function directoryBrowser(input: HTMLInputElement): HTMLElement {
+  const wrap = el('div', 'browser')
+  const crumb = el('div', 'crumb')
+  const list = el('div', 'dirlist')
+  wrap.append(crumb, list)
+
+  let loading = false
+
+  async function load(target?: string): Promise<void> {
+    if (loading) return
+    loading = true
+    list.replaceChildren(el('div', 'dirnote', 'loading…'))
+    try {
+      const q = target ? `?path=${encodeURIComponent(target)}` : ''
+      const dir = await api<DirListing>(`/api/fs${q}`)
+      input.value = dir.path
+      crumb.replaceChildren()
+
+      if (dir.parent) {
+        const up = el('button', 'up', '↑ ' + dir.parent)
+        up.type = 'button'
+        up.onclick = () => void load(dir.parent!)
+        crumb.append(up)
+      } else {
+        crumb.append(el('span', 'dirnote', dir.path))
+      }
+
+      list.replaceChildren()
+      if (dir.entries.length === 0) {
+        list.append(el('div', 'dirnote', 'no subdirectories'))
+      }
+      for (const entry of dir.entries) {
+        const b = el('button', undefined, entry.name)
+        b.type = 'button'
+        b.onclick = () => void load(entry.path)
+        list.append(b)
+      }
+    } catch (err) {
+      list.replaceChildren(el('div', 'dirnote', (err as Error).message))
+    } finally {
+      loading = false
+    }
+  }
+
+  // Typing a path and leaving the field navigates there.
+  input.addEventListener('change', () => void load(input.value.trim() || undefined))
+  void load(input.value.trim() || undefined)
+  return wrap
 }
 
 /* ---------- picker (spec §5.5) ---------- */
@@ -134,6 +199,7 @@ export function openProjectDialog(
     opts.rootLocked ? 'Root directory (fixed after creation)' : 'Root directory'), root)
 
   form.append(nameField, rootField)
+  if (!opts.rootLocked) form.append(directoryBrowser(root))
 
   const actions = el('div', 'actions')
   if (!opts.blocking) {
@@ -178,6 +244,7 @@ export function openNewSessionDialog(
     return input
   }
   const cwd = mk('Working directory', defaults.cwd, defaults.cwd)
+  form.append(directoryBrowser(cwd))
   const command = mk('Command (optional)', '', 'claude')
   const name = mk('Name (optional)', '', 'agent')
 

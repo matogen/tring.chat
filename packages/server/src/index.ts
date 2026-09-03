@@ -7,6 +7,7 @@ import { DEFAULT_IDLE_MS } from '@tring/shared/status'
 import { ProjectManager } from './project-manager.ts'
 import { createHandler } from './http.ts'
 import { Hub } from './ws.ts'
+import { openWindow, describeFallback } from './open-window.ts'
 
 interface Args {
   port: number
@@ -14,6 +15,7 @@ interface Args {
   token: string | null
   scrollback: number
   idleMs: number
+  open: boolean
 }
 
 function parseArgs(argv: string[]): Args {
@@ -23,6 +25,7 @@ function parseArgs(argv: string[]): Args {
     token: process.env['TRING_TOKEN'] ?? null,
     scrollback: DEFAULT_SCROLLBACK,
     idleMs: DEFAULT_IDLE_MS,
+    open: !process.env['TRING_NO_OPEN'],
   }
   for (let i = 0; i < argv.length; i++) {
     const [flag, inline] = argv[i]!.split('=', 2)
@@ -33,6 +36,7 @@ function parseArgs(argv: string[]): Args {
       case '--token': args.token = String(value); break
       case '--scrollback': args.scrollback = Number(value); break
       case '--idle-ms': args.idleMs = Number(value); break
+      case '--no-open': args.open = false; i--; break
       case '--help':
         console.log(`tring — focus-centred terminal deck
 
@@ -40,7 +44,8 @@ function parseArgs(argv: string[]): Args {
   --host <addr>     default ${DEFAULT_HOST}
   --token <secret>  require bearer auth (use when binding off localhost)
   --scrollback <n>  lines kept per session, default ${DEFAULT_SCROLLBACK}
-  --idle-ms <n>     quiet period before a session is done, default ${DEFAULT_IDLE_MS}`)
+  --idle-ms <n>     quiet period before a session is done, default ${DEFAULT_IDLE_MS}
+  --no-open         do not launch a browser window`)
         process.exit(0)
     }
   }
@@ -72,6 +77,10 @@ async function main(): Promise<void> {
     console.log(`tring listening on ${url}`)
     if (!args.token && args.host !== '127.0.0.1' && args.host !== 'localhost') {
       console.warn('warning: bound off localhost without --token')
+    }
+    if (args.open) {
+      const opened = openWindow(url)
+      if (!opened) console.log(`no browser found — ${describeFallback(url)}`)
     }
   })
 

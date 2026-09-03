@@ -5,6 +5,18 @@ import {
 /** In dev Vite serves the page; the daemon is still the one holding the PTYs. */
 export const DAEMON = import.meta.env.DEV ? 'http://127.0.0.1:7331' : location.origin
 
+/** Present only when the daemon was started with --token (LAN binding). */
+export const TOKEN = new URLSearchParams(location.search).get('token') ?? undefined
+
+export async function api<T>(path: string): Promise<T> {
+  const res = await fetch(`${DAEMON}${path}`, {
+    headers: TOKEN ? { authorization: `Bearer ${TOKEN}` } : {},
+  })
+  const body = (await res.json().catch(() => ({}))) as T & { error?: string }
+  if (!res.ok) throw new Error(body.error ?? `request failed (${res.status})`)
+  return body
+}
+
 export interface Handlers {
   onMessage: (msg: ServerMessage) => void
   onOutput: (id: string, data: Uint8Array) => void
@@ -18,7 +30,7 @@ export class WsClient {
   private retry = 0
   private closed = false
 
-  constructor(private readonly h: Handlers, private readonly token?: string) {}
+  constructor(private readonly h: Handlers, private readonly token: string | undefined = TOKEN) {}
 
   connect(): void {
     const url = DAEMON.replace(/^http/, 'ws')

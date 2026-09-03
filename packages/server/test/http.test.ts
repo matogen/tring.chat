@@ -102,3 +102,41 @@ describe('HTTP API', () => {
     expect(await res.text()).toContain('not built yet')
   })
 })
+
+describe('directory listing', () => {
+  it('lists subdirectories of a path so the dialog can browse', async () => {
+    const r = await rig()
+    const res = await fetch(`${r.base}/api/fs?path=${encodeURIComponent(r.dir)}`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as { path: string; parent: string | null; entries: unknown[] }
+    expect(body.path).toBe(r.dir)
+    expect(body.parent).not.toBeNull()
+    expect(Array.isArray(body.entries)).toBe(true)
+  })
+
+  it('defaults to the home directory when given no path', async () => {
+    const r = await rig()
+    const body = await (await fetch(`${r.base}/api/fs`)).json() as { path: string }
+    expect(body.path).toBe(process.env['HOME'])
+  })
+
+  it('reports a directory it cannot read rather than throwing', async () => {
+    const r = await rig()
+    const res = await fetch(`${r.base}/api/fs?path=/definitely/not/here`)
+    expect(res.status).toBe(400)
+  })
+})
+
+describe('window launcher', () => {
+  it('stays out of the way when TRING_NO_OPEN is set, so dev reloads do not spawn windows', async () => {
+    const { openWindow } = await import('../src/open-window.ts')
+    const prev = process.env['TRING_NO_OPEN']
+    process.env['TRING_NO_OPEN'] = '1'
+    try {
+      expect(openWindow('http://127.0.0.1:7331')).toBe(false)
+    } finally {
+      if (prev === undefined) delete process.env['TRING_NO_OPEN']
+      else process.env['TRING_NO_OPEN'] = prev
+    }
+  })
+})

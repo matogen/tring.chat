@@ -1,5 +1,6 @@
 import { createReadStream } from 'node:fs'
-import { stat } from 'node:fs/promises'
+import { readdir, stat } from 'node:fs/promises'
+import os from 'node:os'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import path from 'node:path'
 import type { ProjectManager } from './project-manager.ts'
@@ -78,6 +79,27 @@ export function createHandler(opts: HttpOptions) {
       else if (body.status === 'busy') s.tracker.commandStart(Date.now())
       else return json(res, 400, { error: 'status must be "busy" or "done"' })
       return json(res, 200, { ok: true })
+    }
+
+    // Directory listing for the project/session dialogs. A browser can never
+    // hand back an absolute path — webkitdirectory and showDirectoryPicker
+    // both withhold it — so the picker has to be served by the side that
+    // actually has the filesystem. No extra privilege is granted here: this
+    // daemon already spawns arbitrary shells, and --token still gates it.
+    if (url.pathname === '/api/fs' && req.method === 'GET') {
+      const raw = url.searchParams.get('path')?.trim()
+      const dir = raw ? path.resolve(raw) : (process.env['HOME'] ?? os.homedir())
+      try {
+        const found = await readdir(dir, { withFileTypes: true })
+        const entries = found
+          .filter((e) => (e.isDirectory() || e.isSymbolicLink()) && !e.name.startsWith('.'))
+          .map((e) => ({ name: e.name, path: path.join(dir, e.name) }))
+          .sort((a, b) => a.name.localeCompare(b.name))
+        const parent = path.dirname(dir)
+        return json(res, 200, { path: dir, parent: parent === dir ? null : parent, entries })
+      } catch {
+        return json(res, 400, { error: `cannot read ${dir}` })
+      }
     }
 
     if (url.pathname === '/api/sessions' && req.method === 'GET') {
