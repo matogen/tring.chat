@@ -9,7 +9,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build -ws --if-present",
+    "build": "npm run build -w @tring/web && npm run build -w @tring/server",
     "dev": "npm run dev -w @tring/server",
     "start": "npm run start -w @tring/server",
     "test": "vitest run",

@@ -121,8 +121,11 @@ function renderRing(): void {
 
   for (let slot = 1; slot <= SLOT_COUNT; slot++) {
     const s = sessionAt(slot)
-    const tile = document.createElement('button')
+    // A div, not a button: tiles carry their own action button, and nesting
+    // buttons is invalid markup that swallows the inner click in some engines.
+    const tile = document.createElement('div')
     tile.className = 'tile'
+    tile.tabIndex = 0
     placeInGrid(tile, slot)
 
     if (!s) {
@@ -149,12 +152,43 @@ function renderRing(): void {
       tile.append(meta)
       tile.title = `${legendForSlot(slot)} — ${s.cwd}`
       tile.onclick = () => focusSession(s.id)
+
+      const action = respawnAction(s)
+      if (action) {
+        const btn = document.createElement('button')
+        btn.className = 'tile-action'
+        btn.textContent = action.label
+        btn.title = action.title
+        btn.onclick = (e) => {
+          e.stopPropagation()
+          ws.send({ type: 'respawn', id: s.id })
+        }
+        tile.append(btn)
+      }
     }
 
     tiles.set(slot, tile)
     ringEl.append(tile)
   }
   requestAnimationFrame(() => fitTerminal())
+}
+
+/**
+ * A dead tile offers a restart in place (spec §4.2), and a session carrying a
+ * command it has not run — the shape every restored session has, since restore
+ * deliberately spawns a plain shell — offers that command as a one-key re-run.
+ */
+function respawnAction(s: SessionInfo): { label: string; title: string } | null {
+  if (s.status === 'exited') {
+    return {
+      label: '\u21bb',
+      title: s.command ? `Restart: ${s.command}` : `Restart shell (exit ${s.exitCode ?? '?'})`,
+    }
+  }
+  if (s.command && s.status === 'idle') {
+    return { label: '\u25b8', title: `Run: ${s.command}` }
+  }
+  return null
 }
 
 function paintStatuses(): void {
@@ -244,7 +278,22 @@ function projectMenu(id: string): void {
   const p = projects.find((x) => x.id === id)
   if (!p) return
   ui.openProjectDialog(
-    { title: 'Rename project', name: p.name, root: p.root, rootLocked: true },
+    {
+      title: 'Project settings',
+      name: p.name,
+      root: p.root,
+      rootLocked: true,
+      onDelete: () => {
+        const n = p.sessions.length
+        ui.openConfirm(
+          `Delete ${p.name}?`,
+          n > 0
+            ? `This kills ${n} session${n === 1 ? '' : 's'} in this project.`
+            : 'This project has no running sessions.',
+          () => ws.send({ type: 'deleteProject', projectId: id }),
+        )
+      },
+    },
     (name) => ws.send({ type: 'renameProject', projectId: id, name }),
   )
 }

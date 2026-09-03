@@ -171,7 +171,14 @@ export function openProjectPicker(projects: ProjectInfo[], onPick: (id: string) 
 /* ---------- dialogs (spec §5.7) ---------- */
 
 export function openProjectDialog(
-  opts: { title: string; name?: string; root?: string; rootLocked?: boolean; blocking?: boolean },
+  opts: {
+    title: string
+    name?: string
+    root?: string
+    rootLocked?: boolean
+    blocking?: boolean
+    onDelete?: () => void
+  },
   onSubmit: (name: string, root: string) => void,
 ): void {
   const panel = el('div', 'panel')
@@ -202,13 +209,22 @@ export function openProjectDialog(
   if (!opts.rootLocked) form.append(directoryBrowser(root))
 
   const actions = el('div', 'actions')
+  if (opts.onDelete) {
+    const del = el('button', 'btn danger', 'Delete project') as HTMLButtonElement
+    del.type = 'button'
+    // Deleting the last project drops back to the first-run dialog, so there
+    // is one empty state rather than two (spec §4.3).
+    del.onclick = () => { close(); opts.onDelete?.() }
+    actions.append(del)
+    actions.style.justifyContent = 'space-between'
+  }
   if (!opts.blocking) {
     const cancel = el('button', 'btn', 'Cancel') as HTMLButtonElement
     cancel.type = 'button'
     cancel.onclick = () => close()
     actions.append(cancel)
   }
-  const ok = el('button', 'btn primary', 'Create') as HTMLButtonElement
+  const ok = el('button', 'btn primary', opts.onDelete ? 'Save' : 'Create') as HTMLButtonElement
   ok.type = 'submit'
   actions.append(ok)
   form.append(actions)

@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs'
 import { createServer } from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -55,7 +56,13 @@ function parseArgs(argv: string[]): Args {
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2))
   const url = `http://${args.host}:${args.port}`
-  const webRoot = path.resolve(fileURLToPath(new URL('../../web/dist', import.meta.url)))
+  // Installed builds carry the web bundle at dist/web; a dev checkout running
+  // from source finds it in the sibling workspace.
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const webRoot = [
+    path.resolve(here, 'web'),
+    path.resolve(here, '../../web/dist'),
+  ].find((p) => existsSync(p)) ?? path.resolve(here, 'web')
 
   const pm = await ProjectManager.open({
     url,

@@ -290,3 +290,29 @@ body {
 .dirlist button::before { content: '▸ '; color: var(--dim); }
 .dirlist button:hover { background: var(--panel-2); color: var(--mint); }
 .dirnote { padding: 4px 7px; color: var(--dim); font: 11px var(--mono); }
+
+.tile-action {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--status, var(--line-2));
+  border-radius: 4px;
+  background: rgba(4, 12, 10, 0.82);
+  color: var(--status, var(--text));
+  font: 12px/1 var(--mono);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.tile:hover .tile-action,
+.tile:focus-within .tile-action { opacity: 1; }
+/* A dead tile always shows its way back, without needing to be found. */
+.tile.st-exited .tile-action { opacity: 1; }
+.tile-action:hover { background: var(--deep); color: var(--mint); border-color: var(--mint); }
+
+.btn.danger { border-color: rgba(242, 84, 91, 0.5); color: var(--red); }
+.btn.danger:hover { background: rgba(242, 84, 91, 0.12); border-color: var(--red); }

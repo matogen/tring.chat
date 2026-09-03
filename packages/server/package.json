@@ -5,13 +5,25 @@
   "type": "module",
   "scripts": {
     "dev": "TRING_NO_OPEN=1 tsx watch src/index.ts",
-    "start": "tsx src/index.ts"
+    "start": "tsx src/index.ts",
+    "build": "node build.mjs"
   },
   "dependencies": {
-    "@tring/shared": "*",
     "@xterm/addon-serialize": "^0.13.0",
     "@xterm/headless": "^5.5.0",
     "node-pty": "^1.0.0",
     "ws": "^8.18.0"
-  }
+  },
+  "bin": {
+    "tring": "./dist/tring.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "@tring/shared": "*"
+  },
+  "description": "Focus-centred terminal deck for agentic work",
+  "license": "MIT"
 }
