@@ -16,6 +16,13 @@ export interface SessionOptions {
   url: string
   scrollback?: number
   idleMs?: number
+  /**
+   * Whether to actually execute `command`. False on daemon restore, which
+   * spawns a plain shell in the right cwd but keeps the recorded command so
+   * the tile can offer it as a re-run — auto-executing whatever was there
+   * last time is how four dev servers end up fighting over a port.
+   */
+  autorun?: boolean
 }
 
 /**
@@ -64,7 +71,8 @@ export class Session {
     env['TRING_PROJECT'] = opts.projectName
     env['TRING_URL'] = opts.url
 
-    this.pty = spawn(shell, this.command ? ['-c', this.command] : [], {
+    const autorun = opts.autorun ?? true
+    this.pty = spawn(shell, this.command && autorun ? ['-c', this.command] : [], {
       name: 'xterm-256color',
       cols: 120,
       rows: 36,
