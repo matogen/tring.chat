@@ -1,9 +1,18 @@
+import { createRequire } from 'node:module'
 import { spawn, type IPty } from 'node-pty'
-import { Terminal } from '@xterm/headless'
-import { SerializeAddon } from '@xterm/addon-serialize'
+import type { Terminal as TerminalT } from '@xterm/headless'
+import type { SerializeAddon as SerializeAddonT } from '@xterm/addon-serialize'
 import { ActivityTracker, DEFAULT_IDLE_MS } from '@tring/shared/status'
 import { DEFAULT_SCROLLBACK, type ScreenSnapshot, type SessionInfo } from '@tring/shared/protocol'
 import { snapshot } from './snapshot.ts'
+
+// Both xterm packages are CJS bundles that assign their exports in a way
+// Node's ESM lexer cannot detect, so `import { Terminal }` resolves to
+// undefined under a native loader even though bundlers cope. Requiring them
+// explicitly is correct at runtime; `typeof import(...)` keeps the types.
+const require = createRequire(import.meta.url)
+const { Terminal } = require('@xterm/headless') as typeof import('@xterm/headless')
+const { SerializeAddon } = require('@xterm/addon-serialize') as typeof import('@xterm/addon-serialize')
 
 export interface SessionOptions {
   id: string
@@ -49,8 +58,8 @@ export class Session {
   onExit: ((code: number) => void) | null = null
 
   private readonly pty: IPty
-  private readonly term: Terminal
-  private readonly serializer: SerializeAddon
+  private readonly term: TerminalT
+  private readonly serializer: SerializeAddonT
   private lastSnapshot: string | null = null
   private disposed = false
 

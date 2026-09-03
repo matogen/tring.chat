@@ -1,0 +1,118 @@
+import { createReadStream } from 'node:fs'
+import { stat } from 'node:fs/promises'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import path from 'node:path'
+import type { ProjectManager } from './project-manager.ts'
+
+const MIME: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.woff2': 'font/woff2',
+  '.woff': 'font/woff',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+}
+
+export interface HttpOptions {
+  pm: ProjectManager
+  webRoot: string
+  token?: string | null
+}
+
+const json = (res: ServerResponse, code: number, body: unknown): void => {
+  const payload = JSON.stringify(body)
+  res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' })
+  res.end(payload)
+}
+
+const readBody = (req: IncomingMessage): Promise<string> =>
+  new Promise((resolve) => {
+    let data = ''
+    req.on('data', (c) => {
+      data += c
+      if (data.length > 1e6) req.destroy() // hooks post nothing large
+    })
+    req.on('end', () => resolve(data))
+  })
+
+export function createHandler(opts: HttpOptions) {
+  const { pm, webRoot, token } = opts
+
+  return async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const url = new URL(req.url ?? '/', 'http://localhost')
+
+    if (url.pathname.startsWith('/api/')) {
+      if (token && req.headers.authorization !== `Bearer ${token}`) {
+        return json(res, 401, { error: 'unauthorized' })
+      }
+      return await api(req, res, url)
+    }
+    return await serveStatic(res, url.pathname)
+  }
+
+  async function api(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    // Session ids are globally unique, so no route needs a project segment —
+    // this is what keeps already-installed Claude Code hooks working (§4.5).
+    const done = url.pathname.match(/^\/api\/sessions\/([^/]+)\/done$/)
+    if (done && req.method === 'POST') {
+      const s = pm.findSession(decodeURIComponent(done[1]!))
+      if (!s) return json(res, 404, { error: 'no such session' })
+      s.hook()
+      return json(res, 200, { ok: true })
+    }
+
+    const status = url.pathname.match(/^\/api\/sessions\/([^/]+)\/status$/)
+    if (status && req.method === 'POST') {
+      const s = pm.findSession(decodeURIComponent(status[1]!))
+      if (!s) return json(res, 404, { error: 'no such session' })
+      let body: { status?: string }
+      try {
+        body = JSON.parse((await readBody(req)) || '{}') as { status?: string }
+      } catch {
+        return json(res, 400, { error: 'malformed body' })
+      }
+      if (body.status === 'done') s.hook()
+      else if (body.status === 'busy') s.tracker.commandStart(Date.now())
+      else return json(res, 400, { error: 'status must be "busy" or "done"' })
+      return json(res, 200, { ok: true })
+    }
+
+    if (url.pathname === '/api/sessions' && req.method === 'GET') {
+      const sessions = pm.list().flatMap((p) =>
+        p.sessions.map((s) => ({ ...s, project: p.name })),
+      )
+      return json(res, 200, { sessions })
+    }
+
+    return json(res, 404, { error: 'not found' })
+  }
+
+  async function serveStatic(res: ServerResponse, pathname: string): Promise<void> {
+    const rel = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '')
+    const file = path.resolve(webRoot, rel)
+    // Never serve outside the bundle, whatever the request contains.
+    if (file !== webRoot && !file.startsWith(webRoot + path.sep)) {
+      res.writeHead(403).end('forbidden')
+      return
+    }
+    try {
+      const info = await stat(file)
+      if (!info.isFile()) throw new Error('not a file')
+      res.writeHead(200, { 'content-type': MIME[path.extname(file)] ?? 'application/octet-stream' })
+      createReadStream(file).pipe(res)
+    } catch {
+      if (rel === 'index.html') {
+        res.writeHead(200, { 'content-type': MIME['.html']! })
+        res.end('<!doctype html><meta charset="utf-8"><title>tring</title>' +
+          '<body style="font:14px ui-monospace,monospace;background:#040c0a;color:#dceee7;padding:2rem">' +
+          '<p>Daemon is running. The web bundle is not built yet.</p>' +
+          '<p style="color:#8aa79d">Run <code>npm run build -w @tring/web</code>.</p>')
+        return
+      }
+      res.writeHead(404).end('not found')
+    }
+  }
+}
