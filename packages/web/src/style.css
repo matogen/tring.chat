@@ -1,0 +1,238 @@
+* { box-sizing: border-box; }
+
+html, body, #app { height: 100%; margin: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  overflow: hidden;
+}
+
+#app { display: flex; flex-direction: column; }
+
+/* ---------- project bar (spec §5.6) ---------- */
+
+#bar {
+  height: var(--bar-h);
+  flex: 0 0 var(--bar-h);
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  padding: 0 8px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+.logo {
+  display: grid;
+  grid-template: repeat(3, 1fr) / repeat(3, 1fr);
+  gap: 2px;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 20px;
+  align-self: center;
+  margin-right: 8px;
+}
+.logo i { background: var(--deep); border-radius: 1.5px; }
+.logo i:nth-child(5) { background: var(--mint); box-shadow: 0 0 10px rgba(62, 233, 164, 0.7); }
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  min-width: 92px;
+  max-width: 220px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tab:hover { color: var(--text); background: var(--panel); }
+.tab.active { color: var(--text); border-bottom-color: var(--emerald); }
+.tab .nm { overflow: hidden; text-overflow: ellipsis; }
+
+/* The one place mint appears outside a done tile — and it means the same thing. */
+.badge {
+  flex: 0 0 auto;
+  min-width: 17px;
+  padding: 1px 5px;
+  border-radius: 9px;
+  background: var(--mint);
+  color: #04231a;
+  font: 600 10px/1.5 var(--mono);
+  text-align: center;
+}
+
+.add {
+  flex: 0 0 28px;
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  font-size: 18px;
+  cursor: pointer;
+}
+.add:hover { color: var(--mint); }
+
+/* ---------- ring (spec §5.2) ---------- */
+
+#ring {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  grid-template-rows: repeat(5, 1fr);
+  gap: 6px;
+  padding: 6px;
+}
+
+.focus-cell {
+  grid-area: 2 / 2 / 5 / 5;
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: var(--bg);
+  overflow: hidden;
+  padding: 4px;
+}
+.focus-cell .xterm { height: 100%; }
+
+.tile {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  border: 2px solid var(--status, var(--line));
+  border-radius: 5px;
+  background: var(--bg-2);
+  overflow: hidden;
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+.tile canvas { display: block; width: 100%; height: 100%; }
+.tile.empty {
+  border-style: dashed;
+  border-color: var(--line);
+  color: var(--dim);
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+}
+.tile.empty:hover { border-color: var(--emerald); color: var(--muted); }
+.tile.viewing { outline: 1px solid var(--emerald); outline-offset: 1px; }
+.tile.st-busy { animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { border-color: rgba(245, 182, 66, 0.35); } }
+
+.tile .meta {
+  position: absolute;
+  inset: auto 0 0 0;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 2px 5px;
+  background: linear-gradient(transparent, rgba(4, 12, 10, 0.92) 45%);
+  font: 10px/1.4 var(--mono);
+  pointer-events: none;
+}
+.tile .key { color: var(--status, var(--dim)); font-weight: 700; }
+.tile .nm { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tile .cwd { color: var(--dim); margin-left: auto; }
+
+/* ---------- overlay: picker and dialogs (spec §5.5, §5.7) ---------- */
+
+#overlay {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(4, 12, 10, 0.72);
+  backdrop-filter: blur(3px);
+  z-index: 10;
+}
+#overlay[hidden] { display: none; }
+
+.panel {
+  width: min(560px, 92vw);
+  max-height: 82vh;
+  overflow: auto;
+  padding: 16px;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  background: var(--bg-2);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6);
+}
+.panel h2 { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
+.panel .hint { margin: 0 0 14px; color: var(--muted); font-size: 11.5px; }
+
+.rows { display: grid; gap: 3px; }
+.row {
+  display: flex;
+  gap: 9px;
+  align-items: baseline;
+  padding: 5px 8px;
+  border-radius: 5px;
+  border-left: 2px solid var(--status, transparent);
+  background: var(--panel);
+  font: 12px/1.5 var(--mono);
+  cursor: pointer;
+}
+.row:hover { background: var(--panel-2); }
+.row.dim { opacity: 0.45; }
+.row .key { color: var(--emerald); font-weight: 700; min-width: 76px; }
+.row .nm { color: var(--text); }
+.row .tag { margin-left: auto; color: var(--status, var(--dim)); font-size: 11px; }
+
+.field { display: block; margin-bottom: 10px; }
+.field span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 11.5px; }
+.field input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: 12.5px var(--mono);
+}
+.field input:focus { outline: none; border-color: var(--emerald); }
+
+.actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+.btn {
+  padding: 7px 14px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--emerald); }
+.btn.primary { background: var(--emerald); border-color: var(--emerald); color: #04231a; font-weight: 600; }
+.btn.primary:hover { background: var(--mint); border-color: var(--mint); }
+
+.legend { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--dim); font: 11px/1.7 var(--mono); }
+.legend b { color: var(--muted); font-weight: 600; }
+
+#toast {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  padding: 7px 14px;
+  border: 1px solid var(--red);
+  border-radius: 6px;
+  background: var(--bg-2);
+  color: var(--text);
+  font: 12px var(--mono);
+  z-index: 20;
+}
