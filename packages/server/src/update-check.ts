@@ -61,9 +61,13 @@ export async function checkForUpdate(cachePath: string): Promise<string | null> 
 
   let latest: string
   try {
+    // No accept header. The abbreviated-metadata type is only valid on the
+    // packument; /latest answers 406 to it, which makes res.ok false and the
+    // check give up without a sound — indistinguishable from an unpublished
+    // package. This endpoint is one version's manifest, ~1.8kB, and unlike
+    // the packument it does not grow as releases accumulate.
     const res = await fetch('https://registry.npmjs.org/tring-chat/latest', {
       signal: AbortSignal.timeout(3000),
-      headers: { accept: 'application/vnd.npm.install-v1+json' },
     })
     if (!res.ok) return null
     latest = ((await res.json()) as { version?: string }).version ?? ''

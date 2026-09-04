@@ -1,10 +1,34 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { checkForUpdate, currentVersion, isNewer } from '../src/update-check.ts'
 
 describe('update check', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('asks the registry in a way it will actually answer', async () => {
+    // Measured against registry.npmjs.org: the abbreviated-metadata type is
+    // only valid on the packument, and /latest answers 406 to it. A 406 makes
+    // res.ok false, so the check returns null and no update is ever announced
+    // — silently, because a missing package looks the same.
+    const seen: { url: string; accept: string | undefined }[] = []
+    vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+      const accept = (init.headers as Record<string, string> | undefined)?.['accept']
+      seen.push({ url: String(url), accept })
+      if (String(url).endsWith('/latest') && accept === 'application/vnd.npm.install-v1+json') {
+        return new Response(null, { status: 406 })
+      }
+      return new Response(JSON.stringify({ version: '9.9.9' }), { status: 200 })
+    })
+
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'tring-upd-'))
+    const latest = await checkForUpdate(path.join(dir, 'update-check.json'))
+
+    expect(seen.length, 'the registry was never asked').toBeGreaterThan(0)
+    expect(latest, `registry refused the request: ${JSON.stringify(seen)}`).toBe('9.9.9')
+  })
+
   it('compares versions by component, not by string order', () => {
     expect(isNewer('0.2.0', '0.1.0')).toBe(true)
     expect(isNewer('0.1.1', '0.1.0')).toBe(true)
