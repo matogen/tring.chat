@@ -113,13 +113,29 @@ export function renderBar(
   }
 }
 
+/**
+ * A cog, not a sun. The teeth belong to the body — a circle with detached
+ * radial spokes is the universal brightness icon, which is what this was.
+ * Six teeth rather than eight: at this size eight turn to mush.
+ */
 function gearSvg(): string {
-  return `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" ` +
-    `stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">` +
-    `<circle cx="8" cy="8" r="2.3"/>` +
-    `<path d="M8 1.4v1.8M8 12.8v1.8M1.4 8h1.8M12.8 8h1.8` +
-    `M3.34 3.34l1.27 1.27M11.39 11.39l1.27 1.27` +
-    `M12.66 3.34l-1.27 1.27M4.61 11.39l-1.27 1.27"/></svg>`
+  const cog =
+    'M6.09 3.71 L6.43 1.18 L9.57 1.18 L9.91 3.71 L10.76 4.2 L13.12 ' +
+    '3.23 L14.69 5.95 L12.67 7.51 L12.67 8.49 L14.69 10.05 L13.12 ' +
+    '12.77 L10.76 11.8 L9.91 12.29 L9.57 14.82 L6.43 14.82 L6.09 ' +
+    '12.29 L5.24 11.8 L2.88 12.77 L1.31 10.05 L3.33 8.49 L3.33 ' +
+    '7.51 L1.31 5.95 L2.88 3.23 L5.24 4.2 Z'
+  return icon(`<path d="${cog}"/><circle cx="8" cy="8" r="2.4"/>`)
+}
+
+/**
+ * Drawn 1:1 with the viewBox. At 14px a 16-unit box scales by 0.875, so every
+ * coordinate and the stroke itself land between device pixels and the whole
+ * icon reads soft — the cheapest sharpness there is.
+ */
+function icon(body: string): string {
+  return `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" ` +
+    `stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`
 }
 
 function bellSvg(on: boolean): string {
@@ -127,6 +143,5 @@ function bellSvg(on: boolean): string {
     '<path d="M8 2a3 3 0 0 1 3 3v3l1.4 2.1a.5.5 0 0 1-.4.8H4a.5.5 0 0 1-.4-.8L5 8V5a3 3 0 0 1 3-3z"/>' +
     '<path d="M6.6 12.6a1.5 1.5 0 0 0 2.8 0"/>'
   const slash = on ? '' : '<path d="M2.5 2.5l11 11"/>'
-  return `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" ` +
-    `stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">${bell}${slash}</svg>`
+  return icon(`${bell}${slash}`)
 }
