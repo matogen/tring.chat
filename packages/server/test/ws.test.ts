@@ -79,15 +79,22 @@ describe('WebSocket hub', () => {
     const session = r.pm.create(id, { cwd: r.dir })!
 
     // A first viewer drains the change-gated snapshots, exactly as the real
-    // client does, and then the shell sits at its prompt producing nothing.
+    // client does. Settle on the stream going quiet rather than on a fixed
+    // delay: a real shell finishes painting its prompt on its own schedule.
     const first = await connect(r.port)
     await waitFor(() => pick(first.got, 'snapshot').length > 0)
-    await new Promise((res) => setTimeout(res, 400))
-    const before = pick(first.got, 'snapshot').length
-    await new Promise((res) => setTimeout(res, 400))
-    expect(pick(first.got, 'snapshot').length).toBe(before) // quiet: nothing resent
+    let last = pick(first.got, 'snapshot').length
+    let quiet = 0
+    for (let i = 0; i < 40 && quiet < 4; i++) {
+      await new Promise((res) => setTimeout(res, 250))
+      const n = pick(first.got, 'snapshot').length
+      if (n === last) quiet++
+      else { quiet = 0; last = n }
+    }
+    expect(quiet, 'the shell never stopped changing, so this proves nothing').toBe(4)
 
-    // A second viewer — a reload, another tab — has never seen that screen.
+    // A second viewer — a reload, another tab — has never seen that screen,
+    // and the gate will not reopen for it because nothing is changing.
     const second = await connect(r.port)
     await waitFor(() => pick(second.got, 'snapshot').length > 0, 3000)
     const shot = pick(second.got, 'snapshot').find((m) => m.id === session.id)
