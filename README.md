@@ -132,20 +132,6 @@ Browsers reserve `Ctrl+1`–`Ctrl+8` for tab switching, so `Shift+digit` is the
 fallback that always works in an ordinary tab. Clicking a thumbnail also focuses it,
 and right-clicking one opens the same dialog `r` does.
 
-## Updating
-
-A global npm install is a frozen snapshot: npm never checks for new versions
-and never notifies. So tring asks the registry itself, at most once a day, and
-shows a notice in the tab bar when a newer release exists.
-
-```
-npm i -g tring
-```
-
-Running sessions are unaffected until you restart the daemon. The check never
-blocks startup and fails silently when offline. Opt out with
-`--no-update-check` or `TRING_NO_UPDATE_CHECK=1`.
-
 ## Naming and colouring tiles
 
 Right-click a tile — or press `r` in the picker — to give it a name and a colour.
@@ -202,30 +188,40 @@ them rather than a limit on them. Shrinking below a slot that is in use is refus
 notice rather than hiding a session that would still ring and still count in the tab badge
 — close those sessions first, or switch back up.
 
-## Ring size
+## Claude usage
 
-Sixteen terminals is the default. The gear in the tab bar offers 4, 8, 12 and 16, and the
-choice is remembered per browser.
-
-Twelve and sixteen are rings. Four and eight are bands — a row above and a row below, with
-the focus terminal spanning the full width, because below twelve slots a ring's side
-columns cost the centre more width than the tiles are worth:
+Optional, off by default. Turn on **Enable Claude usage monitoring** in the gear, and a
+pinned `Usage` tab appears in the tab bar — a quick glance at what Claude Code has spent,
+without leaving tring.
 
 ```
-     4 slots                    8 slots
-┌────────┬────────┐      ┌────┬────┬────┬────┐
-│   1    │   2    │      │ 1  │ 2  │ 3  │ 4  │
-├────────┴────────┤      ├────┴────┴────┴────┤
-│      focus      │      │       focus       │
-├────────┬────────┤      ├────┬────┬────┬────┤
-│   4    │   3    │      │ 8  │ 7  │ 6  │ 5  │
-└────────┴────────┘      └────┴────┴────┴────┘
+Session             ████░░░░░░░░  27%    resets Sep 4, 11:29am
+Week (all models)   ████░░░░░░░░  27%    resets Sep 7, 9:59am
+Week (Fable)        ████░░░░░░░░  28%    resets Sep 7, 9:59am
+                                  from Claude Code’s own /usage
+
+  1.7M tokens today  ·  $34.55 today  ·  $622.47 this week  ·  750B cache reads
 ```
 
-The daemon is unaffected: every project still owns sixteen slots, so this is a view onto
-them rather than a limit on them. Shrinking below a slot that is in use is refused with a
-notice rather than hiding a session that would still ring and still count in the tab badge
-— close those sessions first, or switch back up.
+**The percentages are the real ones.** Opening the tab runs `claude -p "/usage"`, which
+Claude Code answers locally — zero turns, zero tokens, no API call — so the numbers are
+exactly what `/usage` shows in a session. Nothing is read out of your credential file and
+nothing leaves the machine. The answer is cached for 30 seconds, so the first look costs
+about 1.8s and the rest are instant.
+
+Underneath, the token counts and cost estimates come from Claude Code's transcripts in
+`~/.claude/projects` (or `CLAUDE_CONFIG_DIR`), which is also where the per-project split
+comes from — `/usage` does not break usage down by repository. A full scan of a year of
+history takes about half a second.
+
+The token count is `input + output + cache creation`. Cache reads are shown separately
+rather than folded in: a typical week here is 750B cache reads against 22M other tokens,
+so including them would make the bar 99% cache and tell you nothing. Costs are estimates
+from a built-in price table.
+
+If the `claude` command is not on the daemon's PATH — running tring natively on Windows
+against a WSL install, say — the tab falls back to counting transcript tokens against two
+budgets you set in Settings, and says so.
 
 ## Sound
 

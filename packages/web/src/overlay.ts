@@ -1,6 +1,7 @@
 import type { ProjectInfo, SessionInfo } from '@tring/shared/protocol'
 import { legendForSlot } from '@tring/shared/keymap'
 import { RING_SIZES, ringSize, type RingSize } from './ring-layout.ts'
+import type { Budgets } from './usage-panel.ts'
 import { api } from './ws-client.ts'
 
 const root = document.getElementById('overlay') as HTMLElement
@@ -376,39 +377,100 @@ export function openSessionDialog(
   name.select()
 }
 
-/**
- * Ring size is the only setting so far; the dialog exists so the next one has
- * somewhere obvious to go instead of another icon in a 36px bar.
- */
-export function openSettingsDialog(
-  current: RingSize,
-  onPick: (size: RingSize) => void,
-): void {
+export interface Settings {
+  ring: RingSize
+  usage: boolean
+  budgets: Budgets
+}
+
+/** Tokens accept `2m`, `450k` or a plain number; blank means "no budget". */
+function parseBudget(raw: string): number | null {
+  const m = raw.trim().toLowerCase().match(/^([\d.,]+)\s*([km])?$/)
+  if (!m) return null
+  const n = Number(m[1]!.replace(/,/g, ''))
+  if (!Number.isFinite(n) || n <= 0) return null
+  return Math.round(n * (m[2] === 'm' ? 1e6 : m[2] === 'k' ? 1e3 : 1))
+}
+
+const showBudget = (n: number | null): string =>
+  n === null ? '' : n >= 1e6 ? `${n / 1e6}m` : n >= 1e3 ? `${n / 1e3}k` : String(n)
+
+export function openSettingsDialog(current: Settings, onApply: (next: Settings) => void): void {
   const panel = el('div', 'panel')
   panel.append(el('h2', undefined, 'Settings'))
 
-  const field = el('div', 'field')
-  field.append(el('span', undefined, 'Terminals around the focus'))
+  let ring = current.ring
+  const ringField = el('div', 'field')
+  ringField.append(el('span', undefined, 'Terminals around the focus'))
   const choices = el('div', 'choices')
   for (const size of RING_SIZES) {
-    const b = el('button', 'choice' + (size === current ? ' active' : '')) as HTMLButtonElement
+    const b = el('button', 'choice' + (size === ring ? ' active' : '')) as HTMLButtonElement
     b.type = 'button'
     b.append(el('b', undefined, String(size)))
     b.append(el('span', undefined, size < 12 ? 'wide centre' : 'full ring'))
-    b.onclick = () => { close(); onPick(size) }
+    b.onclick = () => {
+      ring = size
+      for (const c of Array.from(choices.children)) c.classList.remove('active')
+      b.classList.add('active')
+    }
     choices.append(b)
   }
-  field.append(choices)
-  panel.append(field)
+  ringField.append(choices)
+  panel.append(ringField)
 
   panel.append(el('p', 'hint',
     'Slots stay where they are. Shrinking needs the slots above the new size ' +
     'to be empty first, so nothing is killed or hidden behind your back.'))
 
+  /* ---- Claude usage ---- */
+
+  const toggleField = el('label', 'field toggle')
+  const toggle = el('input') as HTMLInputElement
+  toggle.type = 'checkbox'
+  toggle.checked = current.usage
+  toggleField.append(toggle, el('span', undefined, 'Enable Claude usage monitoring'))
+  panel.append(toggleField)
+
+  const budgetBox = el('div', 'budgets')
+  const budgetInput = (label: string, value: number | null, hint: string) => {
+    const input = el('input') as HTMLInputElement
+    input.value = showBudget(value)
+    input.placeholder = 'no budget'
+    const field = el('label', 'field')
+    field.append(el('span', undefined, label), input, el('em', 'unote', hint))
+    budgetBox.append(field)
+    return input
+  }
+  const windowBudget = budgetInput('5-hour token budget', current.budgets.window, 'e.g. 2m')
+  const weekBudget = budgetInput('Weekly token budget', current.budgets.week, 'e.g. 30m')
+
+  budgetBox.append(el('p', 'hint',
+    'The tab asks Claude Code for its real limits with `claude -p /usage`, which is ' +
+    'answered locally and costs nothing. These budgets are the fallback for when the ' +
+    '`claude` command is not on the daemon’s PATH — leave them blank if it is.'))
+  panel.append(budgetBox)
+
+  const syncToggle = () => { budgetBox.hidden = !toggle.checked }
+  toggle.onchange = syncToggle
+  syncToggle()
+
   const actions = el('div', 'actions')
-  const ok = el('button', 'btn primary', 'Close') as HTMLButtonElement
-  ok.onclick = () => close()
-  actions.append(ok)
+  const cancel = el('button', 'btn', 'Cancel') as HTMLButtonElement
+  cancel.type = 'button'
+  cancel.onclick = () => close()
+  const ok = el('button', 'btn primary', 'Save') as HTMLButtonElement
+  ok.onclick = () => {
+    close()
+    onApply({
+      ring,
+      usage: toggle.checked,
+      budgets: {
+        window: parseBudget(windowBudget.value),
+        week: parseBudget(weekBudget.value),
+      },
+    })
+  }
+  actions.append(cancel, ok)
   panel.append(actions)
   open(panel)
 }

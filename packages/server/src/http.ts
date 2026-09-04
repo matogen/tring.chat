@@ -4,6 +4,7 @@ import os from 'node:os'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import path from 'node:path'
 import type { ProjectManager } from './project-manager.ts'
+import { collectUsage, defaultTranscriptDir, type UsageReport } from './usage.ts'
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -39,8 +40,15 @@ const readBody = (req: IncomingMessage): Promise<string> =>
     req.on('end', () => resolve(data))
   })
 
+/**
+ * A scan is ~0.5s and `claude -p /usage` about 1.4s, so the first visit to the
+ * tab pays for both and every refresh inside the window is free.
+ */
+const USAGE_CACHE_MS = 30_000
+
 export function createHandler(opts: HttpOptions) {
   const { pm, webRoot, token } = opts
+  let usage: { at: number; report: Promise<UsageReport> } | null = null
 
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost')
@@ -99,6 +107,21 @@ export function createHandler(opts: HttpOptions) {
         return json(res, 200, { path: dir, parent: parent === dir ? null : parent, entries })
       } catch {
         return json(res, 400, { error: `cannot read ${dir}` })
+      }
+    }
+
+    // Claude Code's own transcripts, bucketed. Read-only, local, and entirely
+    // separate from the session machinery — nothing here touches a PTY.
+    if (url.pathname === '/api/usage' && req.method === 'GET') {
+      const now = Date.now()
+      if (!usage || now - usage.at > USAGE_CACHE_MS) {
+        usage = { at: now, report: collectUsage(defaultTranscriptDir(), now) }
+      }
+      try {
+        return json(res, 200, await usage.report)
+      } catch {
+        usage = null
+        return json(res, 500, { error: 'cannot read Claude Code transcripts' })
       }
     }
 

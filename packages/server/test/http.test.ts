@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { createServer, type Server } from 'node:http'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { ProjectManager } from '../src/project-manager.ts'
@@ -37,6 +37,86 @@ const waitFor = async (fn: () => boolean, ms = 6000) => {
 }
 
 describe('HTTP API', () => {
+  it('memoises the usage scan, which is why the handler is built once', async () => {
+    const r = await rig()
+    const config = path.join(r.dir, 'claude')
+    const file = path.join(config, 'projects', 'demo', 'a.jsonl')
+    await mkdir(path.dirname(file), { recursive: true })
+    const entry = (id: string, output: number) => JSON.stringify({
+      type: 'assistant',
+      timestamp: new Date().toISOString(),
+      cwd: '/home/dev/api-service',
+      message: { id, model: 'claude-opus-5', usage: { input_tokens: 0, output_tokens: output } },
+    })
+    await writeFile(file, entry('msg_1', 100), 'utf8')
+
+    const previous = process.env['CLAUDE_CONFIG_DIR']
+    const previousPath = process.env['PATH']
+    process.env['CLAUDE_CONFIG_DIR'] = config
+    // No PATH means no `claude` to spawn: these cover the local scan, and the
+    // limit bridge has its own tests that need no subprocess at all.
+    process.env['PATH'] = ''
+    try {
+      const read = async () =>
+        ((await fetch(`${r.base}/api/usage`).then((x) => x.json())) as { week: { tokens: number } })
+          .week.tokens
+      expect(await read()).toBe(100)
+      await writeFile(file, [entry('msg_1', 100), entry('msg_2', 900)].join('\n'), 'utf8')
+      // Still the cached answer: a fresh scan per request is what the old
+      // per-request createHandler silently caused.
+      expect(await read()).toBe(100)
+    } finally {
+      if (previous === undefined) delete process.env['CLAUDE_CONFIG_DIR']
+      else process.env['CLAUDE_CONFIG_DIR'] = previous
+      process.env['PATH'] = previousPath
+    }
+  })
+
+  it('serves Claude Code usage read from the transcripts, not from any session', async () => {
+    const r = await rig()
+    const config = path.join(r.dir, 'claude')
+    await mkdir(path.join(config, 'projects', 'demo'), { recursive: true })
+    // One message, written as two content-block records the way Claude Code does.
+    const record = {
+      type: 'assistant',
+      timestamp: new Date().toISOString(),
+      cwd: '/home/dev/api-service',
+      message: {
+        id: 'msg_1',
+        model: 'claude-opus-5',
+        usage: {
+          input_tokens: 100, output_tokens: 200,
+          cache_creation_input_tokens: 0, cache_read_input_tokens: 5000,
+        },
+      },
+    }
+    await writeFile(
+      path.join(config, 'projects', 'demo', 'a.jsonl'),
+      [JSON.stringify(record), JSON.stringify({ ...record, apiBlockIndex: 1 })].join('\n'),
+      'utf8',
+    )
+
+    const previous = process.env['CLAUDE_CONFIG_DIR']
+    const previousPath = process.env['PATH']
+    process.env['CLAUDE_CONFIG_DIR'] = config
+    // No PATH means no `claude` to spawn: these cover the local scan, and the
+    // limit bridge has its own tests that need no subprocess at all.
+    process.env['PATH'] = ''
+    try {
+      const body = await fetch(`${r.base}/api/usage`).then((x) => x.json()) as {
+        window: { tokens: number; cacheReadTokens: number }
+        projects: { name: string; tokens: number }[]
+      }
+      expect(body.window.tokens).toBe(300)
+      expect(body.window.cacheReadTokens).toBe(5000)
+      expect(body.projects).toEqual([{ name: 'api-service', tokens: 300, cost: expect.any(Number) }])
+    } finally {
+      if (previous === undefined) delete process.env['CLAUDE_CONFIG_DIR']
+      else process.env['CLAUDE_CONFIG_DIR'] = previous
+      process.env['PATH'] = previousPath
+    }
+  })
+
   it('turns a session green through the exact URL the Stop hook posts to', async () => {
     const r = await rig()
     const p = r.pm.createProject('demo', r.dir)

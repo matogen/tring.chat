@@ -15,11 +15,13 @@ import {
   applyRing, placeInGrid, RING_SIZES, ringSize, setRingSize, type RingSize,
 } from './ring-layout.ts'
 import { renderBar } from './project-bar.ts'
+import * as usage from './usage-panel.ts'
 import * as ui from './overlay.ts'
 import { tring } from './sound.ts'
 
 const barEl = document.getElementById('bar') as HTMLElement
 const ringEl = document.getElementById('ring') as HTMLElement
+const usageEl = document.getElementById('usage') as HTMLElement
 
 let projects: ProjectInfo[] = []
 let viewedId: string | null = null
@@ -29,6 +31,8 @@ let ringSig = ''
 let askedForFirstProject = false
 let overlayMode: 'picker' | 'projects' | null = null
 let update: UpdateInfo | null = null
+let viewMode: 'ring' | 'usage' = 'ring'
+let usageTimer: ReturnType<typeof setInterval> | null = null
 
 const thumbs = new Map<string, Thumbnail>()
 const tiles = new Map<number, HTMLElement>()
@@ -131,11 +135,15 @@ const barCallbacks = () => ({
   onContext: (id: string) => projectMenu(id),
   onUpdate: (u: UpdateInfo) => ui.openUpdateNotice(u.current, u.latest),
   onSoundToggle: () => paintStatuses(),
-  onSettings: () => ui.openSettingsDialog(ringSize(), changeRingSize),
+  onSettings: () => openSettings(),
+  onUsage: () => showUsage(),
 })
 
+const paintBar = (): void =>
+  renderBar(barEl, projects, viewedId, barCallbacks(), update, viewMode === 'usage')
+
 function render(): void {
-  renderBar(barEl, projects, viewedId, barCallbacks(), update)
+  paintBar()
   renderRing()
   paintStatuses()
 }
@@ -271,7 +279,7 @@ function paintStatuses(): void {
     if (!tile) continue
     paintTile(tile, sessionAt(slot))
   }
-  renderBar(barEl, projects, viewedId, barCallbacks(), update)
+  paintBar()
   const done = globalDone()
   document.title = done > 0 ? `(${done}) tring` : 'tring'
 }
@@ -285,6 +293,7 @@ function fitTerminal(): void {
 }
 
 function focusSession(id: string | null): void {
+  showRing()
   if (id && id === focusedId) return
   if (focusedId) prevFocusedId = focusedId
   focusedId = id
@@ -307,6 +316,56 @@ function focusSlot(slot: number): void {
   else promptNewSession(slot)
 }
 
+/**
+ * A view mode, not a project: it owns no slots, spawns nothing and persists
+ * nothing on the daemon. Only the centre of the window changes.
+ */
+function showUsage(): void {
+  if (viewMode === 'usage') return
+  viewMode = 'usage'
+  ringEl.hidden = true
+  usageEl.hidden = false
+  usage.renderUsage(usageEl, null, null)
+  void refreshUsage()
+  usageTimer = setInterval(() => void refreshUsage(), 30_000)
+  paintBar()
+}
+
+function showRing(): void {
+  if (viewMode === 'ring') return
+  viewMode = 'ring'
+  if (usageTimer) clearInterval(usageTimer)
+  usageTimer = null
+  usageEl.hidden = true
+  ringEl.hidden = false
+  paintBar()
+  requestAnimationFrame(() => fitTerminal())
+}
+
+async function refreshUsage(): Promise<void> {
+  if (viewMode !== 'usage') return
+  try {
+    usage.renderUsage(usageEl, await usage.fetchUsage(), null)
+  } catch (err) {
+    usage.renderUsage(usageEl, null, (err as Error).message)
+  }
+}
+
+function openSettings(): void {
+  ui.openSettingsDialog(
+    { ring: ringSize(), usage: usage.isEnabled(), budgets: usage.getBudgets() },
+    (v) => {
+      if (v.usage !== usage.isEnabled()) {
+        usage.setEnabled(v.usage)
+        if (!v.usage) showRing()
+      }
+      usage.setBudgets(v.budgets)
+      if (v.ring !== ringSize()) changeRingSize(v.ring)
+      else { paintBar(); void refreshUsage() }
+    },
+  )
+}
+
 function changeRingSize(size: RingSize): void {
   setRingSize(size)
   render()
@@ -319,6 +378,7 @@ function changeRingSize(size: RingSize): void {
 }
 
 function activateProject(id: string): void {
+  showRing()
   if (id === viewedId) return
   viewedId = id
   focusedId = null
@@ -413,6 +473,7 @@ document.addEventListener('keydown', (e) => {
 
   if (isPrefix(e)) {
     e.preventDefault()
+    showRing()
     overlayMode = 'picker'
     ui.openPicker(viewed(), projects, globalDone(), {
       onPickSlot: (slot) => focusSlot(slot),

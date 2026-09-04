@@ -1,5 +1,6 @@
 import type { ProjectInfo, UpdateInfo } from '@tring/shared/protocol'
 import { isEnabled, setEnabled } from './sound.ts'
+import { isEnabled as usageEnabled } from './usage-panel.ts'
 
 export interface BarCallbacks {
   onSelect: (projectId: string) => void
@@ -8,6 +9,7 @@ export interface BarCallbacks {
   onUpdate: (update: UpdateInfo) => void
   onSoundToggle: () => void
   onSettings: () => void
+  onUsage: () => void
 }
 
 /**
@@ -54,6 +56,19 @@ export function renderBar(
       e.preventDefault()
       cb.onContext(p.id, { x: e.clientX, y: e.clientY })
     }
+    container.append(tab)
+  }
+
+  // Pinned, and never a project: it owns no slots, no root and no shells.
+  if (usageEnabled()) {
+    const tab = document.createElement('button')
+    tab.className = 'tab pinned' + (usageActive ? ' active' : '')
+    tab.title = 'Claude usage'
+    const nm = document.createElement('span')
+    nm.className = 'nm'
+    nm.textContent = 'Usage'
+    tab.append(nm)
+    tab.onclick = () => cb.onUsage()
     container.append(tab)
   }
 

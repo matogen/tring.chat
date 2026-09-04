@@ -83,8 +83,11 @@ async function main(): Promise<void> {
     ...(args.shell ? { shell: args.shell } : {}),
   })
 
+  // Built once, not per request: the handler holds the usage-scan cache, and a
+  // fresh closure per request would throw that away on every call.
+  const handle = createHandler({ pm, webRoot, token: args.token })
   const server = createServer((req, res) => {
-    void createHandler({ pm, webRoot, token: args.token })(req, res).catch(() => {
+    void handle(req, res).catch(() => {
       if (!res.headersSent) res.writeHead(500).end('internal error')
     })
   })

@@ -5,6 +5,27 @@ Status: approved design, awaiting implementation plan
 
 ## 0. Changelog
 
+**2026-09-04 — Claude usage view.** An optional non-terminal view (§4.5, §5.6, §5.10)
+reporting what Claude Code has spent. It is a **view mode, not a project**: no slots, no
+root, no shells, nothing persisted by `ProjectManager`. `GET /api/usage` serves it; the
+pinned tab swaps `#ring` for the panel.
+
+Two sources, because neither is sufficient alone:
+
+- **The real limits come from Claude Code itself.** `claude -p "/usage"
+  --output-format json` returns the live session and weekly percentages with their reset
+  times. The CLI answers it locally — the run reports zero turns, zero cost and zero API
+  time — so it is a local question, not a billed one. Nothing on disk records this:
+  `stats-cache.json` holds message counts with no tokens, `.credentials.json` holds a
+  plan name with no counters, and no transcript carries a rate-limit field. The only
+  alternative would be reading the user's OAuth token and calling an undocumented
+  endpoint, which a terminal deck distributed on npm should not do.
+- **Tokens, cost and the per-project split come from the transcripts**, which `/usage`
+  does not break down by repository.
+
+When `claude` is not on the daemon's PATH the panel falls back to transcript tokens
+against a user-set budget, and says which it is showing.
+
 **2026-09-04 — tile names and colours.** A tile carries an optional user colour
 (§5.2, §5.9) alongside its name, both editable from a right-click or the picker's `r`.
 `SessionInfo` gains `color`, the protocol gains one `color` message, and
@@ -254,6 +275,10 @@ segment and every hook already installed keeps working.
 - `POST /api/sessions/:id/status` with `{status: "busy" | "done"}` for tools that want
   finer control.
 - `GET /api/sessions` returns the state list, for scripts. Entries gain a `project` field.
+- `GET /api/usage` returns a `UsageReport`: Claude Code's own limits plus a transcript
+  scan (§5.10), gathered in parallel and memoised for 30s (~1.8s cold, ~1ms warm). **The handler is built once, not per request** — it holds that cache,
+  and a fresh closure per request throws it away silently (502ms per call instead of
+  0.8ms, with no error to notice).
 - Default bind is 127.0.0.1, no auth. `--token` (or `TRING_TOKEN`) enables bearer auth on
   both HTTP and the WebSocket `hello`, for the case where the daemon is bound to a LAN
   address.
@@ -437,6 +462,42 @@ tiers rather than more hues, because the usable arc is about 150° wide and twel
 crammed into it are indistinguishable at 2px. The tint is an `outline` on the tile
 and `.viewing` moves to an inset shadow, so status, colour and focus each own a ring and
 none of them competes for the same pixels.
+
+### 5.10 Usage view
+
+Optional, off by default, enabled from the settings dialog. A pinned `Usage` tab in the
+bar swaps `#ring` for a panel; anything that means "show me terminals" — a project tab, a
+thumbnail click, the picker — swaps back. The daemon knows nothing about it beyond
+serving `GET /api/usage`.
+
+`readLimits()` spawns `claude -p "/usage" --output-format json` and parses the
+`Current …: N% used · resets …` lines, anchored to the line start so the prose beneath
+them ("69% of your usage was at >150k context") cannot be mistaken for a limit. It
+resolves on the child's `exit` rather than on stdio close: something downstream of the
+CLI holds a pipe open after the process is gone, and waiting for it costs 6.4s against
+2.1s. A truncated read cannot pass silently, because it fails `JSON.parse`.
+
+`scanUsage(dir, now)` reads `*.jsonl` under the transcript directory and buckets
+`message.usage` into a live five-hour block, today, a rolling seven days, and a per-project
+split keyed on each record's `cwd`. Two properties of the format are load-bearing and are
+what the tests pin:
+
+- **One message is written as one record per content block**, each echoing the same usage
+  object — five records for one reply is ordinary. Summing records over-counts by roughly
+  two, so messages are keyed by `message.id`.
+- **A resumed or forked session replays earlier messages into a second file**, so that key
+  is global rather than per-file.
+
+The headline number is `input + output + cache_creation`. Cache reads are reported on
+their own line and excluded from it: a representative week here was 1.49B cache reads
+against 8.8M output tokens, so including them makes the bar 99% cache and tells you
+nothing. Cost comes from a small model→price table that will drift, marked `ponytail:`.
+
+A full scan of a year of transcripts (292 MB, 479 files) measures ~0.5s, and only files
+whose mtime falls inside the week are opened, so no incremental offset tracking is
+needed. Budgets live in `localStorage` with the ring size and the sound toggle, and are used
+only in the no-`claude` fallback; the daemon returns raw totals and the client does the
+division, so no user configuration crosses the wire.
 
 ## 6. Distribution
 
