@@ -14,7 +14,7 @@ export function currentVersion(): string {
 }
 
 /**
- * A newer release exists. Prereleases are ignored: `npm i -g tring` installs
+ * A newer release exists. Prereleases are ignored: `npm i -g tring-chat` installs
  * the latest stable, so nagging about 0.2.0-beta.1 would be advice the user
  * cannot act on with the command we would show them.
  */
@@ -61,7 +61,7 @@ export async function checkForUpdate(cachePath: string): Promise<string | null> 
 
   let latest: string
   try {
-    const res = await fetch('https://registry.npmjs.org/tring/latest', {
+    const res = await fetch('https://registry.npmjs.org/tring-chat/latest', {
       signal: AbortSignal.timeout(3000),
       headers: { accept: 'application/vnd.npm.install-v1+json' },
     })

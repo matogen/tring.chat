@@ -31,7 +31,7 @@ or 4. See [Ring size](#ring-size).
 ## Install
 
 ```
-npm i -g tring
+npm i -g tring-chat
 tring
 ```
 
@@ -47,7 +47,7 @@ sudo apt install -y build-essential python3      # Debian/Ubuntu/WSL
 sudo dnf install -y gcc-c++ make python3         # Fedora/RHEL
 ```
 
-Without those, `npm i -g tring` fails while building node-pty. It takes a few seconds
+Without those, `npm i -g tring-chat` fails while building node-pty. It takes a few seconds
 once they are present.
 
 `tring` starts the daemon and opens a chromeless browser window — no address bar, no
@@ -60,7 +60,7 @@ node-pty ships prebuilt binaries for `win32-x64` and `win32-arm64`, so no Visual
 Studio Build Tools, Python or node-gyp are needed. From PowerShell:
 
 ```powershell
-npm i -g tring
+npm i -g tring-chat
 tring
 ```
 
@@ -167,7 +167,7 @@ and never notifies. So tring asks the registry itself, at most once a day, and
 shows a notice in the tab bar when a newer release exists.
 
 ```
-npm i -g tring
+npm i -g tring-chat
 ```
 
 Running sessions are unaffected until you restart the daemon. The check never

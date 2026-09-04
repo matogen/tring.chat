@@ -526,7 +526,7 @@ while meaning nothing of the sort.
 
 ## 6. Distribution
 
-**v0.1: global npm package.** `npm i -g tring`, then `tring`. The daemon starts, then
+**v0.1: global npm package.** `npm i -g tring-chat`, then `tring`. The daemon starts, then
 `open-window.ts` launches a chromeless browser window (`--app=http://127.0.0.1:7331`)
 rather than a tab. This costs a few lines over opening a normal tab and buys the keyboard:
 in an app window Chrome does not reserve `Ctrl+1`–`Ctrl+8` for tab switching, so slots

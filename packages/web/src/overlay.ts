@@ -441,7 +441,7 @@ export function openUpdateNotice(current: string, latest: string): void {
   panel.append(el('h2', undefined, `tring ${latest} is available`))
   panel.append(el('p', 'hint', `You are running ${current}. Update with:`))
 
-  const cmd = el('pre', 'cmd', 'npm i -g tring')
+  const cmd = el('pre', 'cmd', 'npm i -g tring-chat')
   panel.append(cmd)
 
   panel.append(el('p', 'hint',
@@ -450,7 +450,7 @@ export function openUpdateNotice(current: string, latest: string): void {
   const actions = el('div', 'actions')
   const copy = el('button', 'btn', 'Copy command') as HTMLButtonElement
   copy.onclick = () => {
-    void navigator.clipboard?.writeText('npm i -g tring').then(
+    void navigator.clipboard?.writeText('npm i -g tring-chat').then(
       () => { copy.textContent = 'Copied' },
       () => { copy.textContent = 'Copy failed' },
     )

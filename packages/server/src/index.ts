@@ -108,7 +108,7 @@ async function main(): Promise<void> {
         .then((latest) => {
           if (!latest) return
           hub.setUpdate({ current: currentVersion(), latest })
-          console.log(`update available: ${currentVersion()} -> ${latest}  (npm i -g tring)`)
+          console.log(`update available: ${currentVersion()} -> ${latest}  (npm i -g tring-chat)`)
         })
     }
     if (args.open) {

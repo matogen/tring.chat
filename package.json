@@ -9,12 +9,12 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build -w @tring/web && npm run build -w tring",
-    "dev": "npm run dev -w tring",
-    "start": "npm run start -w tring",
+    "build": "npm run build -w @tring/web && npm run build -w tring-chat",
+    "dev": "npm run dev -w tring-chat",
+    "start": "npm run start -w tring-chat",
     "test": "vitest run",
     "typecheck": "tsc -b --pretty",
-    "release": "npm run build && npm publish -w tring"
+    "release": "npm run build && npm publish -w tring-chat"
   },
   "devDependencies": {
     "@types/node": "^26.4.1",
