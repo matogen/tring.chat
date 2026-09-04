@@ -56,8 +56,19 @@ export function openWindow(url: string): boolean {
     command = 'open'
     args = ['-na', 'Google Chrome', '--args', appFlag]
   } else if (process.platform === 'win32') {
-    command = 'cmd'
-    args = ['/c', 'start', '', 'chrome', appFlag]
+    const local = process.env['LOCALAPPDATA'] ?? ''
+    const exe = firstExisting([
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+      ...(local ? [`${local}\\Google\\Chrome\\Application\\chrome.exe`] : []),
+      'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+      'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+    ])
+    // Spawning the exe directly rather than `start chrome`, so a missing
+    // browser is detectable here instead of failing silently inside cmd.
+    if (!exe) return false
+    command = exe
+    args = [appFlag]
   } else {
     const exe = firstExisting([
       '/usr/bin/google-chrome',

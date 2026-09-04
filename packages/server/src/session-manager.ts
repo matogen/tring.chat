@@ -17,6 +17,7 @@ export interface SessionManagerOptions {
   url: string
   scrollback: number
   idleMs: number
+  shell?: string
 }
 
 export const SLOT_COUNT = 16
@@ -53,6 +54,7 @@ export class SessionManager {
       url: this.opts.url,
       scrollback: this.opts.scrollback,
       idleMs: this.opts.idleMs,
+      ...(this.opts.shell ? { shell: this.opts.shell } : {}),
       autorun: spec.autorun,
     })
 

@@ -32,6 +32,7 @@ export interface ProjectManagerOptions {
   idleMs: number
   statePath?: string
   tickMs?: number
+  shell?: string
 }
 
 interface ProjectEntry {
@@ -187,6 +188,7 @@ export class ProjectManager {
       url: this.opts.url,
       scrollback: this.opts.scrollback,
       idleMs: this.opts.idleMs,
+      ...(this.opts.shell ? { shell: this.opts.shell } : {}),
     })
     mgr.onSessionData = (s, d) => this.onSessionData?.(s, d)
     mgr.onSessionStatus = (s) => this.onSessionStatus?.(s)

@@ -17,6 +17,7 @@ interface Args {
   scrollback: number
   idleMs: number
   open: boolean
+  shell: string | null
 }
 
 function parseArgs(argv: string[]): Args {
@@ -27,6 +28,7 @@ function parseArgs(argv: string[]): Args {
     scrollback: DEFAULT_SCROLLBACK,
     idleMs: DEFAULT_IDLE_MS,
     open: !process.env['TRING_NO_OPEN'],
+    shell: process.env['TRING_SHELL'] ?? null,
   }
   for (let i = 0; i < argv.length; i++) {
     const [flag, inline] = argv[i]!.split('=', 2)
@@ -37,6 +39,7 @@ function parseArgs(argv: string[]): Args {
       case '--token': args.token = String(value); break
       case '--scrollback': args.scrollback = Number(value); break
       case '--idle-ms': args.idleMs = Number(value); break
+      case '--shell': args.shell = String(value); break
       case '--no-open': args.open = false; i--; break
       case '--help':
         console.log(`tring — focus-centred terminal deck
@@ -46,6 +49,8 @@ function parseArgs(argv: string[]): Args {
   --token <secret>  require bearer auth (use when binding off localhost)
   --scrollback <n>  lines kept per session, default ${DEFAULT_SCROLLBACK}
   --idle-ms <n>     quiet period before a session is done, default ${DEFAULT_IDLE_MS}
+  --shell <path>    shell to spawn; default $SHELL, or powershell.exe on
+                    Windows. Use --shell wsl.exe for WSL shells from Windows
   --no-open         do not launch a browser window`)
         process.exit(0)
     }
@@ -68,6 +73,7 @@ async function main(): Promise<void> {
     url,
     scrollback: args.scrollback,
     idleMs: args.idleMs,
+    ...(args.shell ? { shell: args.shell } : {}),
   })
 
   const server = createServer((req, res) => {

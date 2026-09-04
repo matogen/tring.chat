@@ -38,6 +38,38 @@ tring
 tab strip, its own taskbar entry. In that window the browser stops reserving
 `Ctrl+1`–`Ctrl+8` for tab switching, so slots 11–16 get their natural keys.
 
+### Windows
+
+node-pty ships prebuilt binaries for `win32-x64` and `win32-arm64`, so no Visual
+Studio Build Tools, Python or node-gyp are needed. From PowerShell:
+
+```powershell
+npm install
+npm run build
+npm i -g .\packages\server
+tring
+```
+
+**Use a separate clone for Windows.** `node_modules` holds a compiled
+`node-pty` binary for one platform only, so running `npm install` on Windows in
+a folder you also use from WSL replaces the Linux binary and breaks the WSL
+side, and vice versa. Two checkouts, or `rm -rf node_modules && npm install`
+each time you switch.
+
+Sessions default to `powershell.exe`. To choose otherwise:
+
+```powershell
+tring --shell pwsh.exe     # PowerShell 7
+tring --shell cmd.exe
+tring --shell wsl.exe      # WSL shells from the Windows app
+```
+
+`--shell wsl.exe` is worth knowing about: it runs the daemon natively on
+Windows while every terminal is a WSL bash shell, which is usually where the
+dev tooling and Claude Code actually live.
+
+Config lives at `%USERPROFILE%\.config\tring\projects.json`.
+
 To run from a checkout instead:
 
 ```
@@ -47,7 +79,7 @@ npm test                            # vitest
 ```
 
 Flags: `--port` (7331), `--host` (127.0.0.1), `--token`, `--scrollback` (5000),
-`--idle-ms` (3000), `--no-open`.
+`--idle-ms` (3000), `--shell`, `--no-open`.
 
 ## Projects
 
@@ -121,6 +153,14 @@ instant Claude ends its turn instead of after the idle timeout:
   }
 }
 ```
+
+In a PowerShell session the same hook is:
+
+```powershell
+curl.exe -s -X POST "$env:TRING_URL/api/sessions/$env:TRING_SESSION_ID/done"
+```
+
+`curl.exe` rather than `curl`, which PowerShell aliases to `Invoke-WebRequest`.
 
 `TRING_URL`, `TRING_SESSION_ID`, `TRING_SLOT` and `TRING_PROJECT` are set in every
 session's environment. Session ids are globally unique, so this one snippet is correct

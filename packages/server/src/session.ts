@@ -5,6 +5,7 @@ import type { SerializeAddon as SerializeAddonT } from '@xterm/addon-serialize'
 import { ActivityTracker, DEFAULT_IDLE_MS } from '@tring/shared/status'
 import { DEFAULT_SCROLLBACK, type ScreenSnapshot, type SessionInfo } from '@tring/shared/protocol'
 import { snapshot } from './snapshot.ts'
+import { commandArgs, defaultShell, interactiveArgs } from './shell.ts'
 
 // Both xterm packages are CJS bundles that assign their exports in a way
 // Node's ESM lexer cannot detect, so `import { Terminal }` resolves to
@@ -25,6 +26,8 @@ export interface SessionOptions {
   url: string
   scrollback?: number
   idleMs?: number
+  /** Overrides the platform default; see shell.ts. */
+  shell?: string
   /**
    * Whether to actually execute `command`. False on daemon restore, which
    * spawns a plain shell in the right cwd but keeps the recorded command so
@@ -72,7 +75,7 @@ export class Session {
     this.name = opts.name ?? null
     this.tracker = new ActivityTracker(Date.now(), opts.idleMs ?? DEFAULT_IDLE_MS)
 
-    const shell = process.env['SHELL'] ?? '/bin/bash'
+    const shell = opts.shell ?? defaultShell()
     const env: Record<string, string> = {}
     for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v
     env['TRING_SESSION_ID'] = this.id
@@ -81,7 +84,10 @@ export class Session {
     env['TRING_URL'] = opts.url
 
     const autorun = opts.autorun ?? true
-    this.pty = spawn(shell, this.command && autorun ? ['-c', this.command] : [], {
+    const args = this.command && autorun
+      ? commandArgs(shell, this.command)
+      : interactiveArgs(shell)
+    this.pty = spawn(shell, args, {
       name: 'xterm-256color',
       cols: 120,
       rows: 36,
