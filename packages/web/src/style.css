@@ -38,16 +38,20 @@ body {
 
 .logo {
   display: grid;
-  grid-template: repeat(3, 1fr) / repeat(3, 1fr);
+  /* Explicit 5px cells, not 1fr: 20px across a 3-track grid with 2px gaps is
+     5.333px a cell, so every square straddled a pixel and the mark looked
+     soft. 3x5 + 2x2 = 19px, which lands on whole pixels at 1x. */
+  grid-template: repeat(3, 5px) / repeat(3, 5px);
   gap: 2px;
-  width: 20px;
-  height: 20px;
-  flex: 0 0 20px;
+  width: 19px;
+  height: 19px;
+  flex: 0 0 19px;
   align-self: center;
   margin-right: 8px;
 }
-.logo i { background: var(--deep); border-radius: 1.5px; }
-.logo i:nth-child(5) { background: var(--mint); box-shadow: 0 0 10px rgba(62, 233, 164, 0.7); }
+.logo i { background: var(--deep); border-radius: 1px; }
+/* The glow is the brand's, but 10px of it was most of the blur. */
+.logo i:nth-child(5) { background: var(--mint); box-shadow: 0 0 6px rgba(62, 233, 164, 0.6); }
 
 .tab {
   display: flex;

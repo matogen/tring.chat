@@ -6,7 +6,9 @@ import '@xterm/xterm/css/xterm.css'
 import './theme.css'
 import './style.css'
 
-import type { ProjectInfo, ServerMessage, SessionInfo, UpdateInfo } from '@tring/shared/protocol'
+import type {
+  ProjectInfo, ScreenSnapshot, ServerMessage, SessionInfo, UpdateInfo,
+} from '@tring/shared/protocol'
 import { actionForEvent, isPrefix, legendForSlot, slotForEvent } from '@tring/shared/keymap'
 import { WsClient } from './ws-client.ts'
 import { FocusTerminal } from './focus-terminal.ts'
@@ -35,6 +37,8 @@ let viewMode: 'ring' | 'usage' = 'ring'
 let usageTimer: ReturnType<typeof setInterval> | null = null
 
 const thumbs = new Map<string, Thumbnail>()
+/** The last screen seen per session, so a rebuilt tile is not born blank. */
+const lastShots = new Map<string, ScreenSnapshot>()
 const tiles = new Map<number, HTMLElement>()
 /** Project id -> the session you were last in, so switching back returns you. */
 const lastFocused = new Map<string, string>()
@@ -89,6 +93,8 @@ function handleMessage(msg: ServerMessage): void {
     case 'state': {
       projects = msg.projects
       update = msg.update ?? update
+      const alive = new Set(projects.flatMap((p) => p.sessions).map((s) => s.id))
+      for (const id of lastShots.keys()) if (!alive.has(id)) lastShots.delete(id)
       viewedId = msg.activeProjectId ?? projects[0]?.id ?? null
       render()
       restoreProjectFocus()
@@ -116,6 +122,7 @@ function handleMessage(msg: ServerMessage): void {
       if (msg.id === focusedId) focusTerm.replay(msg.ansi)
       break
     case 'snapshot': {
+      lastShots.set(msg.id, msg.snapshot)
       thumbs.get(msg.id)?.paint(msg.snapshot)
       break
     }
@@ -184,7 +191,13 @@ function renderRing(): void {
     } else {
       const canvas = document.createElement('canvas')
       tile.append(canvas)
-      thumbs.set(s.id, new Thumbnail(canvas))
+      const thumb = new Thumbnail(canvas)
+      thumbs.set(s.id, thumb)
+      // A rebuild discards the old canvas, and the daemon only resends a
+      // screen when it changes — so without this an idle session goes black
+      // until it next prints something, which may be never.
+      const shot = lastShots.get(s.id)
+      if (shot) thumb.paint(shot)
 
       // Only the parts that cannot change while this session holds the slot.
       // Everything else is paintTile's, or it goes stale behind this guard.

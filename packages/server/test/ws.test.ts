@@ -73,6 +73,31 @@ const pick = <T extends ServerMessage['type']>(got: Collected, type: T) =>
   got.json.filter((m): m is Extract<ServerMessage, { type: T }> => m.type === type)
 
 describe('WebSocket hub', () => {
+  it('sends the current screen to a client that attaches after a session went quiet', async () => {
+    const r = await rig()
+    const id = r.pm.createProject('demo', r.dir)
+    const session = r.pm.create(id, { cwd: r.dir })!
+
+    // A first viewer drains the change-gated snapshots, exactly as the real
+    // client does, and then the shell sits at its prompt producing nothing.
+    const first = await connect(r.port)
+    await waitFor(() => pick(first.got, 'snapshot').length > 0)
+    await new Promise((res) => setTimeout(res, 400))
+    const before = pick(first.got, 'snapshot').length
+    await new Promise((res) => setTimeout(res, 400))
+    expect(pick(first.got, 'snapshot').length).toBe(before) // quiet: nothing resent
+
+    // A second viewer — a reload, another tab — has never seen that screen.
+    const second = await connect(r.port)
+    await waitFor(() => pick(second.got, 'snapshot').length > 0, 3000)
+    const shot = pick(second.got, 'snapshot').find((m) => m.id === session.id)
+    expect(shot, 'a freshly attached client got no screen for an idle session').toBeDefined()
+    expect(shot!.snapshot.rows.length).toBeGreaterThan(0)
+
+    first.ws.close()
+    second.ws.close()
+  })
+
   it('drives a session end to end: state, focus replay, output and status', async () => {
     const r = await rig()
     const { ws, got } = await connect(r.port)
