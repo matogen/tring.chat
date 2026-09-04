@@ -3,6 +3,9 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { xtermTheme } from './xterm-theme.ts'
 
+/** RIS. xterm maps ESC c to a full reset, and it travels in the write queue. */
+const RESET = '\x1bc'
+
 /** The single real terminal (spec §5.4). Thumbnails are canvases, not this. */
 export class FocusTerminal {
   readonly term: Terminal
@@ -37,9 +40,16 @@ export class FocusTerminal {
     this.fitNow()
   }
 
+  /**
+   * xterm's `write` is queued and parsed asynchronously, but `reset()` is
+   * synchronous and jumps that queue — so output that had already been buffered
+   * from the session you just left flushes *after* the reset and paints itself
+   * back over the new one. Sending RIS (`ESC c`) through the same queue keeps
+   * the order: everything pending is parsed, then the screen is reset, then
+   * this replay lands. One write, so nothing can interleave.
+   */
   replay(ansi: string): void {
-    this.term.reset()
-    this.term.write(ansi)
+    this.term.write(RESET + ansi)
   }
 
   write(data: Uint8Array): void {
@@ -47,7 +57,7 @@ export class FocusTerminal {
   }
 
   clear(): void {
-    this.term.reset()
+    this.term.write(RESET)
   }
 
   focus(): void {

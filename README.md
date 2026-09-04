@@ -248,6 +248,9 @@ Installing the Stop hook below is what makes this exact for Claude Code.
 
 ## Restarting
 
+Switching projects puts you back in the session you were last using in that project,
+rather than an empty centre.
+
 Reopening brings back every project with its tabs, slots, names and working
 directories. The active project's shells spawn immediately; other projects spawn when
 you first switch to them.

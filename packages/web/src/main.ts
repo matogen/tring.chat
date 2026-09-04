@@ -32,6 +32,9 @@ let update: UpdateInfo | null = null
 
 const thumbs = new Map<string, Thumbnail>()
 const tiles = new Map<number, HTMLElement>()
+/** Project id -> the session you were last in, so switching back returns you. */
+const lastFocused = new Map<string, string>()
+let restoreFocusFor: string | null = null
 
 /* ---------- terminal ---------- */
 
@@ -84,6 +87,7 @@ function handleMessage(msg: ServerMessage): void {
       update = msg.update ?? update
       viewedId = msg.activeProjectId ?? projects[0]?.id ?? null
       render()
+      restoreProjectFocus()
       maybeAskForFirstProject()
       break
     }
@@ -145,7 +149,13 @@ function renderRing(): void {
   ringSig = sig
 
   applyRing(ringEl, focusCell, size)
-  ringEl.replaceChildren(focusCell)
+  // Detaching the focus cell would take the live terminal's canvas out of the
+  // document; re-attaching it does not repaint, so the previous session's
+  // pixels can survive a rebuild. Only the tiles are replaced.
+  for (const child of Array.from(ringEl.children)) {
+    if (child !== focusCell) child.remove()
+  }
+  if (focusCell.parentElement !== ringEl) ringEl.append(focusCell)
   tiles.clear()
   thumbs.clear()
 
@@ -283,6 +293,8 @@ function focusSession(id: string | null): void {
     paintStatuses()
     return
   }
+  const s = sessionById(id)
+  if (s) lastFocused.set(s.projectId, id)
   const { cols, rows } = focusTerm.fitNow()
   ws.send({ type: 'focus', id, cols, rows })
   focusTerm.focus()
@@ -311,7 +323,19 @@ function activateProject(id: string): void {
   viewedId = id
   focusedId = null
   focusTerm.clear()
+  // The project's sessions arrive with the next `state`, so the session to
+  // return to can only be chosen once they do.
+  restoreFocusFor = id
   ws.send({ type: 'activateProject', projectId: id })
+}
+
+/** Puts you back in the session you were last using in this project. */
+function restoreProjectFocus(): void {
+  const want = restoreFocusFor
+  if (!want || want !== viewedId) return
+  restoreFocusFor = null
+  const id = lastFocused.get(want)
+  if (id && sessions().some((s) => s.id === id)) focusSession(id)
 }
 
 function nextDone(): void {

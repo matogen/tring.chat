@@ -354,7 +354,24 @@ ceiling does not scale with project count.
 ### 5.4 Focus terminal
 
 One xterm.js instance with the fit and webgl addons. On focus change: reset, write the
-`screen` replay, attach to the live `output` stream, run fit, send `resize`. A custom key
+`screen` replay, attach to the live `output` stream, run fit, send `resize`.
+
+Two rules keep the centre honest when you switch away, and breaking either leaves the
+previous session painted over the new one:
+
+- **The reset travels in the write queue, as RIS (`ESC c`).** `write()` is queued and
+  parsed asynchronously while `reset()` is synchronous, so a plain `reset()` jumps the
+  queue and whatever was already buffered flushes *afterwards* and repaints the terminal
+  you just left. Heavy output — an agent rendering a diff — is exactly when the queue is
+  deep enough for this to show.
+- **The focus cell is never detached from `#ring`.** Rebuilding the ring replaces the
+  tiles only. `replaceChildren(focusCell)` removes and re-inserts it, taking the live
+  terminal's canvas out of the document, and re-attaching does not repaint — so the old
+  session's pixels can survive the rebuild.
+
+Switching projects restores the session you were last focused on there (`lastFocused`,
+keyed by project id, resolved when that project's `state` arrives), rather than leaving
+an empty centre. A custom key
 event handler swallows the prefix key and picker keys so they never reach the PTY. Clicking
 a thumbnail focuses its session directly, without the picker.
 
