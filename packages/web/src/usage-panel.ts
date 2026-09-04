@@ -28,13 +28,6 @@ export interface UsageReport {
 
 const ENABLED_KEY = 'tring.usage'
 const VIEW_KEY = 'tring.usage.view'
-const BUDGET_KEY = 'tring.usage.budgets'
-
-export interface Budgets {
-  /** Tokens allowed in one five-hour block, or null for "just show the number". */
-  window: number | null
-  week: number | null
-}
 
 const read = <T>(key: string, fallback: T): T => {
   try {
@@ -54,10 +47,8 @@ const write = (key: string, value: unknown): void => {
 }
 
 let enabled = read(ENABLED_KEY, false)
-let budgets = read<Budgets>(BUDGET_KEY, { window: null, week: null })
 
 export const isEnabled = (): boolean => enabled
-export const getBudgets = (): Budgets => budgets
 
 export function setEnabled(next: boolean): void {
   enabled = next
@@ -67,11 +58,6 @@ export function setEnabled(next: boolean): void {
 /** Reloading while on the usage tab should leave you on the usage tab. */
 export const wasActive = (): boolean => enabled && read(VIEW_KEY, false)
 export const setActive = (active: boolean): void => write(VIEW_KEY, active)
-
-export function setBudgets(next: Budgets): void {
-  budgets = next
-  write(BUDGET_KEY, next)
-}
 
 export const fetchUsage = (): Promise<UsageReport> => api<UsageReport>('/api/usage')
 
@@ -104,8 +90,8 @@ function el<K extends keyof HTMLElementTagNameMap>(
  * so no status tile is on screen to be confused with. Mint stays out of it —
  * that one means a finished agent and nothing else (spec §5.1).
  */
-function meter(used: number, budget: number, warn = true): HTMLElement {
-  const pct = Math.min(100, (used / budget) * 100)
+function meter(used: number, total: number, warn = true): HTMLElement {
+  const pct = Math.min(100, (used / total) * 100)
   const wrap = el('div', 'meter')
   const fill = el('i')
   fill.style.width = `${pct}%`
@@ -144,15 +130,15 @@ export function renderUsage(root: HTMLElement, report: UsageReport | null, error
     }
     panel.append(el('p', 'source', 'from Claude Code’s own /usage'))
   } else {
-    // No `claude` to ask, so fall back to counting tokens against a budget.
-    const b = getBudgets()
+    // Nothing to ask, so report what the transcripts say and no more. A bar
+    // needs a ceiling, and inventing one would be worse than having none.
     const w = report.window
-    panel.append(budgetRow('5-hour window', w.tokens, b.window,
+    panel.append(plainRow('5-hour window', `${tokens(w.tokens)} tokens`,
       w.resetsAt ? `resets ${clock(w.resetsAt)}` : 'nothing running'))
-    panel.append(budgetRow('This week', report.week.tokens, b.week, 'rolling 7 days'))
+    panel.append(plainRow('This week', `${tokens(report.week.tokens)} tokens`, 'rolling 7 days'))
     panel.append(el('p', 'source',
-      (report.limitsError ?? 'Claude Code’s own limits are unavailable') +
-      ' — these are counted from transcripts against the budget you set.'))
+      `${report.limitsError ?? 'Claude Code’s own limits are unavailable'} — ` +
+      'so these are counted from transcripts, with no percentage to show.'))
   }
 
   const totals = el('div', 'utotals')
@@ -201,19 +187,14 @@ function limitRow(l: Limit): HTMLElement {
   return r
 }
 
-function budgetRow(
-  label: string, used: number, budget: number | null, note?: string,
-): HTMLElement {
+function plainRow(label: string, value: string, note: string): HTMLElement {
   const r = el('div', 'urow')
   const head = el('div', 'uhead')
   head.append(el('span', 'ulabel', label))
-  if (budget) head.append(el('span', 'upct', `${Math.round((used / budget) * 100)}%`))
+  head.append(el('span', 'upct', value))
   r.append(head)
-  if (budget) r.append(meter(used, budget))
   const foot = el('div', 'ufoot')
-  foot.append(el('span', undefined,
-    budget ? `${tokens(used)} / ${tokens(budget)} tokens` : `${tokens(used)} tokens`))
-  if (note) foot.append(el('span', 'unote', note))
+  foot.append(el('span', 'unote', note))
   r.append(foot)
   return r
 }

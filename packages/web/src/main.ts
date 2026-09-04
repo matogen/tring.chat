@@ -355,18 +355,14 @@ async function refreshUsage(): Promise<void> {
 }
 
 function openSettings(): void {
-  ui.openSettingsDialog(
-    { ring: ringSize(), usage: usage.isEnabled(), budgets: usage.getBudgets() },
-    (v) => {
-      if (v.usage !== usage.isEnabled()) {
-        usage.setEnabled(v.usage)
-        if (!v.usage) showRing()
-      }
-      usage.setBudgets(v.budgets)
-      if (v.ring !== ringSize()) changeRingSize(v.ring)
-      else { paintBar(); void refreshUsage() }
-    },
-  )
+  ui.openSettingsDialog({ ring: ringSize(), usage: usage.isEnabled() }, (v) => {
+    if (v.usage !== usage.isEnabled()) {
+      usage.setEnabled(v.usage)
+      if (!v.usage) showRing()
+    }
+    if (v.ring !== ringSize()) changeRingSize(v.ring)
+    else { paintBar(); void refreshUsage() }
+  })
 }
 
 function changeRingSize(size: RingSize): void {

@@ -527,6 +527,3 @@ body {
 }
 .field.toggle span { margin: 0; color: var(--text); font-size: 12.5px; }
 .field.toggle input { width: 15px; height: 15px; accent-color: var(--emerald); }
-.budgets .field { display: grid; grid-template-columns: 1fr 110px auto; gap: 8px; align-items: center; }
-.budgets .field span { margin: 0; }
-.budgets .field em { color: var(--dim); font: 11px var(--mono); }

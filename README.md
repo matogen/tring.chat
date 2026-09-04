@@ -220,8 +220,9 @@ so including them would make the bar 99% cache and tell you nothing. Costs are e
 from a built-in price table.
 
 If the `claude` command is not on the daemon's PATH — running tring natively on Windows
-against a WSL install, say — the tab falls back to counting transcript tokens against two
-budgets you set in Settings, and says so.
+against a WSL install, say — the tab reports the transcript numbers on their own and says
+why there is no percentage. There is nothing to configure either way: a bar needs a real
+ceiling, and inventing one would be worse than having none.
 
 Reloading while the tab is open leaves you on it.
 

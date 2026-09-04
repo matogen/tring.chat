@@ -23,8 +23,9 @@ Two sources, because neither is sufficient alone:
 - **Tokens, cost and the per-project split come from the transcripts**, which `/usage`
   does not break down by repository.
 
-When `claude` is not on the daemon's PATH the panel falls back to transcript tokens
-against a user-set budget, and says which it is showing.
+When `claude` is not on the daemon's PATH the panel reports the transcript numbers alone
+and says why there is no percentage. There is no budget setting: a bar needs a real
+ceiling, and an invented one is worse than none.
 
 **2026-09-04 — tile names and colours.** A tile carries an optional user colour
 (§5.2, §5.9) alongside its name, both editable from a right-click or the picker's `r`.
@@ -495,10 +496,9 @@ nothing. Cost comes from a small model→price table that will drift, marked `po
 
 A full scan of a year of transcripts (292 MB, 479 files) measures ~0.5s, and only files
 whose mtime falls inside the week are opened, so no incremental offset tracking is
-needed. Budgets live in `localStorage` with the ring size and the sound toggle, and are used
-only in the no-`claude` fallback; the daemon returns raw totals and the client does the
-division, so no user configuration crosses the wire. Whether the tab is the active view
-lives there too — reloading while it is open leaves you on it.
+needed. Whether the tab is enabled, and whether it is the active view, live in `localStorage`
+with the ring size and the sound toggle — reloading while the tab is open leaves you on
+it. The daemon holds no view state.
 
 Two display rules, both learned the hard way. `[hidden]` is declared once globally with
 `!important`, because the UA rule loses to any author `display` — `#ring` and `#usage`
