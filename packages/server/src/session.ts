@@ -6,7 +6,7 @@ import type { SerializeAddon as SerializeAddonT } from '@xterm/addon-serialize'
 import { ActivityTracker, DEFAULT_IDLE_MS } from '@tring/shared/status'
 import { DEFAULT_SCROLLBACK, type ScreenSnapshot, type SessionInfo } from '@tring/shared/protocol'
 import { snapshot } from './snapshot.ts'
-import { commandArgs, defaultShell, interactiveArgs } from './shell.ts'
+import { commandArgs, defaultShell, interactiveArgs, shQuote, usesPosixCd } from './shell.ts'
 
 // Both xterm packages are CJS bundles that assign their exports in a way
 // Node's ESM lexer cannot detect, so `import { Terminal }` resolves to
@@ -18,6 +18,8 @@ const { SerializeAddon } = require('@xterm/addon-serialize') as typeof import('@
 
 /** How often to re-read the shell's working directory. */
 const CWD_POLL_MS = 2000
+/** Grace period for rc files to finish before checking where we landed. */
+const CWD_ENFORCE_MS = 400
 
 export interface SessionOptions {
   id: string
@@ -72,6 +74,8 @@ export class Session {
   private readonly spawnCwd: string
   private liveCwd: string | null = null
   private lastCwdPoll = 0
+  private enforceTimer: NodeJS.Timeout | null = null
+  private hasInput = false
 
   /** Fires when the shell moves, so the new location gets persisted. */
   onCwdChange: (() => void) | null = null
@@ -156,6 +160,15 @@ export class Session {
       this.onData?.(chunk)
     })
 
+    // A shell's rc file may cd elsewhere — `cd /mnt/c` in ~/.bashrc is a real
+    // and common example — which would silently discard the directory the user
+    // chose in the dialog. An explicit per-session choice should beat a global
+    // default, so put the shell back once, after rc files have run.
+    if (!(this.command && autorun) && usesPosixCd(shell)) {
+      this.enforceTimer = setTimeout(() => this.enforceCwd(), CWD_ENFORCE_MS)
+      this.enforceTimer.unref?.()
+    }
+
     this.pty.onExit(({ exitCode }) => {
       this.signal((t, now) => t.exit(exitCode, now))
       this.onExit?.(exitCode)
@@ -164,6 +177,7 @@ export class Session {
 
   write(data: string): void {
     if (this.disposed) return
+    this.hasInput = true
     this.signal((t, now) => t.input(now))
     this.pty.write(data)
   }
@@ -218,6 +232,21 @@ export class Session {
     }
   }
 
+  /** Runs once, only if the shell is not where it was asked to be. */
+  private enforceCwd(): void {
+    // Once the user has typed, the shell belongs to them — a corrective cd
+    // would fight a directory they chose themselves, moments ago.
+    if (this.disposed || this.hasInput || process.platform !== 'linux') return
+    let actual: string
+    try {
+      actual = readlinkSync(`/proc/${this.pty.pid}/cwd`)
+    } catch {
+      return
+    }
+    if (actual === this.spawnCwd) return
+    this.pty.write(`cd -- ${shQuote(this.spawnCwd)}\n`)
+  }
+
   private setCwd(next: string): void {
     if (!next || next === this.cwd) return
     this.liveCwd = next
@@ -235,6 +264,8 @@ export class Session {
 
   dispose(): void {
     this.disposed = true
+    if (this.enforceTimer) clearTimeout(this.enforceTimer)
+    this.enforceTimer = null
     this.kill()
     this.term.dispose()
   }

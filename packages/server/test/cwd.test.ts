@@ -80,3 +80,72 @@ describe('working directory', () => {
     expect(state.projects[0]!.sessions[0]!.cwd).toBe(sub)
   })
 })
+
+describe('rc files that cd', () => {
+  // A shell whose startup moves it elsewhere, which is what `cd /mnt/c` in a
+  // ~/.bashrc does. Scripted rather than relying on the ambient rc, so the
+  // test means the same thing on every machine.
+  async function wanderingShell(target: string, dir: string): Promise<string> {
+    const { writeFile, chmod } = await import('node:fs/promises')
+    const p = path.join(dir, 'wandersh')
+    await writeFile(p, `#!/bin/sh\ncd ${target}\nexec /bin/sh\n`)
+    await chmod(p, 0o755)
+    return p
+  }
+
+  it('puts the shell back in the directory the user chose', async () => {
+    const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'tring-rc-')))
+    const chosen = path.join(dir, 'chosen'); await mkdir(chosen)
+    const elsewhere = path.join(dir, 'elsewhere'); await mkdir(elsewhere)
+    const shell = await wanderingShell(elsewhere, dir)
+
+    const { Session } = await import('../src/session.ts')
+    const s = new Session({
+      id: 'rc1', projectId: 'p', projectName: 'demo', slot: 1,
+      cwd: chosen, shell, url: 'http://127.0.0.1:7331', idleMs: 200, scrollback: 100,
+    })
+    try {
+      await waitFor(() => s.cwd === chosen, 9000)
+      expect(s.cwd).toBe(chosen)
+    } finally {
+      s.dispose()
+    }
+  })
+
+  it('does not touch a shell that is already where it was asked to be', async () => {
+    const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'tring-noop-')))
+    const { Session } = await import('../src/session.ts')
+    // /bin/sh reads no rc here, so it stays put and needs no correction.
+    const s = new Session({
+      id: 'noop1', projectId: 'p', projectName: 'demo', slot: 1,
+      cwd: dir, shell: '/bin/sh', url: 'http://127.0.0.1:7331', idleMs: 200, scrollback: 100,
+    })
+    try {
+      await settle(900)
+      expect(s.serialize()).not.toContain('cd -- ')
+      expect(s.cwd).toBe(dir)
+    } finally {
+      s.dispose()
+    }
+  })
+
+  it('leaves the shell alone once the user has started typing', async () => {
+    const dir = await realpath(await mkdtemp(path.join(os.tmpdir(), 'tring-typed-')))
+    const chosen = path.join(dir, 'chosen'); await mkdir(chosen)
+    const elsewhere = path.join(dir, 'elsewhere'); await mkdir(elsewhere)
+    const shell = await wanderingShell(elsewhere, dir)
+
+    const { Session } = await import('../src/session.ts')
+    const s = new Session({
+      id: 'typed1', projectId: 'p', projectName: 'demo', slot: 1,
+      cwd: chosen, shell, url: 'http://127.0.0.1:7331', idleMs: 200, scrollback: 100,
+    })
+    try {
+      s.write('\n') // user is here first; the shell is theirs now
+      await settle(1200)
+      expect(s.serialize()).not.toContain('cd -- ')
+    } finally {
+      s.dispose()
+    }
+  })
+})

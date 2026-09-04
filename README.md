@@ -157,6 +157,12 @@ Reopening brings back every project with its tabs, slots, names and working
 directories. The active project's shells spawn immediately; other projects spawn when
 you first switch to them.
 
+If your shell's startup file changes directory — `cd /mnt/c` in a `~/.bashrc`,
+say — it runs *after* the shell has been placed in the directory you chose, and
+would otherwise silently discard that choice. tring puts the shell back once,
+shortly after start, unless you have already typed something: at that point the
+shell is yours.
+
 Sessions come back in the directory the shell was actually in, not the one it
 was started in — `cd` somewhere and that is where you return. The daemon reads
 this from the shell's own process on Linux and WSL, and from OSC 7 on shells

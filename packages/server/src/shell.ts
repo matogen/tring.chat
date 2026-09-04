@@ -42,6 +42,17 @@ export function commandArgs(shell: string, command: string): string[] {
   }
 }
 
+/** True when `cd <path>` is the right way to move this shell. */
+export function usesPosixCd(shell: string): boolean {
+  const b = base(shell)
+  return b !== 'cmd' && b !== 'powershell' && b !== 'pwsh'
+}
+
+/** Single-quote a path for a POSIX shell, including paths containing quotes. */
+export function shQuote(p: string): string {
+  return `'${p.replace(/'/g, `'\\''`)}'`
+}
+
 /** Args for a plain interactive shell, with no command to run. */
 export function interactiveArgs(shell: string): string[] {
   switch (base(shell)) {
