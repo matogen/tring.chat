@@ -1,29 +1,52 @@
 {
-  "name": "@tring/server",
+  "name": "tring",
   "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "dev": "TRING_NO_OPEN=1 tsx watch src/index.ts",
-    "start": "tsx src/index.ts",
-    "build": "node build.mjs"
+  "description": "Focus-centred terminal deck for agentic work \u2014 16 live terminals around one focus, green when an agent is done",
+  "keywords": [
+    "terminal",
+    "pty",
+    "xterm",
+    "claude-code",
+    "agents",
+    "tui",
+    "multiplexer",
+    "dashboard"
+  ],
+  "homepage": "https://tring.chat",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/matogen/tring.chat.git",
+    "directory": "packages/server"
   },
-  "dependencies": {
-    "@xterm/addon-serialize": "^0.13.0",
-    "@xterm/headless": "^5.5.0",
-    "node-pty": "^1.0.0",
-    "ws": "^8.18.0"
+  "bugs": {
+    "url": "https://github.com/matogen/tring.chat/issues"
+  },
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
   },
   "bin": {
     "tring": "./dist/tring.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
+  "scripts": {
+    "dev": "TRING_NO_OPEN=1 tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "build": "node build.mjs",
+    "prepublishOnly": "node build.mjs"
+  },
+  "dependencies": {
+    "@xterm/addon-serialize": "^0.13.0",
+    "@xterm/headless": "^5.5.0",
+    "node-pty": "^1.1.0",
+    "ws": "^8.18.0"
+  },
   "devDependencies": {
     "esbuild": "^0.24.0",
     "@tring/shared": "*"
-  },
-  "description": "Focus-centred terminal deck for agentic work",
-  "license": "MIT"
+  }
 }

@@ -28,11 +28,13 @@ ring never shuffles and slot numbers stay in muscle memory.
 ## Install
 
 ```
-npm install
-npm run build
-npm i -g ./packages/server
+npm i -g tring
 tring
 ```
+
+Node 20 or newer. node-pty ships prebuilt binaries for linux-x64, darwin-x64,
+darwin-arm64, win32-x64 and win32-arm64, so there is no compiler step on any of
+them.
 
 `tring` starts the daemon and opens a chromeless browser window — no address bar, no
 tab strip, its own taskbar entry. In that window the browser stops reserving
@@ -44,11 +46,12 @@ node-pty ships prebuilt binaries for `win32-x64` and `win32-arm64`, so no Visual
 Studio Build Tools, Python or node-gyp are needed. From PowerShell:
 
 ```powershell
-npm install
-npm run build
-npm i -g .\packages\server
+npm i -g tring
 tring
 ```
+
+That is all that is needed to *use* it. The rest of this section applies only
+if you are working on tring itself from a checkout.
 
 **Use a separate clone for Windows.** `node_modules` holds a compiled
 `node-pty` binary for one platform only, so running `npm install` on Windows in
@@ -73,9 +76,11 @@ Config lives at `%USERPROFILE%\.config\tring\projects.json`.
 To run from a checkout instead:
 
 ```
+npm install
 npm run build && npm start          # daemon on http://127.0.0.1:7331
 npm run dev                         # tsx watch, no window (TRING_NO_OPEN)
 npm test                            # vitest
+npm i -g ./packages/server          # install this checkout as `tring`
 ```
 
 Flags: `--port` (7331), `--host` (127.0.0.1), `--token`, `--scrollback` (5000),
@@ -175,4 +180,4 @@ Design: [`docs/superpowers/specs/2026-09-03-tring-design.md`](docs/superpowers/s
 
 ## Licence
 
-TBD.
+MIT.
