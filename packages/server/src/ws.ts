@@ -91,6 +91,7 @@ export class Hub {
       c.authed = true
       c.projectId = pm.activeProjectId
       this.sendState(c)
+      this.sendSnapshots(c)
       return
     }
     if (!c.authed) return this.send(c, { type: 'error', message: 'expected hello' })
@@ -101,6 +102,7 @@ export class Hub {
         c.projectId = msg.projectId
         c.focusedId = null
         this.sendState(c)
+        this.sendSnapshots(c)
         break
       }
       case 'createProject': {
@@ -158,6 +160,23 @@ export class Hub {
       case 'respawn':
         pm.findManager(msg.id)?.respawn(msg.id)
         break
+    }
+  }
+
+  /**
+   * Every tile in the project this client has just started viewing, once.
+   *
+   * The pump below only emits on change, which is what keeps sixteen tiles
+   * cheap — but it means a session that has gone quiet is never sent again.
+   * Attaching is exactly when a viewer has seen nothing, so it gets the
+   * screens as they stand rather than waiting for output that may never come.
+   */
+  private sendSnapshots(c: Client): void {
+    if (!c.projectId) return
+    const mgr = this.opts.pm.managerFor(c.projectId)
+    if (!mgr) return
+    for (const session of mgr.list()) {
+      this.send(c, { type: 'snapshot', id: session.id, snapshot: session.snapshotNow() })
     }
   }
 

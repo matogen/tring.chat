@@ -377,6 +377,18 @@ monospace font at whatever size makes `cols × charWidth` fit the tile width, ho
 64 small repaints per second. Only the active project's sessions send snapshots, so this
 ceiling does not scale with project count.
 
+The change gate that makes this cheap belongs to the *session*, not to any viewer:
+`takeSnapshot()` returns null while the screen is unchanged. A shell sitting at its
+prompt never changes again, so a client that attaches later — a reload, a second tab, a
+project switch — would show a black tile forever. Two rules close that:
+
+- **Attaching pushes the current screen once, ungated.** `hello` and `activateProject`
+  send `snapshotNow()` for every session in the project the client is now viewing.
+- **The client keeps the last screen per session id.** A ring rebuild discards the
+  canvases and constructs new `Thumbnail`s, and a ring-size change involves no round
+  trip at all, so without a client-side copy the tiles would blank until the next
+  output.
+
 ### 5.4 Focus terminal
 
 One xterm.js instance with the fit and webgl addons. On focus change: reset, write the
@@ -432,7 +444,12 @@ per-project breakdown is on the tabs, visible the instant they look back.
 ### 5.6 Project bar
 
 Fixed 36px. Logo at the left, then one tab per project, then a `+` button opening the
-project dialog, and at the right a sound toggle and a settings gear. Each tab shows the project name and, when it has finished sessions, a
+project dialog, and at the right a sound toggle and a settings gear.
+
+Both marks are drawn to land on whole pixels at 1x, which is most of what "sharp" means
+at this size: the logo uses explicit 5px cells rather than `1fr` (three `1fr` tracks
+across 20px with 2px gaps is 5.333px a cell, so every square straddled a pixel), and the
+SVGs render 1:1 with their 16-unit viewBox rather than being scaled to 14px. Each tab shows the project name and, when it has finished sessions, a
 mint done-badge (`api-service ⬤3`). The active tab uses `--emerald`; badges use `--mint`.
 
 Past overflow the bar scrolls horizontally (`overflow-x: auto`) with a tab `min-width`;

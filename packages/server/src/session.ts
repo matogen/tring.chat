@@ -197,6 +197,18 @@ export class Session {
   }
 
   /** Returns null when the visible buffer has not changed since last time. */
+  /**
+   * The current screen, ignoring the change gate below.
+   *
+   * A client that has just attached has never seen this session, however long
+   * it has been quiet — and a shell sitting at its prompt never changes again,
+   * so waiting for the gate to open means a black tile forever.
+   */
+  snapshotNow(): ScreenSnapshot {
+    return snapshot(this.term)
+  }
+
+  /** Only when the screen actually changed, which is what keeps 16 tiles cheap. */
   takeSnapshot(): ScreenSnapshot | null {
     const shot = snapshot(this.term)
     const key = JSON.stringify(shot.rows)
