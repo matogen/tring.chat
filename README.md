@@ -223,6 +223,8 @@ If the `claude` command is not on the daemon's PATH — running tring natively o
 against a WSL install, say — the tab falls back to counting transcript tokens against two
 budgets you set in Settings, and says so.
 
+Reloading while the tab is open leaves you on it.
+
 ## Sound
 
 When a session turns green, tring rings — two short strikes, synthesised rather

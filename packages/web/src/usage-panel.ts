@@ -27,6 +27,7 @@ export interface UsageReport {
 /* ---------- settings, per browser like the sound toggle ---------- */
 
 const ENABLED_KEY = 'tring.usage'
+const VIEW_KEY = 'tring.usage.view'
 const BUDGET_KEY = 'tring.usage.budgets'
 
 export interface Budgets {
@@ -62,6 +63,10 @@ export function setEnabled(next: boolean): void {
   enabled = next
   write(ENABLED_KEY, next)
 }
+
+/** Reloading while on the usage tab should leave you on the usage tab. */
+export const wasActive = (): boolean => enabled && read(VIEW_KEY, false)
+export const setActive = (active: boolean): void => write(VIEW_KEY, active)
 
 export function setBudgets(next: Budgets): void {
   budgets = next
@@ -99,12 +104,16 @@ function el<K extends keyof HTMLElementTagNameMap>(
  * so no status tile is on screen to be confused with. Mint stays out of it —
  * that one means a finished agent and nothing else (spec §5.1).
  */
-function meter(used: number, budget: number): HTMLElement {
+function meter(used: number, budget: number, warn = true): HTMLElement {
   const pct = Math.min(100, (used / budget) * 100)
   const wrap = el('div', 'meter')
   const fill = el('i')
   fill.style.width = `${pct}%`
-  if (pct >= 90) fill.classList.add('hot')
+  // Only a limit earns amber and red. A project bar is scaled against the
+  // busiest project, so the top one is always 100% and would always look
+  // alarming while meaning nothing of the sort.
+  if (!warn) { /* neutral */ }
+  else if (pct >= 90) fill.classList.add('hot')
   else if (pct >= 75) fill.classList.add('warm')
   wrap.append(fill)
   wrap.setAttribute('role', 'progressbar')
@@ -165,7 +174,7 @@ export function renderUsage(root: HTMLElement, report: UsageReport | null, error
     for (const p of report.projects.slice(0, 8)) {
       const r = el('div', 'uproject')
       r.append(el('span', 'nm', p.name))
-      r.append(meter(p.tokens, most))
+      r.append(meter(p.tokens, most, false))
       r.append(el('span', 'tag', tokens(p.tokens)))
       list.append(r)
     }

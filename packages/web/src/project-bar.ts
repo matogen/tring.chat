@@ -36,7 +36,8 @@ export function renderBar(
   for (const p of projects) {
     const done = p.sessions.filter((s) => s.status === 'done').length
     const tab = document.createElement('button')
-    tab.className = 'tab' + (p.id === viewedId ? ' active' : '')
+    // Only one tab is active at a time, and the usage view is a tab.
+    tab.className = 'tab' + (!usageActive && p.id === viewedId ? ' active' : '')
     tab.title = p.root
 
     const nm = document.createElement('span')

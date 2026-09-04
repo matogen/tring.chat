@@ -497,7 +497,15 @@ A full scan of a year of transcripts (292 MB, 479 files) measures ~0.5s, and onl
 whose mtime falls inside the week are opened, so no incremental offset tracking is
 needed. Budgets live in `localStorage` with the ring size and the sound toggle, and are used
 only in the no-`claude` fallback; the daemon returns raw totals and the client does the
-division, so no user configuration crosses the wire.
+division, so no user configuration crosses the wire. Whether the tab is the active view
+lives there too — reloading while it is open leaves you on it.
+
+Two display rules, both learned the hard way. `[hidden]` is declared once globally with
+`!important`, because the UA rule loses to any author `display` — `#ring` and `#usage`
+both carry `display: grid`, so `el.hidden = true` silently did nothing and the two views
+split the screen. And only a real limit gets amber and red: a per-project bar is scaled
+against the busiest project, so its top row is always 100% and would always look alarming
+while meaning nothing of the sort.
 
 ## 6. Distribution
 

@@ -1,5 +1,13 @@
 * { box-sizing: border-box; }
 
+/*
+ * The UA rule for [hidden] is `display: none`, which any author `display`
+ * loses to — so `el.hidden = true` silently does nothing on #ring, #usage,
+ * #overlay or .tile-action. Said once here, loudly, rather than remembered
+ * at every element that grows a display property later.
+ */
+[hidden] { display: none !important; }
+
 html, body, #app { height: 100%; margin: 0; }
 
 body {
@@ -160,7 +168,6 @@ body {
   backdrop-filter: blur(3px);
   z-index: 10;
 }
-#overlay[hidden] { display: none; }
 
 .panel {
   width: min(560px, 92vw);
@@ -312,8 +319,6 @@ body {
 .tile:focus-within .tile-action { opacity: 1; }
 /* A dead tile always shows its way back, without needing to be found. */
 .tile.st-exited .tile-action { opacity: 1; }
-/* `display: grid` above outranks the UA rule for [hidden], so say it here. */
-.tile-action[hidden] { display: none; }
 .tile-action:hover { background: var(--deep); color: var(--mint); border-color: var(--mint); }
 
 .btn.danger { border-color: rgba(242, 84, 91, 0.5); color: var(--red); }

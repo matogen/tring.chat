@@ -92,6 +92,7 @@ function handleMessage(msg: ServerMessage): void {
       viewedId = msg.activeProjectId ?? projects[0]?.id ?? null
       render()
       restoreProjectFocus()
+      if (usage.wasActive()) showUsage()
       maybeAskForFirstProject()
       break
     }
@@ -328,6 +329,7 @@ function showUsage(): void {
   usage.renderUsage(usageEl, null, null)
   void refreshUsage()
   usageTimer = setInterval(() => void refreshUsage(), 30_000)
+  usage.setActive(true)
   paintBar()
 }
 
@@ -338,6 +340,7 @@ function showRing(): void {
   usageTimer = null
   usageEl.hidden = true
   ringEl.hidden = false
+  usage.setActive(false)
   paintBar()
   requestAnimationFrame(() => fitTerminal())
 }
