@@ -361,3 +361,25 @@ body {
 /* Emerald, not mint: this is chrome, and mint means one thing only. */
 .iconbtn.on { color: var(--emerald); }
 .iconbtn.on:hover { color: var(--mint); }
+
+/* ---------- settings ---------- */
+
+.choices { display: flex; gap: 6px; }
+.choice {
+  flex: 1;
+  display: grid;
+  gap: 1px;
+  padding: 8px 4px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+.choice b { color: var(--text); font: 700 15px/1.2 var(--mono); }
+.choice span { font-size: 10.5px; color: var(--dim); }
+.choice:hover { border-color: var(--emerald); color: var(--text); }
+/* Emerald, not mint: chrome, and mint means one thing only. */
+.choice.active { border-color: var(--emerald); background: var(--panel-2); }
+.choice.active b { color: var(--emerald); }

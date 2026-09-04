@@ -25,6 +25,9 @@ Press `Ctrl+Space`, then one key, and that session is in the centre.
 Slots are fixed. Focusing a session shows it in the centre without moving it, so the
 ring never shuffles and slot numbers stay in muscle memory.
 
+Sixteen is the default, not the only option — the gear in the tab bar switches to 12, 8
+or 4. See [Ring size](#ring-size).
+
 ## Install
 
 ```
@@ -141,6 +144,31 @@ npm i -g tring
 Running sessions are unaffected until you restart the daemon. The check never
 blocks startup and fails silently when offline. Opt out with
 `--no-update-check` or `TRING_NO_UPDATE_CHECK=1`.
+
+## Ring size
+
+Sixteen terminals is the default. The gear in the tab bar offers 4, 8, 12 and 16, and the
+choice is remembered per browser.
+
+Twelve and sixteen are rings. Four and eight are bands — a row above and a row below, with
+the focus terminal spanning the full width, because below twelve slots a ring's side
+columns cost the centre more width than the tiles are worth:
+
+```
+     4 slots                    8 slots
+┌────────┬────────┐      ┌────┬────┬────┬────┐
+│   1    │   2    │      │ 1  │ 2  │ 3  │ 4  │
+├────────┴────────┤      ├────┴────┴────┴────┤
+│      focus      │      │       focus       │
+├────────┬────────┤      ├────┬────┬────┬────┤
+│   4    │   3    │      │ 8  │ 7  │ 6  │ 5  │
+└────────┴────────┘      └────┴────┴────┴────┘
+```
+
+The daemon is unaffected: every project still owns sixteen slots, so this is a view onto
+them rather than a limit on them. Shrinking below a slot that is in use is refused with a
+notice rather than hiding a session that would still ring and still count in the tab badge
+— close those sessions first, or switch back up.
 
 ## Sound
 

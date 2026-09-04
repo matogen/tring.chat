@@ -7,11 +7,13 @@ import './theme.css'
 import './style.css'
 
 import type { ProjectInfo, ServerMessage, SessionInfo, UpdateInfo } from '@tring/shared/protocol'
-import { actionForEvent, isPrefix, legendForSlot, slotForEvent, SLOT_COUNT } from '@tring/shared/keymap'
+import { actionForEvent, isPrefix, legendForSlot, slotForEvent } from '@tring/shared/keymap'
 import { WsClient } from './ws-client.ts'
 import { FocusTerminal } from './focus-terminal.ts'
 import { Thumbnail } from './thumbnail.ts'
-import { placeInGrid } from './ring-layout.ts'
+import {
+  applyRing, placeInGrid, RING_SIZES, ringSize, setRingSize, type RingSize,
+} from './ring-layout.ts'
 import { renderBar } from './project-bar.ts'
 import * as ui from './overlay.ts'
 import { tring } from './sound.ts'
@@ -58,6 +60,18 @@ const sessions = (): SessionInfo[] => viewed()?.sessions ?? []
 const sessionAt = (slot: number): SessionInfo | undefined => sessions().find((s) => s.slot === slot)
 const sessionById = (id: string): SessionInfo | undefined =>
   projects.flatMap((p) => p.sessions).find((s) => s.id === id)
+
+/**
+ * The ring you chose, grown to fit if the viewed project holds sessions in
+ * higher slots. A restored project can arrive with slot 13 occupied long after
+ * you picked a ring of 8, and a running session that renders nowhere — still
+ * ringing, still counted in the tab badge — is the one outcome worth spending
+ * code to make impossible.
+ */
+function effectiveSize(): RingSize {
+  const highest = Math.max(0, ...sessions().map((s) => s.slot))
+  return RING_SIZES.find((n) => n >= highest && n >= ringSize()) ?? RING_SIZES[RING_SIZES.length - 1]!
+}
 
 /** Global across every project: the title's job is to reach you elsewhere. */
 const globalDone = (): number =>
@@ -113,6 +127,7 @@ const barCallbacks = () => ({
   onContext: (id: string) => projectMenu(id),
   onUpdate: (u: UpdateInfo) => ui.openUpdateNotice(u.current, u.latest),
   onSoundToggle: () => paintStatuses(),
+  onSettings: () => ui.openSettingsDialog(ringSize(), changeRingSize),
 })
 
 function render(): void {
@@ -124,22 +139,24 @@ function render(): void {
 /** Rebuild tiles only when the slot layout actually changed, so repainting a
  *  thumbnail never has its canvas pulled out from under it. */
 function renderRing(): void {
-  const sig = `${viewedId}|` + sessions().map((s) => `${s.slot}:${s.id}`).sort().join(',')
+  const size = effectiveSize()
+  const sig = `${viewedId}|${size}|` + sessions().map((s) => `${s.slot}:${s.id}`).sort().join(',')
   if (sig === ringSig) return
   ringSig = sig
 
+  applyRing(ringEl, focusCell, size)
   ringEl.replaceChildren(focusCell)
   tiles.clear()
   thumbs.clear()
 
-  for (let slot = 1; slot <= SLOT_COUNT; slot++) {
+  for (let slot = 1; slot <= size; slot++) {
     const s = sessionAt(slot)
     // A div, not a button: tiles carry their own action button, and nesting
     // buttons is invalid markup that swallows the inner click in some engines.
     const tile = document.createElement('div')
     tile.className = 'tile'
     tile.tabIndex = 0
-    placeInGrid(tile, slot)
+    placeInGrid(tile, slot, size)
 
     if (!s) {
       tile.classList.add('empty')
@@ -205,7 +222,7 @@ function respawnAction(s: SessionInfo): { label: string; title: string } | null 
 }
 
 function paintStatuses(): void {
-  for (let slot = 1; slot <= SLOT_COUNT; slot++) {
+  for (let slot = 1; slot <= effectiveSize(); slot++) {
     const tile = tiles.get(slot)
     if (!tile) continue
     const s = sessionAt(slot)
@@ -249,6 +266,17 @@ function focusSlot(slot: number): void {
   else promptNewSession(slot)
 }
 
+function changeRingSize(size: RingSize): void {
+  setRingSize(size)
+  render()
+  const shown = effectiveSize()
+  if (shown !== size) {
+    showToast(`slots above ${size} are still in use — the ring stays at ${shown} until they are closed`)
+  } else {
+    hideToast()
+  }
+}
+
 function activateProject(id: string): void {
   if (id === viewedId) return
   viewedId = id
@@ -261,8 +289,9 @@ function nextDone(): void {
   const list = sessions()
   const current = sessionAt(sessionById(focusedId ?? '')?.slot ?? 0)
   const start = current?.slot ?? 0
-  for (let i = 1; i <= SLOT_COUNT; i++) {
-    const slot = ((start + i - 1) % SLOT_COUNT) + 1
+  const size = effectiveSize()
+  for (let i = 1; i <= size; i++) {
+    const slot = ((start + i - 1) % size) + 1
     const s = list.find((x) => x.slot === slot)
     if (s?.status === 'done') return focusSession(s.id)
   }
@@ -345,7 +374,8 @@ function pickerKey(e: KeyboardEvent): void {
   }
 
   const slot = slotForEvent(e)
-  if (slot !== null && overlayMode === 'picker') {
+  // The keymap always binds all 16; a smaller ring simply has no slot 13.
+  if (slot !== null && slot <= effectiveSize() && overlayMode === 'picker') {
     e.preventDefault()
     ui.close()
     overlayMode = null
@@ -381,9 +411,10 @@ function pickerKey(e: KeyboardEvent): void {
       break
     case 'new-session': {
       ui.close(); overlayMode = null
-      const empty = [...Array(SLOT_COUNT)].map((_, i) => i + 1).find((s) => !sessionAt(s))
+      const size = effectiveSize()
+      const empty = [...Array(size)].map((_, i) => i + 1).find((s) => !sessionAt(s))
       if (empty) promptNewSession(empty)
-      else showToast('all 16 slots are full')
+      else showToast(`all ${size} slots are full`)
       break
     }
     case 'rename':

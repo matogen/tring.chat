@@ -1,5 +1,6 @@
 import type { ProjectInfo, SessionInfo } from '@tring/shared/protocol'
-import { legendForSlot, SLOT_COUNT } from '@tring/shared/keymap'
+import { legendForSlot } from '@tring/shared/keymap'
+import { RING_SIZES, ringSize, type RingSize } from './ring-layout.ts'
 import { api } from './ws-client.ts'
 
 const root = document.getElementById('overlay') as HTMLElement
@@ -125,7 +126,7 @@ export function openPicker(
   const bySlot = new Map<number, SessionInfo>()
   for (const s of project?.sessions ?? []) bySlot.set(s.slot, s)
 
-  for (let slot = 1; slot <= SLOT_COUNT; slot++) {
+  for (let slot = 1; slot <= ringSize(); slot++) {
     const s = bySlot.get(slot)
     const row = el('button', `row st-${s?.status ?? 'idle'}`)
     // busy sessions are dimmed but still selectable
@@ -153,7 +154,7 @@ export function openPicker(
 export function openProjectPicker(projects: ProjectInfo[], onPick: (id: string) => void): void {
   const panel = el('div', 'panel')
   panel.append(el('h2', undefined, 'Projects'))
-  panel.append(el('p', 'hint', 'Each project owns its own 16 slots.'))
+  panel.append(el('p', 'hint', `Each project owns its own ${ringSize()} slots.`))
   const rows = el('div', 'rows')
   projects.forEach((p, i) => {
     const done = p.sessions.filter((s) => s.status === 'done').length
@@ -310,6 +311,43 @@ export function openPrompt(
   open(panel)
   input.focus()
   input.select()
+}
+
+/**
+ * Ring size is the only setting so far; the dialog exists so the next one has
+ * somewhere obvious to go instead of another icon in a 36px bar.
+ */
+export function openSettingsDialog(
+  current: RingSize,
+  onPick: (size: RingSize) => void,
+): void {
+  const panel = el('div', 'panel')
+  panel.append(el('h2', undefined, 'Settings'))
+
+  const field = el('div', 'field')
+  field.append(el('span', undefined, 'Terminals around the focus'))
+  const choices = el('div', 'choices')
+  for (const size of RING_SIZES) {
+    const b = el('button', 'choice' + (size === current ? ' active' : '')) as HTMLButtonElement
+    b.type = 'button'
+    b.append(el('b', undefined, String(size)))
+    b.append(el('span', undefined, size < 12 ? 'wide centre' : 'full ring'))
+    b.onclick = () => { close(); onPick(size) }
+    choices.append(b)
+  }
+  field.append(choices)
+  panel.append(field)
+
+  panel.append(el('p', 'hint',
+    'Slots stay where they are. Shrinking needs the slots above the new size ' +
+    'to be empty first, so nothing is killed or hidden behind your back.'))
+
+  const actions = el('div', 'actions')
+  const ok = el('button', 'btn primary', 'Close') as HTMLButtonElement
+  ok.onclick = () => close()
+  actions.append(ok)
+  panel.append(actions)
+  open(panel)
 }
 
 export function openUpdateNotice(current: string, latest: string): void {

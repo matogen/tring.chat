@@ -5,6 +5,16 @@ Status: approved design, awaiting implementation plan
 
 ## 0. Changelog
 
+**2026-09-04 — ring size.** The number of terminals around the focus is a setting
+(§5.2, §5.6): 4, 8, 12 or 16. Twelve and sixteen are rings — the perimeter of an N×N
+grid; four and eight are bands, a top row and a bottom row with the focus spanning
+the full width, because below twelve a ring's side columns cost the centre more
+width than the tiles are worth.
+
+The daemon is untouched: it still owns sixteen slots per project, and ring size is a
+per-browser display preference in `localStorage` beside the sound toggle. Every
+`create` names its slot explicitly, so nothing about it crosses the wire.
+
 **2026-09-03 — projects, theme, distribution.** Amended in place; the pre-projects
 version is in git history.
 
@@ -292,10 +302,26 @@ tab bar; its SVG form is the favicon and the app icon.
 
 ### 5.2 Layout
 
-Full-viewport column: a fixed 36px project tab bar, then a 5×5 CSS grid filling the rest.
-The centre cell spans rows and columns 2–4 and holds the focus terminal. The 16 outer
-cells are slots 1–16 numbered clockwise from top-left. Each slot shows: key legend, name
-or title, cwd basename, status border, and the canvas.
+Full-viewport column: a fixed 36px project tab bar, then a CSS grid filling the rest,
+sized by the chosen ring. Slots are numbered clockwise from the top-left in every case,
+and each shows: key legend, name or title, cwd basename, status border, and the canvas.
+
+| Slots | Grid | Focus cell | Shape |
+|---|---|---|---|
+| 4 | 2 × 3, rows `1fr 3fr 1fr` | `2 / 1 / 3 / 3` | band |
+| 8 | 4 × 3, rows `1fr 3fr 1fr` | `2 / 1 / 3 / 5` | band |
+| 12 | 4 × 4 | `2 / 2 / 4 / 4` | ring |
+| 16 | 5 × 5 | `2 / 2 / 5 / 5` | ring |
+
+`layoutFor(size)` is pure and returns the grid templates, the focus `grid-area` and a
+slot→cell map; the DOM half is a separate call, so the geometry is unit-tested without
+a browser.
+
+The ring the client draws is the chosen size grown to fit: if the viewed project holds a
+session in a higher slot — a restored project arriving with slot 13 occupied long after
+you picked 8 — the ring renders at the smallest size that shows it, and shrinking says so
+rather than taking effect. A running session that renders nowhere would still ring and
+still count in the tab badge, which is the one outcome worth code to make impossible.
 
 An empty slot is a dim "+ new session" placeholder that opens the new-session dialog with
 the cwd pre-filled to the project root.
@@ -346,7 +372,7 @@ per-project breakdown is on the tabs, visible the instant they look back.
 ### 5.6 Project bar
 
 Fixed 36px. Logo at the left, then one tab per project, then a `+` button opening the
-project dialog. Each tab shows the project name and, when it has finished sessions, a
+project dialog, and at the right a sound toggle and a settings gear. Each tab shows the project name and, when it has finished sessions, a
 mint done-badge (`api-service ⬤3`). The active tab uses `--emerald`; badges use `--mint`.
 
 Past overflow the bar scrolls horizontally (`overflow-x: auto`) with a tab `min-width`;
@@ -356,7 +382,13 @@ problem, and the honest fix is `--scrollback`, not a UI that refuses.
 The bar is never hidden. Its badges are the only way a finished agent in a background
 project becomes visible, so 36px of permanent ambient signal is the point, not overhead.
 
-### 5.7 Project dialog
+### 5.7 Settings dialog
+
+Opened by the gear in the bar. Ring size is the only setting so far — four choices, the
+current one marked with `--emerald` — and the dialog exists so the next one has somewhere
+obvious to go instead of another icon in a 36px bar.
+
+### 5.8 Project dialog
 
 Two fields: name and root directory, the root defaulting to the daemon's cwd. Shown
 blocking on first run when no projects exist, and from the `+` button thereafter. The same

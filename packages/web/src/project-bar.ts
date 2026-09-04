@@ -7,6 +7,7 @@ export interface BarCallbacks {
   onContext: (projectId: string, at: { x: number; y: number }) => void
   onUpdate: (update: UpdateInfo) => void
   onSoundToggle: () => void
+  onSettings: () => void
 }
 
 /**
@@ -20,6 +21,7 @@ export function renderBar(
   viewedId: string | null,
   cb: BarCallbacks,
   update?: UpdateInfo | null,
+  usageActive = false,
 ): void {
   container.replaceChildren()
 
@@ -75,6 +77,14 @@ export function renderBar(
   sound.style.marginLeft = update ? '0' : 'auto'
   container.append(sound)
 
+  const settings = document.createElement('button')
+  settings.className = 'iconbtn'
+  settings.innerHTML = gearSvg()
+  settings.title = 'Settings'
+  settings.setAttribute('aria-label', settings.title)
+  settings.onclick = () => cb.onSettings()
+  container.append(settings)
+
   if (update) {
     // Deliberately not mint: this is not a finished agent, and the one colour
     // that means "done" stays reserved for that (spec §5.1).
@@ -85,6 +95,15 @@ export function renderBar(
     notice.onclick = () => cb.onUpdate(update)
     container.insertBefore(notice, sound)
   }
+}
+
+function gearSvg(): string {
+  return `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" ` +
+    `stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">` +
+    `<circle cx="8" cy="8" r="2.3"/>` +
+    `<path d="M8 1.4v1.8M8 12.8v1.8M1.4 8h1.8M12.8 8h1.8` +
+    `M3.34 3.34l1.27 1.27M11.39 11.39l1.27 1.27` +
+    `M12.66 3.34l-1.27 1.27M4.61 11.39l-1.27 1.27"/></svg>`
 }
 
 function bellSvg(on: boolean): string {
