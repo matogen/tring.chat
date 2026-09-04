@@ -9,6 +9,7 @@ import { ProjectManager } from './project-manager.ts'
 import { createHandler } from './http.ts'
 import { Hub } from './ws.ts'
 import { openWindow, describeFallback } from './open-window.ts'
+import { checkForUpdate, currentVersion } from './update-check.ts'
 
 interface Args {
   port: number
@@ -18,6 +19,7 @@ interface Args {
   idleMs: number
   open: boolean
   shell: string | null
+  updateCheck: boolean
 }
 
 function parseArgs(argv: string[]): Args {
@@ -29,6 +31,7 @@ function parseArgs(argv: string[]): Args {
     idleMs: DEFAULT_IDLE_MS,
     open: !process.env['TRING_NO_OPEN'],
     shell: process.env['TRING_SHELL'] ?? null,
+    updateCheck: !process.env['TRING_NO_UPDATE_CHECK'],
   }
   for (let i = 0; i < argv.length; i++) {
     const [flag, inline] = argv[i]!.split('=', 2)
@@ -41,6 +44,8 @@ function parseArgs(argv: string[]): Args {
       case '--idle-ms': args.idleMs = Number(value); break
       case '--shell': args.shell = String(value); break
       case '--no-open': args.open = false; i--; break
+      case '--no-update-check': args.updateCheck = false; i--; break
+      case '--version': console.log(currentVersion()); process.exit(0)
       case '--help':
         console.log(`tring — focus-centred terminal deck
 
@@ -51,7 +56,9 @@ function parseArgs(argv: string[]): Args {
   --idle-ms <n>     quiet period before a session is done, default ${DEFAULT_IDLE_MS}
   --shell <path>    shell to spawn; default $SHELL, or powershell.exe on
                     Windows. Use --shell wsl.exe for WSL shells from Windows
-  --no-open         do not launch a browser window`)
+  --no-open         do not launch a browser window
+  --no-update-check do not ask npm whether a newer tring exists
+  --version         print the version and exit`)
         process.exit(0)
     }
   }
@@ -90,6 +97,16 @@ async function main(): Promise<void> {
     console.log(`tring listening on ${url}`)
     if (!args.token && args.host !== '127.0.0.1' && args.host !== 'localhost') {
       console.warn('warning: bound off localhost without --token')
+    }
+    if (args.updateCheck) {
+      // Fire and forget: an offline machine or a registry outage must never
+      // keep a local terminal deck from opening.
+      void checkForUpdate(path.join(path.dirname(pm.statePath), 'update-check.json'))
+        .then((latest) => {
+          if (!latest) return
+          hub.setUpdate({ current: currentVersion(), latest })
+          console.log(`update available: ${currentVersion()} -> ${latest}  (npm i -g tring)`)
+        })
     }
     if (args.open) {
       const opened = openWindow(url)

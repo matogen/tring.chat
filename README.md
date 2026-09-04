@@ -84,7 +84,7 @@ npm i -g ./packages/server          # install this checkout as `tring`
 ```
 
 Flags: `--port` (7331), `--host` (127.0.0.1), `--token`, `--scrollback` (5000),
-`--idle-ms` (3000), `--shell`, `--no-open`.
+`--idle-ms` (3000), `--shell`, `--no-open`, `--no-update-check`, `--version`.
 
 ## Projects
 
@@ -127,6 +127,20 @@ streams thumbnails, which is what keeps several projects cheap.
 
 Browsers reserve `Ctrl+1`–`Ctrl+8` for tab switching, so `Shift+digit` is the
 fallback that always works in an ordinary tab. Clicking a thumbnail also focuses it.
+
+## Updating
+
+A global npm install is a frozen snapshot: npm never checks for new versions
+and never notifies. So tring asks the registry itself, at most once a day, and
+shows a notice in the tab bar when a newer release exists.
+
+```
+npm i -g tring
+```
+
+Running sessions are unaffected until you restart the daemon. The check never
+blocks startup and fails silently when offline. Opt out with
+`--no-update-check` or `TRING_NO_UPDATE_CHECK=1`.
 
 ## Restarting
 

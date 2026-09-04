@@ -312,6 +312,32 @@ export function openPrompt(
   input.select()
 }
 
+export function openUpdateNotice(current: string, latest: string): void {
+  const panel = el('div', 'panel')
+  panel.append(el('h2', undefined, `tring ${latest} is available`))
+  panel.append(el('p', 'hint', `You are running ${current}. Update with:`))
+
+  const cmd = el('pre', 'cmd', 'npm i -g tring')
+  panel.append(cmd)
+
+  panel.append(el('p', 'hint',
+    'Running sessions are not affected until you restart the daemon.'))
+
+  const actions = el('div', 'actions')
+  const copy = el('button', 'btn', 'Copy command') as HTMLButtonElement
+  copy.onclick = () => {
+    void navigator.clipboard?.writeText('npm i -g tring').then(
+      () => { copy.textContent = 'Copied' },
+      () => { copy.textContent = 'Copy failed' },
+    )
+  }
+  const ok = el('button', 'btn primary', 'Close') as HTMLButtonElement
+  ok.onclick = () => close()
+  actions.append(copy, ok)
+  panel.append(actions)
+  open(panel)
+}
+
 export function openConfirm(title: string, body: string, onYes: () => void): void {
   const panel = el('div', 'panel')
   panel.append(el('h2', undefined, title))

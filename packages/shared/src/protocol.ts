@@ -42,6 +42,11 @@ export interface ProjectInfo {
   sessions: SessionInfo[]
 }
 
+export interface UpdateInfo {
+  current: string
+  latest: string
+}
+
 export type ClientMessage =
   | { type: 'hello'; token?: string }
   | { type: 'focus'; id: string | null; cols: number; rows: number }
@@ -58,7 +63,12 @@ export type ClientMessage =
   | { type: 'deleteProject'; projectId: string }
 
 export type ServerMessage =
-  | { type: 'state'; projects: ProjectInfo[]; activeProjectId: string | null }
+  | {
+      type: 'state'
+      projects: ProjectInfo[]
+      activeProjectId: string | null
+      update?: UpdateInfo | null
+    }
   | { type: 'status'; id: string; status: SessionStatus; since: number; title: string | null }
   | { type: 'screen'; id: string; ansi: string }
   | { type: 'snapshot'; id: string; snapshot: ScreenSnapshot }

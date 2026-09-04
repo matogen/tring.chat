@@ -1,5 +1,7 @@
 import type { WebSocket, WebSocketServer } from 'ws'
-import { encodeOutput, type ClientMessage, type ServerMessage } from '@tring/shared/protocol'
+import {
+  encodeOutput, type ClientMessage, type ServerMessage, type UpdateInfo,
+} from '@tring/shared/protocol'
 import type { ProjectManager } from './project-manager.ts'
 import type { Session } from './session.ts'
 
@@ -21,6 +23,7 @@ interface Client {
 export class Hub {
   private readonly clients = new Set<Client>()
   private readonly timer: NodeJS.Timeout
+  private update: UpdateInfo | null = null
 
   constructor(private readonly opts: HubOptions) {
     const pm = opts.pm
@@ -39,6 +42,13 @@ export class Hub {
     // tab viewing the same project.
     this.timer = setInterval(() => this.pumpSnapshots(), opts.snapshotMs ?? 250)
     this.timer.unref?.()
+  }
+
+  /** The registry check is async and must never delay startup, so the notice
+   *  arrives later and is pushed to whoever is already connected. */
+  setUpdate(update: UpdateInfo): void {
+    this.update = update
+    this.broadcastState()
   }
 
   attach(wss: WebSocketServer): void {
@@ -188,6 +198,7 @@ export class Hub {
       type: 'state',
       projects: this.opts.pm.list(),
       activeProjectId: c.projectId ?? this.opts.pm.activeProjectId,
+      update: this.update,
     })
   }
 

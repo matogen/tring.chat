@@ -316,3 +316,29 @@ body {
 
 .btn.danger { border-color: rgba(242, 84, 91, 0.5); color: var(--red); }
 .btn.danger:hover { background: rgba(242, 84, 91, 0.12); border-color: var(--red); }
+
+.update {
+  align-self: center;
+  margin-left: auto;
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font: 11px var(--mono);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.update:hover { border-color: var(--emerald); color: var(--text); }
+
+.cmd {
+  margin: 0 0 12px;
+  padding: 9px 11px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: 12.5px var(--mono);
+  user-select: all;
+}

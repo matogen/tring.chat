@@ -1,9 +1,10 @@
-import type { ProjectInfo } from '@tring/shared/protocol'
+import type { ProjectInfo, UpdateInfo } from '@tring/shared/protocol'
 
 export interface BarCallbacks {
   onSelect: (projectId: string) => void
   onAdd: () => void
   onContext: (projectId: string, at: { x: number; y: number }) => void
+  onUpdate: (update: UpdateInfo) => void
 }
 
 /**
@@ -16,6 +17,7 @@ export function renderBar(
   projects: ProjectInfo[],
   viewedId: string | null,
   cb: BarCallbacks,
+  update?: UpdateInfo | null,
 ): void {
   container.replaceChildren()
 
@@ -57,4 +59,15 @@ export function renderBar(
   add.title = 'New project'
   add.onclick = () => cb.onAdd()
   container.append(add)
+
+  if (update) {
+    // Deliberately not mint: this is not a finished agent, and the one colour
+    // that means "done" stays reserved for that (spec §5.1).
+    const notice = document.createElement('button')
+    notice.className = 'update'
+    notice.textContent = `v${update.latest} available`
+    notice.title = `You are on ${update.current}`
+    notice.onclick = () => cb.onUpdate(update)
+    container.append(notice)
+  }
 }

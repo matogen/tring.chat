@@ -6,7 +6,7 @@ import '@xterm/xterm/css/xterm.css'
 import './theme.css'
 import './style.css'
 
-import type { ProjectInfo, ServerMessage, SessionInfo } from '@tring/shared/protocol'
+import type { ProjectInfo, ServerMessage, SessionInfo, UpdateInfo } from '@tring/shared/protocol'
 import { actionForEvent, isPrefix, legendForSlot, slotForEvent, SLOT_COUNT } from '@tring/shared/keymap'
 import { WsClient } from './ws-client.ts'
 import { FocusTerminal } from './focus-terminal.ts'
@@ -25,6 +25,7 @@ let prevFocusedId: string | null = null
 let ringSig = ''
 let askedForFirstProject = false
 let overlayMode: 'picker' | 'projects' | null = null
+let update: UpdateInfo | null = null
 
 const thumbs = new Map<string, Thumbnail>()
 const tiles = new Map<number, HTMLElement>()
@@ -65,6 +66,7 @@ function handleMessage(msg: ServerMessage): void {
   switch (msg.type) {
     case 'state': {
       projects = msg.projects
+      update = msg.update ?? update
       viewedId = msg.activeProjectId ?? projects[0]?.id ?? null
       render()
       maybeAskForFirstProject()
@@ -98,12 +100,15 @@ function handleMessage(msg: ServerMessage): void {
 
 /* ---------- render ---------- */
 
+const barCallbacks = () => ({
+  onSelect: (id: string) => activateProject(id),
+  onAdd: () => promptNewProject(false),
+  onContext: (id: string) => projectMenu(id),
+  onUpdate: (u: UpdateInfo) => ui.openUpdateNotice(u.current, u.latest),
+})
+
 function render(): void {
-  renderBar(barEl, projects, viewedId, {
-    onSelect: (id) => activateProject(id),
-    onAdd: () => promptNewProject(false),
-    onContext: (id) => projectMenu(id),
-  })
+  renderBar(barEl, projects, viewedId, barCallbacks(), update)
   renderRing()
   paintStatuses()
 }
@@ -202,11 +207,7 @@ function paintStatuses(): void {
       if (s.id === focusedId) tile.classList.add('viewing')
     }
   }
-  renderBar(barEl, projects, viewedId, {
-    onSelect: (id) => activateProject(id),
-    onAdd: () => promptNewProject(false),
-    onContext: (id) => projectMenu(id),
-  })
+  renderBar(barEl, projects, viewedId, barCallbacks(), update)
   const done = globalDone()
   document.title = done > 0 ? `(${done}) tring` : 'tring'
 }
