@@ -190,6 +190,7 @@ export class Hub {
       status: s.tracker.status,
       since: s.tracker.since,
       title: s.title,
+      notable: s.tracker.notable,
     })
   }
 

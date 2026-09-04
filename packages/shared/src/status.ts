@@ -17,12 +17,32 @@ export const SUSTAINED_BYTES = 2048
 export const BURST_GAP_MS = SUSTAINED_MS
 export const DEFAULT_IDLE_MS = 3000
 
+/**
+ * How long a session must have been working before falling quiet is treated as
+ * news worth announcing.
+ *
+ * Idle detection cannot distinguish "the app finished answering" from "the app
+ * finished starting up" — both are output followed by silence. Claude Code
+ * renders its interface for a few seconds and then waits, which is real work to
+ * a byte stream and nothing at all to a human. An explicit signal (a Stop hook,
+ * OSC 133;D, a bell) bypasses this entirely, because those mean exactly one
+ * thing.
+ */
+export const NOTABLE_BUSY_MS = 10_000
+
 export class ActivityTracker {
   status: SessionStatus = 'idle'
   since: number
   exitCode: number | null = null
+  /**
+   * Whether the current `done` is worth interrupting someone for. True when an
+   * explicit signal said so, or when the session had been working long enough
+   * that falling quiet is meaningful.
+   */
+  notable = false
 
   private readonly idleMs: number
+  private busyStartedAt: number | null = null
   private burstStart: number | null = null
   private burstBytes = 0
   private lastOutput: number | null = null
@@ -94,7 +114,11 @@ export class ActivityTracker {
   tick(now: number): void {
     if (this.status !== 'busy') return
     if (this.lastOutput === null) return
-    if (now - this.lastOutput >= this.idleMs) this.transition('done', now)
+    if (now - this.lastOutput < this.idleMs) return
+    // Inferred, not declared: trust it only after sustained work.
+    this.notable =
+      this.busyStartedAt !== null && now - this.busyStartedAt >= NOTABLE_BUSY_MS
+    this.transition('done', now)
   }
 
   /**
@@ -105,11 +129,16 @@ export class ActivityTracker {
    * the cases where a green tile would be noise, not news.
    */
   private finish(now: number): void {
-    if (this.status === 'busy') this.transition('done', now)
+    if (this.status !== 'busy') return
+    // An explicit signal is unambiguous: something finished and said so.
+    this.notable = true
+    this.transition('done', now)
   }
 
   private transition(status: SessionStatus, now: number): void {
     if (this.status === status) return
+    if (status === 'busy') this.busyStartedAt = now
+    if (status === 'idle' || status === 'busy') this.notable = false
     this.status = status
     this.since = now
     this.resetBurst()

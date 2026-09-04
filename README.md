@@ -151,6 +151,16 @@ choice is remembered per browser.
 It rings only on the transition to green, so reconnecting or reloading a page
 full of finished sessions stays silent.
 
+It also rings only when the daemon is *confident* something finished. An
+explicit signal — a Claude Code Stop hook, an OSC 133 prompt marker, a terminal
+bell — always rings, because each means exactly one thing. Silence after output
+is a guess, and an app that has merely finished starting up looks identical to
+one that has finished working: Claude Code draws its interface for a few
+seconds and then waits. So an inferred finish only rings after ten seconds of
+sustained work, while the tile still turns green either way.
+
+Installing the Stop hook below is what makes this exact for Claude Code.
+
 ## Restarting
 
 Reopening brings back every project with its tabs, slots, names and working

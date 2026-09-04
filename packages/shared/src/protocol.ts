@@ -69,7 +69,15 @@ export type ServerMessage =
       activeProjectId: string | null
       update?: UpdateInfo | null
     }
-  | { type: 'status'; id: string; status: SessionStatus; since: number; title: string | null }
+  | {
+      type: 'status'
+      id: string
+      status: SessionStatus
+      since: number
+      title: string | null
+      /** Whether this `done` is confident enough to announce out loud. */
+      notable?: boolean
+    }
   | { type: 'screen'; id: string; ansi: string }
   | { type: 'snapshot'; id: string; snapshot: ScreenSnapshot }
   | { type: 'exit'; id: string; code: number }

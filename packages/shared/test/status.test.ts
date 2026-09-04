@@ -120,3 +120,45 @@ describe('ActivityTracker', () => {
     expect(a.status).toBe('exited')
   })
 })
+
+describe('ActivityTracker — worth announcing', () => {
+  it('does not announce an app that merely finished starting up', () => {
+    // Claude Code's shape: a few seconds of interface, then it waits.
+    const a = new ActivityTracker(0)
+    a.output(SUSTAINED_BYTES, 0)
+    a.output(SUSTAINED_BYTES, 4000)
+    a.tick(7000)
+    expect(a.status).toBe('done')
+    expect(a.notable).toBe(false)
+  })
+
+  it('announces work that ran long enough to walk away from', () => {
+    const a = new ActivityTracker(0)
+    a.output(SUSTAINED_BYTES, 0)
+    a.output(SUSTAINED_BYTES, 30_000)
+    a.tick(33_000)
+    expect(a.status).toBe('done')
+    expect(a.notable).toBe(true)
+  })
+
+  for (const signal of ['commandEnd', 'bell', 'hook'] as const) {
+    it(`announces ${signal} however briefly the session worked`, () => {
+      const a = new ActivityTracker(0)
+      a.output(SUSTAINED_BYTES, 0)
+      a[signal](200) // a Stop hook means exactly one thing
+      expect(a.status).toBe('done')
+      expect(a.notable).toBe(true)
+    })
+  }
+
+  it('clears the flag once the session is working or cleared again', () => {
+    const a = new ActivityTracker(0)
+    a.output(SUSTAINED_BYTES, 0)
+    a.hook(10)
+    expect(a.notable).toBe(true)
+    a.input(20)
+    expect(a.notable).toBe(false)
+    a.output(SUSTAINED_BYTES, 30)
+    expect(a.notable).toBe(false)
+  })
+})

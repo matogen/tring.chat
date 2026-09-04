@@ -83,8 +83,9 @@ function handleMessage(msg: ServerMessage): void {
       }
       // Only on the transition, and only from a live `status` message — the
       // `state` sent on connect is full of already-finished sessions, and
-      // chiming for those would ring on every page load.
-      if (msg.status === 'done' && was !== 'done') tring()
+      // chiming for those would ring on every page load. `notable` filters out
+      // an app that merely finished starting up.
+      if (msg.status === 'done' && was !== 'done' && msg.notable) tring()
       paintStatuses()
       break
     }
