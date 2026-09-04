@@ -61,6 +61,8 @@ export class SessionManager {
     session.onData = (data) => this.onSessionData?.(session, data)
     session.onStatusChange = () => this.onSessionStatus?.(session)
     session.onExit = (code) => this.onSessionExit?.(session, code)
+    // A moved shell changes what a restart would restore, so persist it.
+    session.onCwdChange = () => this.onStructureChange?.()
 
     this.bySlot.set(slot, session)
     this.byId.set(session.id, session)

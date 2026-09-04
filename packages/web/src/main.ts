@@ -14,6 +14,7 @@ import { Thumbnail } from './thumbnail.ts'
 import { placeInGrid } from './ring-layout.ts'
 import { renderBar } from './project-bar.ts'
 import * as ui from './overlay.ts'
+import { tring } from './sound.ts'
 
 const barEl = document.getElementById('bar') as HTMLElement
 const ringEl = document.getElementById('ring') as HTMLElement
@@ -74,11 +75,16 @@ function handleMessage(msg: ServerMessage): void {
     }
     case 'status': {
       const s = sessionById(msg.id)
+      const was = s?.status
       if (s) {
         s.status = msg.status
         s.since = msg.since
         s.title = msg.title
       }
+      // Only on the transition, and only from a live `status` message — the
+      // `state` sent on connect is full of already-finished sessions, and
+      // chiming for those would ring on every page load.
+      if (msg.status === 'done' && was !== 'done') tring()
       paintStatuses()
       break
     }
@@ -105,6 +111,7 @@ const barCallbacks = () => ({
   onAdd: () => promptNewProject(false),
   onContext: (id: string) => projectMenu(id),
   onUpdate: (u: UpdateInfo) => ui.openUpdateNotice(u.current, u.latest),
+  onSoundToggle: () => paintStatuses(),
 })
 
 function render(): void {

@@ -1,3 +1,4 @@
+import { readlinkSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { spawn, type IPty } from 'node-pty'
 import type { Terminal as TerminalT } from '@xterm/headless'
@@ -14,6 +15,9 @@ import { commandArgs, defaultShell, interactiveArgs } from './shell.ts'
 const require = createRequire(import.meta.url)
 const { Terminal } = require('@xterm/headless') as typeof import('@xterm/headless')
 const { SerializeAddon } = require('@xterm/addon-serialize') as typeof import('@xterm/addon-serialize')
+
+/** How often to re-read the shell's working directory. */
+const CWD_POLL_MS = 2000
 
 export interface SessionOptions {
   id: string
@@ -49,7 +53,6 @@ export class Session {
   readonly id: string
   readonly projectId: string
   readonly slot: number
-  readonly cwd: string
   readonly command: string | null
   name: string | null
   title: string | null = null
@@ -66,11 +69,27 @@ export class Session {
   private lastSnapshot: string | null = null
   private disposed = false
 
+  private readonly spawnCwd: string
+  private liveCwd: string | null = null
+  private lastCwdPoll = 0
+
+  /** Fires when the shell moves, so the new location gets persisted. */
+  onCwdChange: (() => void) | null = null
+
+  /**
+   * Where the shell *is*, not where it started. A session spawned in a project
+   * root that the developer then `cd`s out of must come back to where they
+   * were working, not to the root.
+   */
+  get cwd(): string {
+    return this.liveCwd ?? this.spawnCwd
+  }
+
   constructor(opts: SessionOptions) {
     this.id = opts.id
     this.projectId = opts.projectId
     this.slot = opts.slot
-    this.cwd = opts.cwd
+    this.spawnCwd = opts.cwd
     this.command = opts.command ?? null
     this.name = opts.name ?? null
     this.tracker = new ActivityTracker(Date.now(), opts.idleMs ?? DEFAULT_IDLE_MS)
@@ -91,7 +110,7 @@ export class Session {
       name: 'xterm-256color',
       cols: 120,
       rows: 36,
-      cwd: this.cwd,
+      cwd: this.spawnCwd,
       env,
     })
 
@@ -111,6 +130,18 @@ export class Session {
     this.term.onTitleChange((title) => {
       this.title = title
       this.onStatusChange?.()
+    })
+    // OSC 7 is the standard "my working directory is now X" sequence. Shells
+    // that emit it (via PROMPT_COMMAND, or by default in many setups) keep us
+    // exact and cost nothing; pollCwd covers the ones that do not.
+    this.term.parser.registerOscHandler(7, (data) => {
+      try {
+        const url = new URL(data)
+        if (url.protocol === 'file:') this.setCwd(decodeURIComponent(url.pathname))
+      } catch {
+        // Not a URL; ignore rather than let a stray sequence break parsing.
+      }
+      return true
     })
     this.term.parser.registerOscHandler(133, (data) => {
       const kind = data.split(';')[0]
@@ -167,6 +198,30 @@ export class Session {
 
   tick(now: number): void {
     this.signal((t) => t.tick(now))
+    if (now - this.lastCwdPoll >= CWD_POLL_MS) {
+      this.lastCwdPoll = now
+      this.pollCwd()
+    }
+  }
+
+  /**
+   * Reads the shell's real working directory from /proc, which needs no
+   * cooperation from the shell at all — the common case on Linux and WSL,
+   * where a stock bash emits no OSC 7. Elsewhere OSC 7 is the only source.
+   */
+  private pollCwd(): void {
+    if (process.platform !== 'linux' || this.disposed) return
+    try {
+      this.setCwd(readlinkSync(`/proc/${this.pty.pid}/cwd`))
+    } catch {
+      // Process gone, or /proc not readable; keep the last known directory.
+    }
+  }
+
+  private setCwd(next: string): void {
+    if (!next || next === this.cwd) return
+    this.liveCwd = next
+    this.onCwdChange?.()
   }
 
   kill(): void {

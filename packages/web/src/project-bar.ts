@@ -1,10 +1,12 @@
 import type { ProjectInfo, UpdateInfo } from '@tring/shared/protocol'
+import { isEnabled, setEnabled } from './sound.ts'
 
 export interface BarCallbacks {
   onSelect: (projectId: string) => void
   onAdd: () => void
   onContext: (projectId: string, at: { x: number; y: number }) => void
   onUpdate: (update: UpdateInfo) => void
+  onSoundToggle: () => void
 }
 
 /**
@@ -60,6 +62,19 @@ export function renderBar(
   add.onclick = () => cb.onAdd()
   container.append(add)
 
+  const sound = document.createElement('button')
+  sound.className = 'iconbtn' + (isEnabled() ? ' on' : '')
+  sound.innerHTML = bellSvg(isEnabled())
+  sound.title = isEnabled() ? 'Sound on — click to mute' : 'Sound off — click to unmute'
+  sound.setAttribute('aria-label', sound.title)
+  sound.setAttribute('aria-pressed', String(isEnabled()))
+  sound.onclick = () => {
+    setEnabled(!isEnabled())
+    cb.onSoundToggle()
+  }
+  sound.style.marginLeft = update ? '0' : 'auto'
+  container.append(sound)
+
   if (update) {
     // Deliberately not mint: this is not a finished agent, and the one colour
     // that means "done" stays reserved for that (spec §5.1).
@@ -68,6 +83,15 @@ export function renderBar(
     notice.textContent = `v${update.latest} available`
     notice.title = `You are on ${update.current}`
     notice.onclick = () => cb.onUpdate(update)
-    container.append(notice)
+    container.insertBefore(notice, sound)
   }
+}
+
+function bellSvg(on: boolean): string {
+  const bell =
+    '<path d="M8 2a3 3 0 0 1 3 3v3l1.4 2.1a.5.5 0 0 1-.4.8H4a.5.5 0 0 1-.4-.8L5 8V5a3 3 0 0 1 3-3z"/>' +
+    '<path d="M6.6 12.6a1.5 1.5 0 0 0 2.8 0"/>'
+  const slash = on ? '' : '<path d="M2.5 2.5l11 11"/>'
+  return `<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" ` +
+    `stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">${bell}${slash}</svg>`
 }

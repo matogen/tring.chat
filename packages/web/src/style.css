@@ -342,3 +342,22 @@ body {
   font: 12.5px var(--mono);
   user-select: all;
 }
+
+.iconbtn {
+  align-self: center;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 22px;
+  margin-right: 2px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+}
+.iconbtn:hover { color: var(--text); border-color: var(--line-2); }
+/* Emerald, not mint: this is chrome, and mint means one thing only. */
+.iconbtn.on { color: var(--emerald); }
+.iconbtn.on:hover { color: var(--mint); }

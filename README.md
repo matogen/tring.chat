@@ -142,11 +142,25 @@ Running sessions are unaffected until you restart the daemon. The check never
 blocks startup and fails silently when offline. Opt out with
 `--no-update-check` or `TRING_NO_UPDATE_CHECK=1`.
 
+## Sound
+
+When a session turns green, tring rings — two short strikes, synthesised rather
+than shipped as an audio file. Toggle it with the bell in the tab bar; the
+choice is remembered per browser.
+
+It rings only on the transition to green, so reconnecting or reloading a page
+full of finished sessions stays silent.
+
 ## Restarting
 
 Reopening brings back every project with its tabs, slots, names and working
 directories. The active project's shells spawn immediately; other projects spawn when
 you first switch to them.
+
+Sessions come back in the directory the shell was actually in, not the one it
+was started in — `cd` somewhere and that is where you return. The daemon reads
+this from the shell's own process on Linux and WSL, and from OSC 7 on shells
+that emit it.
 
 Two things are deliberate:
 
