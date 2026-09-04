@@ -30,8 +30,10 @@ await chmod('dist/tring.js', 0o755)
 // self-contained and does not reach back into the monorepo.
 await cp('../web/dist', 'dist/web', { recursive: true })
 
-// npm reads the README from the package directory, so the published page is
-// the project's own README rather than blank.
+// npm reads the README and LICENSE from the package directory, so the
+// published page is the project's own README rather than blank, and the MIT
+// licence package.json declares actually ships with the tarball.
 await cp('../../README.md', 'README.md')
+await cp('../../LICENSE', 'LICENSE')
 
 console.log('built dist/tring.js + dist/web')

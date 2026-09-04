@@ -35,9 +35,20 @@ npm i -g tring
 tring
 ```
 
-Node 20 or newer. node-pty ships prebuilt binaries for linux-x64, darwin-x64,
-darwin-arm64, win32-x64 and win32-arm64, so there is no compiler step on any of
-them.
+Node 20 or newer. node-pty ships prebuilt binaries for macOS and Windows —
+`darwin-x64`, `darwin-arm64`, `win32-x64`, `win32-arm64` — so those install with no
+compiler step.
+
+**Linux and WSL build node-pty from source.** There is no Linux prebuild, so the
+install runs `node-gyp` and needs a toolchain:
+
+```
+sudo apt install -y build-essential python3      # Debian/Ubuntu/WSL
+sudo dnf install -y gcc-c++ make python3         # Fedora/RHEL
+```
+
+Without those, `npm i -g tring` fails while building node-pty. It takes a few seconds
+once they are present.
 
 `tring` starts the daemon and opens a chromeless browser window — no address bar, no
 tab strip, its own taskbar entry. In that window the browser stops reserving
