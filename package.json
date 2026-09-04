@@ -1,0 +1,26 @@
+{
+  "name": "tring-workspace",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @tring/web && npm run build -w tring",
+    "dev": "npm run dev -w tring",
+    "start": "npm run start -w tring",
+    "test": "vitest run",
+    "typecheck": "tsc -b --pretty",
+    "release": "npm run build && npm publish -w tring"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.8"
+  }
+}

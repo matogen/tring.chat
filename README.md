@@ -25,10 +25,94 @@ Press `Ctrl+Space`, then one key, and that session is in the centre.
 Slots are fixed. Focusing a session shows it in the centre without moving it, so the
 ring never shuffles and slot numbers stay in muscle memory.
 
-## Status
+Sixteen is the default, not the only option — the gear in the tab bar switches to 12, 8
+or 4. See [Ring size](#ring-size).
 
-Design complete, implementation not started. The design is in
-[`docs/superpowers/specs/2026-09-03-tring-design.md`](docs/superpowers/specs/2026-09-03-tring-design.md).
+## Install
+
+```
+npm i -g tring
+tring
+```
+
+Node 20 or newer. node-pty ships prebuilt binaries for macOS and Windows —
+`darwin-x64`, `darwin-arm64`, `win32-x64`, `win32-arm64` — so those install with no
+compiler step.
+
+**Linux and WSL build node-pty from source.** There is no Linux prebuild, so the
+install runs `node-gyp` and needs a toolchain:
+
+```
+sudo apt install -y build-essential python3      # Debian/Ubuntu/WSL
+sudo dnf install -y gcc-c++ make python3         # Fedora/RHEL
+```
+
+Without those, `npm i -g tring` fails while building node-pty. It takes a few seconds
+once they are present.
+
+`tring` starts the daemon and opens a chromeless browser window — no address bar, no
+tab strip, its own taskbar entry. In that window the browser stops reserving
+`Ctrl+1`–`Ctrl+8` for tab switching, so slots 11–16 get their natural keys.
+
+### Windows
+
+node-pty ships prebuilt binaries for `win32-x64` and `win32-arm64`, so no Visual
+Studio Build Tools, Python or node-gyp are needed. From PowerShell:
+
+```powershell
+npm i -g tring
+tring
+```
+
+That is all that is needed to *use* it. The rest of this section applies only
+if you are working on tring itself from a checkout.
+
+**Use a separate clone for Windows.** `node_modules` holds a compiled
+`node-pty` binary for one platform only, so running `npm install` on Windows in
+a folder you also use from WSL replaces the Linux binary and breaks the WSL
+side, and vice versa. Two checkouts, or `rm -rf node_modules && npm install`
+each time you switch.
+
+Sessions default to `powershell.exe`. To choose otherwise:
+
+```powershell
+tring --shell pwsh.exe     # PowerShell 7
+tring --shell cmd.exe
+tring --shell wsl.exe      # WSL shells from the Windows app
+```
+
+`--shell wsl.exe` is worth knowing about: it runs the daemon natively on
+Windows while every terminal is a WSL bash shell, which is usually where the
+dev tooling and Claude Code actually live.
+
+Config lives at `%USERPROFILE%\.config\tring\projects.json`.
+
+To run from a checkout instead:
+
+```
+npm install
+npm run build && npm start          # daemon on http://127.0.0.1:7331
+npm run dev                         # tsx watch, no window (TRING_NO_OPEN)
+npm test                            # vitest
+npm i -g ./packages/server          # install this checkout as `tring`
+```
+
+Flags: `--port` (7331), `--host` (127.0.0.1), `--token`, `--scrollback` (5000),
+`--idle-ms` (3000), `--shell`, `--no-open`, `--no-update-check`, `--version`.
+
+## Projects
+
+A project is a name and a root directory, and it owns its own 16 slots and its own
+picker. The first run asks you to create one. Add more with `+` in the tab bar, and
+switch with a click or `p` inside the picker.
+
+So you can keep one project with 16 terminals, or one project per repository — each
+with its own ring.
+
+Sessions in projects you are **not** looking at keep running and keep being tracked.
+Their tab shows a green badge counting how many have finished, so a background agent
+finishing is visible without rendering its ring. Only the project you are viewing
+streams thumbnails, which is what keeps several projects cheap.
 
 ## How it works
 
@@ -49,13 +133,157 @@ Design complete, implementation not started. The design is in
 | `1`–`9`, `0` | focus slot 1–10 |
 | `Ctrl+1`–`Ctrl+6` or `Shift+1`–`Shift+6` | focus slot 11–16 |
 | `n` | focus the next finished session |
+| `p` | switch project |
 | `Space` | back to the previous session |
-| `c` / `r` / `x` | new session / rename / kill |
+| `c` / `r` / `x` | new session / rename and colour / kill |
 | `m` | mark seen |
 | `Esc` | close the picker |
 
 Browsers reserve `Ctrl+1`–`Ctrl+8` for tab switching, so `Shift+digit` is the
-fallback that always works. Clicking a thumbnail also focuses it.
+fallback that always works in an ordinary tab. Clicking a thumbnail also focuses it,
+and right-clicking one opens the same dialog `r` does.
+
+## Naming and colouring tiles
+
+Right-click a tile — or press `r` in the picker — to give it a name and a colour.
+
+The colour is a ring *outside* the status border, never instead of it, so a tile you
+have tinted still reports whether it is busy, finished or dead. Twenty-four choices:
+twelve hues — red, orange, gold, lime, green, teal, cyan, blue, indigo, violet, pink,
+slate — in a bright and a deep tier.
+
+Red, gold and green are in there, which means a tint can echo a status colour that means
+something else. That stays readable because they are separate rings, but it is worth
+knowing when you pick: mint means *finished*, amber means *busy* and red means *dead*,
+and those meanings belong to the border, not to your tint.
+
+Names and colours are per session and survive a restart, alongside the slot and the
+working directory.
+
+## Updating
+
+A global npm install is a frozen snapshot: npm never checks for new versions
+and never notifies. So tring asks the registry itself, at most once a day, and
+shows a notice in the tab bar when a newer release exists.
+
+```
+npm i -g tring
+```
+
+Running sessions are unaffected until you restart the daemon. The check never
+blocks startup and fails silently when offline. Opt out with
+`--no-update-check` or `TRING_NO_UPDATE_CHECK=1`.
+
+## Ring size
+
+Sixteen terminals is the default. The gear in the tab bar offers 4, 8, 12 and 16, and the
+choice is remembered per browser.
+
+Twelve and sixteen are rings. Four and eight are bands — a row above and a row below, with
+the focus terminal spanning the full width, because below twelve slots a ring's side
+columns cost the centre more width than the tiles are worth:
+
+```
+     4 slots                    8 slots
+┌────────┬────────┐      ┌────┬────┬────┬────┐
+│   1    │   2    │      │ 1  │ 2  │ 3  │ 4  │
+├────────┴────────┤      ├────┴────┴────┴────┤
+│      focus      │      │       focus       │
+├────────┬────────┤      ├────┬────┬────┬────┤
+│   4    │   3    │      │ 8  │ 7  │ 6  │ 5  │
+└────────┴────────┘      └────┴────┴────┴────┘
+```
+
+The daemon is unaffected: every project still owns sixteen slots, so this is a view onto
+them rather than a limit on them. Shrinking below a slot that is in use is refused with a
+notice rather than hiding a session that would still ring and still count in the tab badge
+— close those sessions first, or switch back up.
+
+## Claude usage
+
+Optional, off by default. Turn on **Enable Claude usage monitoring** in the gear, and a
+pinned `Usage` tab appears in the tab bar — a quick glance at what Claude Code has spent,
+without leaving tring.
+
+```
+Session             ████░░░░░░░░  27%    resets Sep 4, 11:29am
+Week (all models)   ████░░░░░░░░  27%    resets Sep 7, 9:59am
+Week (Fable)        ████░░░░░░░░  28%    resets Sep 7, 9:59am
+                                  from Claude Code’s own /usage
+
+  1.7M tokens today  ·  $34.55 today  ·  $622.47 this week  ·  750B cache reads
+```
+
+**The percentages are the real ones.** Opening the tab runs `claude -p "/usage"`, which
+Claude Code answers locally — zero turns, zero tokens, no API call — so the numbers are
+exactly what `/usage` shows in a session. Nothing is read out of your credential file and
+nothing leaves the machine. The answer is cached for 30 seconds, so the first look costs
+about 1.8s and the rest are instant.
+
+Underneath, the token counts and cost estimates come from Claude Code's transcripts in
+`~/.claude/projects` (or `CLAUDE_CONFIG_DIR`), which is also where the per-project split
+comes from — `/usage` does not break usage down by repository. A full scan of a year of
+history takes about half a second.
+
+The token count is `input + output + cache creation`. Cache reads are shown separately
+rather than folded in: a typical week here is 750B cache reads against 22M other tokens,
+so including them would make the bar 99% cache and tell you nothing. Costs are estimates
+from a built-in price table.
+
+If the `claude` command is not on the daemon's PATH — running tring natively on Windows
+against a WSL install, say — the tab reports the transcript numbers on their own and says
+why there is no percentage. There is nothing to configure either way: a bar needs a real
+ceiling, and inventing one would be worse than having none.
+
+Reloading while the tab is open leaves you on it.
+
+## Sound
+
+When a session turns green, tring rings — two short strikes, synthesised rather
+than shipped as an audio file. Toggle it with the bell in the tab bar; the
+choice is remembered per browser.
+
+It rings only on the transition to green, so reconnecting or reloading a page
+full of finished sessions stays silent.
+
+It also rings only when the daemon is *confident* something finished. An
+explicit signal — a Claude Code Stop hook, an OSC 133 prompt marker, a terminal
+bell — always rings, because each means exactly one thing. Silence after output
+is a guess, and an app that has merely finished starting up looks identical to
+one that has finished working: Claude Code draws its interface for a few
+seconds and then waits. So an inferred finish only rings after ten seconds of
+sustained work, while the tile still turns green either way.
+
+Installing the Stop hook below is what makes this exact for Claude Code.
+
+## Restarting
+
+Switching projects puts you back in the session you were last using in that project,
+rather than an empty centre.
+
+Reopening brings back every project with its tabs, slots, names and working
+directories. The active project's shells spawn immediately; other projects spawn when
+you first switch to them.
+
+If your shell's startup file changes directory — `cd /mnt/c` in a `~/.bashrc`,
+say — it runs *after* the shell has been placed in the directory you chose, and
+would otherwise silently discard that choice. tring puts the shell back once,
+shortly after start, unless you have already typed something: at that point the
+shell is yours.
+
+Sessions come back in the directory the shell was actually in, not the one it
+was started in — `cd` somewhere and that is where you return. The daemon reads
+this from the shell's own process on Linux and WSL, and from OSC 7 on shells
+that emit it.
+
+Two things are deliberate:
+
+- **Scrollback is not restored.** The buffer lives in daemon memory, and persisting
+  dozens of sessions of history to disk continuously is a different product.
+- **A recorded command is offered, never re-run.** A restored slot gets a plain shell
+  in the right directory, with its old command on the tile as a one-click re-run.
+  Auto-executing whatever was there last time is how four dev servers end up fighting
+  over a port.
 
 ## Claude Code
 
@@ -73,23 +301,25 @@ instant Claude ends its turn instead of after the idle timeout:
 }
 ```
 
-`TRING_URL` and `TRING_SESSION_ID` are set in every session's environment.
+In a PowerShell session the same hook is:
+
+```powershell
+curl.exe -s -X POST "$env:TRING_URL/api/sessions/$env:TRING_SESSION_ID/done"
+```
+
+`curl.exe` rather than `curl`, which PowerShell aliases to `Invoke-WebRequest`.
+
+`TRING_URL`, `TRING_SESSION_ID`, `TRING_SLOT` and `TRING_PROJECT` are set in every
+session's environment. Session ids are globally unique, so this one snippet is correct
+in every session of every project and does not change as projects come and go.
 
 ## Stack
 
 TypeScript throughout. Server: Node, `node-pty`, `@xterm/headless`, `ws`.
 Web: Vite, `@xterm/xterm`, no UI framework. Tests: vitest.
 
-## Running
-
-Not yet. Once implemented:
-
-```
-npm install
-npm run dev        # daemon on http://127.0.0.1:7331 with Vite hot reload
-npm run build && npm start
-```
+Design: [`docs/superpowers/specs/2026-09-03-tring-design.md`](docs/superpowers/specs/2026-09-03-tring-design.md).
 
 ## Licence
 
-TBD.
+MIT.

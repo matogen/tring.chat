@@ -1,0 +1,38 @@
+/*
+ * Brand tokens, lifted verbatim from tring-chat-marketing/index.html so the
+ * app and the site cannot drift (spec §5.1).
+ *
+ * THE RESERVED-SIGNAL RULE: --mint is used ONLY for `done` status — green tile
+ * borders, tab done-badges, finished entries in the picker. Chrome (buttons,
+ * focus rings, the active tab, hovers, the logo) uses --deep and --emerald.
+ * The marketing logo already demonstrates it: eight --deep squares and one
+ * glowing --mint centre. Applied across the UI it makes a finished agent the
+ * brightest thing on screen by construction, which is the product's whole job.
+ */
+:root {
+  --bg: #040c0a;
+  --bg-2: #071411;
+  --panel: rgba(255, 255, 255, 0.028);
+  --panel-2: rgba(255, 255, 255, 0.05);
+  --line: rgba(110, 240, 195, 0.11);
+  --line-2: rgba(110, 240, 195, 0.2);
+  --text: #dceee7;
+  --muted: #8aa79d;
+  --dim: #5d7a71;
+  --mint: #3ee9a4;
+  --emerald: #0fae7c;
+  --deep: #0a3a2e;
+  --amber: #f5b642;
+  --red: #f2545b;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  --bar-h: 36px;
+  color-scheme: dark;
+}
+
+/* Status colours follow from the tokens. */
+.st-idle   { --status: var(--dim); }
+.st-busy   { --status: var(--amber); }
+.st-done   { --status: var(--mint); }
+.st-exited { --status: var(--red); }
