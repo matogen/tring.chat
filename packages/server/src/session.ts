@@ -29,6 +29,7 @@ export interface SessionOptions {
   cwd: string
   command?: string | null
   name?: string | null
+  color?: string | null
   url: string
   scrollback?: number
   idleMs?: number
@@ -57,6 +58,7 @@ export class Session {
   readonly slot: number
   readonly command: string | null
   name: string | null
+  color: string | null
   title: string | null = null
 
   readonly tracker: ActivityTracker
@@ -96,6 +98,7 @@ export class Session {
     this.spawnCwd = opts.cwd
     this.command = opts.command ?? null
     this.name = opts.name ?? null
+    this.color = opts.color ?? null
     this.tracker = new ActivityTracker(Date.now(), opts.idleMs ?? DEFAULT_IDLE_MS)
 
     const shell = opts.shell ?? defaultShell()
@@ -279,6 +282,7 @@ export class Session {
       title: this.title,
       cwd: this.cwd,
       command: this.command,
+      color: this.color,
       status: this.tracker.status,
       since: this.tracker.since,
       exitCode: this.tracker.exitCode,

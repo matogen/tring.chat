@@ -149,6 +149,9 @@ export class Hub {
       case 'rename':
         pm.findManager(msg.id)?.rename(msg.id, msg.name)
         break
+      case 'color':
+        pm.findManager(msg.id)?.setColor(msg.id, msg.color)
+        break
       case 'ack':
         pm.findSession(msg.id)?.ack()
         break

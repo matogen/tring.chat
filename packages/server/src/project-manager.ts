@@ -11,6 +11,7 @@ export interface PersistedSession {
   name: string | null
   cwd: string
   command: string | null
+  color?: string | null
 }
 
 export interface PersistedProject {
@@ -226,6 +227,7 @@ export class ProjectManager {
               name: s.name,
               cwd: s.cwd,
               command: s.command,
+              color: s.color,
             }))
           : e.pending,
       })),

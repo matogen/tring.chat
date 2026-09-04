@@ -6,6 +6,7 @@ export interface SessionSpec {
   cwd?: string
   command?: string | null
   name?: string | null
+  color?: string | null
   /** False when restoring from disk; see Session's `autorun`. */
   autorun?: boolean
 }
@@ -21,6 +22,8 @@ export interface SessionManagerOptions {
 }
 
 export const SLOT_COUNT = 16
+
+const HEX = /^#[0-9a-f]{6}$/i
 
 /** The 16 fixed slots of one project (spec §4.3). */
 export class SessionManager {
@@ -51,6 +54,7 @@ export class SessionManager {
       cwd: spec.cwd ?? this.opts.root,
       command: spec.command ?? null,
       name: spec.name ?? null,
+      color: HEX.test(spec.color ?? '') ? spec.color! : null,
       url: this.opts.url,
       scrollback: this.opts.scrollback,
       idleMs: this.opts.idleMs,
@@ -89,6 +93,18 @@ export class SessionManager {
     this.onStructureChange?.()
   }
 
+  /**
+   * The tint ends up in a CSS custom property in the browser, and arrives from
+   * a socket, so anything but a plain hex value clears the colour rather than
+   * being passed along. Every path that sets a colour routes through here.
+   */
+  setColor(id: string, color: string | null): void {
+    const s = this.byId.get(id)
+    if (!s) return
+    s.color = color !== null && HEX.test(color) ? color : null
+    this.onStructureChange?.()
+  }
+
   kill(id: string): void {
     const s = this.byId.get(id)
     if (!s) return
@@ -110,6 +126,7 @@ export class SessionManager {
       cwd: old.cwd,
       command: old.command,
       name: old.name,
+      color: old.color,
       autorun: true,
     }
     this.kill(id)

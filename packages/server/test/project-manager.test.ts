@@ -41,6 +41,36 @@ describe('ProjectManager', () => {
     expect(state.projects[0]?.sessions[0]).toMatchObject({ slot: 1, name: 'server', cwd: dir })
   })
 
+  it('remembers a tile colour across a restart', async () => {
+    const { dir, statePath, pm } = await fixture()
+    const id = pm.createProject('api', dir)
+    const session = pm.create(id, { name: 'server', cwd: dir })!
+    pm.findManager(session.id)!.setColor(session.id, '#a06cf0')
+    await pm.save()
+    await pm.dispose()
+
+    const restored = await open(statePath, dir)
+    live.push(restored)
+    expect(restored.list()[0]?.sessions[0]?.color).toBe('#a06cf0')
+  })
+
+  it('refuses a colour that is not a plain hex value, since it reaches CSS', async () => {
+    const { dir, pm } = await fixture()
+    const id = pm.createProject('api', dir)
+    const session = pm.create(id, { name: 'server', cwd: dir })!
+    const mgr = pm.findManager(session.id)!
+
+    mgr.setColor(session.id, 'red; background: url(evil)')
+    expect(session.color).toBeNull()
+
+    mgr.setColor(session.id, '#a06cf0')
+    expect(session.color).toBe('#a06cf0')
+
+    // Clearing back to no colour stays allowed.
+    mgr.setColor(session.id, null)
+    expect(session.color).toBeNull()
+  })
+
   it('respawns the active project eagerly and leaves the others until activated', async () => {
     const { dir, statePath, pm } = await fixture()
     const a = pm.createProject('alpha', dir)

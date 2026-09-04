@@ -5,6 +5,16 @@ Status: approved design, awaiting implementation plan
 
 ## 0. Changelog
 
+**2026-09-04 — tile names and colours.** A tile carries an optional user colour
+(§5.2, §5.9) alongside its name, both editable from a right-click or the picker's `r`.
+`SessionInfo` gains `color`, the protocol gains one `color` message, and
+`projects.json` persists it beside the name. The colour renders as a ring outside the
+status border rather than replacing it, and the twelve choices — four hues in three
+tiers — avoid green, amber and red so §5.1's reserved-signal rule survives contact with
+a user's colour picker. The value
+reaches a CSS custom property, so `SessionManager.setColor` rejects anything that is
+not `#rrggbb`.
+
 **2026-09-04 — ring size.** The number of terminals around the focus is a setting
 (§5.2, §5.6): 4, 8, 12 or 16. Twelve and sixteen are rings — the perimeter of an N×N
 grid; four and eight are bands, a top row and a bottom row with the focus spanning
@@ -304,7 +314,8 @@ tab bar; its SVG form is the favicon and the app icon.
 
 Full-viewport column: a fixed 36px project tab bar, then a CSS grid filling the rest,
 sized by the chosen ring. Slots are numbered clockwise from the top-left in every case,
-and each shows: key legend, name or title, cwd basename, status border, and the canvas.
+and each shows: key legend, name or title, cwd basename, status border, the canvas, and
+— when one is set — a user colour as a ring outside the status border.
 
 | Slots | Grid | Focus cell | Shape |
 |---|---|---|---|
@@ -316,6 +327,12 @@ and each shows: key legend, name or title, cwd basename, status border, and the 
 `layoutFor(size)` is pure and returns the grid templates, the focus `grid-area` and a
 slot→cell map; the DOM half is a separate call, so the geometry is unit-tested without
 a browser.
+
+A tile is built once and repainted often, and the split is load-bearing: `renderRing`
+rebuilds only when the slot layout changes, so a thumbnail's canvas is never pulled out
+from under it, and *everything* mutable — name, window title, cwd, tooltip, status,
+colour, the restart button — is written by `paintTile` instead. Anything drawn inside
+`renderRing` that can change while a session keeps its slot is stale by construction.
 
 The ring the client draws is the chosen size grown to fit: if the viewed project holds a
 session in a higher slot — a restored project arriving with slot 13 occupied long after
@@ -393,6 +410,16 @@ obvious to go instead of another icon in a 36px bar.
 Two fields: name and root directory, the root defaulting to the daemon's cwd. Shown
 blocking on first run when no projects exist, and from the `+` button thereafter. The same
 dialog, name field only, handles rename.
+
+### 5.9 Session dialog
+
+Opened by right-clicking a tile or pressing `r` in the picker — one dialog, not two, so
+naming and colouring a tile are the same gesture. Name field, then thirteen swatches: no
+colour, and four hues clear of the status palette in a light, a mid and a deep tier —
+tiers rather than more hues, because the usable arc is about 150° wide and twelve hues
+crammed into it are indistinguishable at 2px. The tint is an `outline` on the tile
+and `.viewing` moves to an inset shadow, so status, colour and focus each own a ring and
+none of them competes for the same pixels.
 
 ## 6. Distribution
 

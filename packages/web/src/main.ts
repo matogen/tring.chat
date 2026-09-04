@@ -167,40 +167,74 @@ function renderRing(): void {
       tile.append(canvas)
       thumbs.set(s.id, new Thumbnail(canvas))
 
+      // Only the parts that cannot change while this session holds the slot.
+      // Everything else is paintTile's, or it goes stale behind this guard.
       const meta = document.createElement('div')
       meta.className = 'meta'
       const key = document.createElement('span')
       key.className = 'key'
       key.textContent = String(slot)
-      const nm = document.createElement('span')
-      nm.className = 'nm'
-      nm.textContent = s.name ?? s.title ?? 'shell'
-      const cwd = document.createElement('span')
-      cwd.className = 'cwd'
-      cwd.textContent = s.cwd.split('/').filter(Boolean).pop() ?? ''
-      meta.append(key, nm, cwd)
+      meta.append(key, span('nm'), span('cwd'))
       tile.append(meta)
-      tile.title = `${legendForSlot(slot)} — ${s.cwd}`
       tile.onclick = () => focusSession(s.id)
-
-      const action = respawnAction(s)
-      if (action) {
-        const btn = document.createElement('button')
-        btn.className = 'tile-action'
-        btn.textContent = action.label
-        btn.title = action.title
-        btn.onclick = (e) => {
-          e.stopPropagation()
-          ws.send({ type: 'respawn', id: s.id })
-        }
-        tile.append(btn)
+      tile.oncontextmenu = (e) => {
+        e.preventDefault()
+        sessionMenu(s.id)
       }
+
+      const btn = document.createElement('button')
+      btn.className = 'tile-action'
+      btn.onclick = (e) => {
+        e.stopPropagation()
+        ws.send({ type: 'respawn', id: s.id })
+      }
+      tile.append(btn)
+
+      paintTile(tile, s)
     }
 
     tiles.set(slot, tile)
     ringEl.append(tile)
   }
   requestAnimationFrame(() => fitTerminal())
+}
+
+const span = (cls: string): HTMLElement => {
+  const el = document.createElement('span')
+  el.className = cls
+  return el
+}
+
+/**
+ * Everything about a tile that can change while the session keeps its slot.
+ *
+ * renderRing rebuilds only when the slot layout does, so a thumbnail's canvas
+ * is never pulled out from under it — which means a rename, a new window
+ * title, a `cd` or an exit reach the tile through here or not at all.
+ */
+function paintTile(tile: HTMLElement, s: SessionInfo | undefined): void {
+  tile.classList.remove('st-idle', 'st-busy', 'st-done', 'st-exited', 'viewing')
+  tile.style.removeProperty('--tint')
+  if (!s) return
+
+  tile.classList.add(`st-${s.status}`)
+  if (s.id === focusedId) tile.classList.add('viewing')
+  if (s.color) tile.style.setProperty('--tint', s.color)
+
+  const nm = tile.querySelector<HTMLElement>('.nm')
+  if (nm) nm.textContent = s.name ?? s.title ?? 'shell'
+  const cwd = tile.querySelector<HTMLElement>('.cwd')
+  if (cwd) cwd.textContent = s.cwd.split('/').filter(Boolean).pop() ?? ''
+  tile.title = `${legendForSlot(s.slot)} — ${s.cwd}`
+
+  const btn = tile.querySelector<HTMLButtonElement>('.tile-action')
+  const action = respawnAction(s)
+  if (!btn) return
+  btn.hidden = !action
+  if (action) {
+    btn.textContent = action.label
+    btn.title = action.title
+  }
 }
 
 /**
@@ -225,12 +259,7 @@ function paintStatuses(): void {
   for (let slot = 1; slot <= effectiveSize(); slot++) {
     const tile = tiles.get(slot)
     if (!tile) continue
-    const s = sessionAt(slot)
-    tile.classList.remove('st-idle', 'st-busy', 'st-done', 'st-exited', 'viewing')
-    if (s) {
-      tile.classList.add(`st-${s.status}`)
-      if (s.id === focusedId) tile.classList.add('viewing')
-    }
+    paintTile(tile, sessionAt(slot))
   }
   renderBar(barEl, projects, viewedId, barCallbacks(), update)
   const done = globalDone()
@@ -310,6 +339,16 @@ function promptNewProject(blocking: boolean): void {
     { title: blocking ? 'Create your first project' : 'New project', root: '', blocking },
     (name, root) => ws.send({ type: 'createProject', name, root }),
   )
+}
+
+/** Right-clicking a tile: the two things that belong to the tile itself. */
+function sessionMenu(id: string): void {
+  const s = sessionById(id)
+  if (!s) return
+  ui.openSessionDialog(s, (v) => {
+    if (v.name !== (s.name ?? '')) ws.send({ type: 'rename', id, name: v.name })
+    if (v.color !== s.color) ws.send({ type: 'color', id, color: v.color })
+  })
 }
 
 function projectMenu(id: string): void {
@@ -420,8 +459,7 @@ function pickerKey(e: KeyboardEvent): void {
     case 'rename':
       if (!current) break
       ui.close(); overlayMode = null
-      ui.openPrompt('Rename session', current.name ?? '', (name) =>
-        ws.send({ type: 'rename', id: current.id, name }))
+      sessionMenu(current.id)
       break
     case 'kill':
       if (!current) break

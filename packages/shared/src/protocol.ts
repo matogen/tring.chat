@@ -30,6 +30,8 @@ export interface SessionInfo {
   cwd: string
   /** Kept so the tile can offer a re-run; never executed automatically. */
   command: string | null
+  /** User-assigned tile tint as `#rrggbb`, or null. Never a status colour. */
+  color: string | null
   status: SessionStatus
   since: number
   exitCode: number | null
@@ -55,6 +57,7 @@ export type ClientMessage =
   | { type: 'create'; projectId?: string; slot?: number; cwd: string; command?: string; name?: string }
   | { type: 'kill'; id: string }
   | { type: 'rename'; id: string; name: string }
+  | { type: 'color'; id: string; color: string | null }
   | { type: 'ack'; id: string }
   | { type: 'respawn'; id: string }
   | { type: 'activateProject'; projectId: string }

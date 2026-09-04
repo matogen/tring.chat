@@ -169,7 +169,7 @@ export function openProjectPicker(projects: ProjectInfo[], onPick: (id: string) 
   open(panel)
 }
 
-/* ---------- dialogs (spec §5.7) ---------- */
+/* ---------- dialogs (spec §5.7, §5.8) ---------- */
 
 export function openProjectDialog(
   opts: {
@@ -287,17 +287,75 @@ export function openNewSessionDialog(
   open(panel)
 }
 
-export function openPrompt(
-  title: string, value: string, onSubmit: (v: string) => void,
+/**
+ * Twelve hues, a bright and a deep tier each.
+ *
+ * Red and gold are in here at the user's explicit request, so a tint can sit
+ * next to a status border that means something else. That stays readable
+ * because the two are separate rings — the tint is an outline outside the
+ * status border, never a replacement for it — but a red-tinted busy tile does
+ * put two reds on screen, and a green-tinted one sits beside the mint that
+ * means "finished" (spec §5.1). Worth knowing when picking, not worth
+ * refusing.
+ */
+export const TILE_COLORS = [
+  '#f87171', '#b91c1c', // red
+  '#fb923c', '#c2410c', // orange
+  '#fbbf24', '#b45309', // gold
+  '#a3e635', '#4d7c0f', // lime
+  '#4ade80', '#15803d', // green
+  '#2dd4bf', '#0f766e', // teal
+  '#22d3ee', '#0e7490', // cyan
+  '#60a5fa', '#1d4ed8', // blue
+  '#818cf8', '#4338ca', // indigo
+  '#c084fc', '#7e22ce', // violet
+  '#f472b6', '#be185d', // pink
+  '#94a3b8', '#475569', // slate
+] as const
+
+export function openSessionDialog(
+  session: SessionInfo,
+  onSubmit: (v: { name: string; color: string | null }) => void,
 ): void {
   const panel = el('div', 'panel')
-  panel.append(el('h2', undefined, title))
+  panel.append(el('h2', undefined, `Slot ${session.slot}`))
+  panel.append(el('p', 'hint', session.cwd))
+
   const form = el('form')
-  const input = el('input') as HTMLInputElement
-  input.value = value
-  const field = el('label', 'field')
-  field.append(input)
-  form.append(field)
+
+  const name = el('input') as HTMLInputElement
+  name.value = session.name ?? ''
+  name.placeholder = session.title ?? 'shell'
+  const nameField = el('label', 'field')
+  nameField.append(el('span', undefined, 'Name'), name)
+  form.append(nameField)
+
+  let color: string | null = session.color
+  const swatches = el('div', 'swatches')
+  const mark = () => {
+    for (const b of Array.from(swatches.children) as HTMLElement[]) {
+      b.classList.toggle('active', b.dataset['color'] === (color ?? ''))
+    }
+  }
+  const swatch = (value: string | null, label: string) => {
+    const b = el('button', 'swatch') as HTMLButtonElement
+    b.type = 'button'
+    b.dataset['color'] = value ?? ''
+    b.title = label
+    b.setAttribute('aria-label', label)
+    if (value) b.style.setProperty('--tint', value)
+    else b.classList.add('none')
+    b.onclick = () => { color = value; mark() }
+    swatches.append(b)
+  }
+  swatch(null, 'No colour')
+  for (const c of TILE_COLORS) swatch(c, c)
+  mark()
+
+  const colorField = el('div', 'field')
+  colorField.append(el('span', undefined, 'Border colour'), swatches)
+  form.append(colorField)
+
   const actions = el('div', 'actions')
   const cancel = el('button', 'btn', 'Cancel') as HTMLButtonElement
   cancel.type = 'button'
@@ -306,11 +364,16 @@ export function openPrompt(
   ok.type = 'submit'
   actions.append(cancel, ok)
   form.append(actions)
-  form.onsubmit = (e) => { e.preventDefault(); close(); onSubmit(input.value.trim()) }
+
+  form.onsubmit = (e) => {
+    e.preventDefault()
+    close()
+    onSubmit({ name: name.value.trim(), color })
+  }
   panel.append(form)
   open(panel)
-  input.focus()
-  input.select()
+  name.focus()
+  name.select()
 }
 
 /**

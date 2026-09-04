@@ -124,12 +124,13 @@ streams thumbnails, which is what keeps several projects cheap.
 | `n` | focus the next finished session |
 | `p` | switch project |
 | `Space` | back to the previous session |
-| `c` / `r` / `x` | new session / rename / kill |
+| `c` / `r` / `x` | new session / rename and colour / kill |
 | `m` | mark seen |
 | `Esc` | close the picker |
 
 Browsers reserve `Ctrl+1`–`Ctrl+8` for tab switching, so `Shift+digit` is the
-fallback that always works in an ordinary tab. Clicking a thumbnail also focuses it.
+fallback that always works in an ordinary tab. Clicking a thumbnail also focuses it,
+and right-clicking one opens the same dialog `r` does.
 
 ## Updating
 
@@ -144,6 +145,62 @@ npm i -g tring
 Running sessions are unaffected until you restart the daemon. The check never
 blocks startup and fails silently when offline. Opt out with
 `--no-update-check` or `TRING_NO_UPDATE_CHECK=1`.
+
+## Naming and colouring tiles
+
+Right-click a tile — or press `r` in the picker — to give it a name and a colour.
+
+The colour is a ring *outside* the status border, never instead of it, so a tile you
+have tinted still reports whether it is busy, finished or dead. Twenty-four choices:
+twelve hues — red, orange, gold, lime, green, teal, cyan, blue, indigo, violet, pink,
+slate — in a bright and a deep tier.
+
+Red, gold and green are in there, which means a tint can echo a status colour that means
+something else. That stays readable because they are separate rings, but it is worth
+knowing when you pick: mint means *finished*, amber means *busy* and red means *dead*,
+and those meanings belong to the border, not to your tint.
+
+Names and colours are per session and survive a restart, alongside the slot and the
+working directory.
+
+## Updating
+
+A global npm install is a frozen snapshot: npm never checks for new versions
+and never notifies. So tring asks the registry itself, at most once a day, and
+shows a notice in the tab bar when a newer release exists.
+
+```
+npm i -g tring
+```
+
+Running sessions are unaffected until you restart the daemon. The check never
+blocks startup and fails silently when offline. Opt out with
+`--no-update-check` or `TRING_NO_UPDATE_CHECK=1`.
+
+## Ring size
+
+Sixteen terminals is the default. The gear in the tab bar offers 4, 8, 12 and 16, and the
+choice is remembered per browser.
+
+Twelve and sixteen are rings. Four and eight are bands — a row above and a row below, with
+the focus terminal spanning the full width, because below twelve slots a ring's side
+columns cost the centre more width than the tiles are worth:
+
+```
+     4 slots                    8 slots
+┌────────┬────────┐      ┌────┬────┬────┬────┐
+│   1    │   2    │      │ 1  │ 2  │ 3  │ 4  │
+├────────┴────────┤      ├────┴────┴────┴────┤
+│      focus      │      │       focus       │
+├────────┬────────┤      ├────┬────┬────┬────┤
+│   4    │   3    │      │ 8  │ 7  │ 6  │ 5  │
+└────────┴────────┘      └────┴────┴────┴────┘
+```
+
+The daemon is unaffected: every project still owns sixteen slots, so this is a view onto
+them rather than a limit on them. Shrinking below a slot that is in use is refused with a
+notice rather than hiding a session that would still ring and still count in the tab badge
+— close those sessions first, or switch back up.
 
 ## Ring size
 
