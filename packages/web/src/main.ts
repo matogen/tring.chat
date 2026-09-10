@@ -437,14 +437,27 @@ function promptNewProject(blocking: boolean): void {
   )
 }
 
-/** Right-clicking a tile: the two things that belong to the tile itself. */
+/** Right-clicking a tile: the things that belong to the tile itself. */
 function sessionMenu(id: string): void {
   const s = sessionById(id)
   if (!s) return
-  ui.openSessionDialog(s, (v) => {
-    if (v.name !== (s.name ?? '')) ws.send({ type: 'rename', id, name: v.name })
-    if (v.color !== s.color) ws.send({ type: 'color', id, color: v.color })
-  })
+  ui.openSessionDialog(
+    s,
+    (v) => {
+      if (v.name !== (s.name ?? '')) ws.send({ type: 'rename', id, name: v.name })
+      if (v.color !== s.color) ws.send({ type: 'color', id, color: v.color })
+    },
+    () => killSession(s),
+  )
+}
+
+/** Kills the PTY and frees the slot, so the tile goes back to `+`. */
+function killSession(s: SessionInfo): void {
+  ui.openConfirm(
+    'Delete session',
+    `Slot ${s.slot} — ${s.cwd}. The slot goes back to empty.`,
+    () => ws.send({ type: 'kill', id: s.id }),
+  )
 }
 
 function projectMenu(id: string): void {
@@ -561,8 +574,7 @@ function pickerKey(e: KeyboardEvent): void {
     case 'kill':
       if (!current) break
       ui.close(); overlayMode = null
-      ui.openConfirm('Kill session', `Slot ${current.slot} — ${current.cwd}`, () =>
-        ws.send({ type: 'kill', id: current.id }))
+      killSession(current)
       break
     case 'mark-seen':
       if (current) ws.send({ type: 'ack', id: current.id })

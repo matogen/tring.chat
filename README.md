@@ -143,9 +143,18 @@ Browsers reserve `Ctrl+1`–`Ctrl+8` for tab switching, so `Shift+digit` is the
 fallback that always works in an ordinary tab. Clicking a thumbnail also focuses it,
 and right-clicking one opens the same dialog `r` does.
 
+Those are picker keys. Everything else you type goes to the focused session, with one
+exception: **`Ctrl+Enter` and `Shift+Enter` insert a newline** instead of submitting.
+A terminal has no modifier bits for Enter — every variant is a bare `\r` on the wire —
+so tring sends `ESC`+`CR` for those two chords, which is what Claude Code and other
+agent CLIs read as "break the line". Native terminals need `/terminal-setup` to do the
+same thing; here it works out of the box.
+
 ## Naming and colouring tiles
 
 Right-click a tile — or press `r` in the picker — to give it a name and a colour.
+The same dialog has a **Delete** button, which kills the session and frees the slot
+back to empty; `x` in the picker does the same thing.
 
 The colour is a ring *outside* the status border, never instead of it, so a tile you
 have tinted still reports whether it is busy, finished or dead. Twenty-four choices:

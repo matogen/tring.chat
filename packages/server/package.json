@@ -1,7 +1,7 @@
 {
   "name": "tring-chat",
-  "version": "0.1.1",
-  "description": "Focus-centred terminal deck for agentic work \u2014 16 live terminals around one focus, green when an agent is done",
+  "version": "0.1.2",
+  "description": "Focus-centred terminal deck for agentic work — 16 live terminals around one focus, green when an agent is done",
   "keywords": [
     "terminal",
     "pty",

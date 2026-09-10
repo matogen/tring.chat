@@ -1,6 +1,7 @@
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
+import { isNewlineKey, NEWLINE_SEQ } from '@tring/shared/keymap'
 import { xtermTheme } from './xterm-theme.ts'
 
 /** RIS. xterm maps ESC c to a full reset, and it travels in the write queue. */
@@ -36,7 +37,15 @@ export class FocusTerminal {
     }
 
     this.term.onData((d) => this.onInput?.(d))
-    this.term.attachCustomKeyEventHandler((e) => this.shouldSendKey?.(e) ?? true)
+    this.term.attachCustomKeyEventHandler((e) => {
+      if (this.shouldSendKey?.(e) === false) return false
+      if (e.type === 'keydown' && isNewlineKey(e)) {
+        e.preventDefault()
+        this.onInput?.(NEWLINE_SEQ)
+        return false
+      }
+      return true
+    })
     this.fitNow()
   }
 
