@@ -123,7 +123,9 @@ streams thumbnails, which is what keeps several projects cheap.
 - A session is **busy** while it produces output, **done** (green) when it goes quiet,
   when the shell prompt returns (OSC 133), when it rings the bell, or when a Claude Code
   Stop hook calls back. It stays green until you type into it, so you can read the
-  result first.
+  result first. A busy tile is dimmed and grey as well as amber-bordered, and a green
+  one shows its slot number in a circle, so what is waiting and which key to press are
+  both visible at a glance.
 
 ## Keys
 

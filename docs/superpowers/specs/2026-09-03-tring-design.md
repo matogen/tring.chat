@@ -341,7 +341,12 @@ tab bar; its SVG form is the favicon and the app icon.
 Full-viewport column: a fixed 36px project tab bar, then a CSS grid filling the rest,
 sized by the chosen ring. Slots are numbered clockwise from the top-left in every case,
 and each shows: key legend, name or title, cwd basename, status border, the canvas, and
-— when one is set — a user colour as a ring outside the status border.
+— when one is set — a user colour as a ring outside the status border. The name is also
+drawn large and faded in the centre of the tile, scaled to the tile's size. While the
+session is `done`, a mint circle carrying the slot number sits above that name, so the
+key to press is the biggest thing on a finished tile. While it is `busy`, the canvas and
+the centred name are dimmed and desaturated as well as amber-bordered, so the finished
+tiles are the bright ones.
 
 | Slots | Grid | Focus cell | Shape |
 |---|---|---|---|

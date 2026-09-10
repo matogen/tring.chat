@@ -199,6 +199,16 @@ function renderRing(): void {
       const shot = lastShots.get(s.id)
       if (shot) thumb.paint(shot)
 
+      // The centred label: the slot number in a circle (visible only while
+      // `done`, so the key to press is the biggest thing on a finished tile)
+      // above the session name. `.meta` below keeps the small footer.
+      const label = document.createElement('div')
+      label.className = 'label'
+      const badge = span('slot-badge')
+      badge.textContent = String(slot)
+      label.append(badge, span('big-nm'))
+      tile.append(label)
+
       // Only the parts that cannot change while this session holds the slot.
       // Everything else is paintTile's, or it goes stale behind this guard.
       const meta = document.createElement('div')
@@ -253,8 +263,11 @@ function paintTile(tile: HTMLElement, s: SessionInfo | undefined): void {
   if (s.id === focusedId) tile.classList.add('viewing')
   if (s.color) tile.style.setProperty('--tint', s.color)
 
+  const name = s.name ?? s.title ?? 'shell'
   const nm = tile.querySelector<HTMLElement>('.nm')
-  if (nm) nm.textContent = s.name ?? s.title ?? 'shell'
+  if (nm) nm.textContent = name
+  const bigNm = tile.querySelector<HTMLElement>('.big-nm')
+  if (bigNm) bigNm.textContent = name
   const cwd = tile.querySelector<HTMLElement>('.cwd')
   if (cwd) cwd.textContent = s.cwd.split('/').filter(Boolean).pop() ?? ''
   tile.title = `${legendForSlot(s.slot)} — ${s.cwd}`
