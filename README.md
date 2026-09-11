@@ -100,6 +100,23 @@ npm i -g ./packages/server          # install this checkout as `tring`
 Flags: `--port` (7331), `--host` (127.0.0.1), `--token`, `--scrollback` (5000),
 `--idle-ms` (3000), `--shell`, `--no-open`, `--no-update-check`, `--version`.
 
+## On a phone
+
+Below 720px wide tring stops drawing the ring. The focus terminal fills the screen, and a
+bar under the project tabs shows which session you are in. Tap it to get the same picker
+`Ctrl+Space` opens on desktop, as a sheet you can thumb through; the button beside it jumps
+to the next finished session and counts how many are waiting.
+
+The daemon only listens on `127.0.0.1` by default. To reach it from a phone, bind it to
+the network and require a token:
+
+```
+tring --host 0.0.0.0 --token some-long-secret
+```
+
+then open `http://<your-machine>:7331/?token=some-long-secret` on the phone. A private
+network such as Tailscale is the safer way to do this than opening the port on a LAN.
+
 ## Projects
 
 A project is a name and a root directory, and it owns its own 16 slots and its own

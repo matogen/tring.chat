@@ -571,3 +571,99 @@ body {
 }
 .field.toggle span { margin: 0; color: var(--text); font-size: 12.5px; }
 .field.toggle input { width: 15px; height: 15px; accent-color: var(--emerald); }
+
+/* ---------- phone view (spec §5.11) ---------- */
+
+/*
+ * The switcher stands in for the ring below the breakpoint: which session is
+ * in the centre, a tap to open the picker, a tap to the next finished one.
+ * Its rules live outside the media query so `hidden` is the only switch; the
+ * query below is what hides the ring and reshapes the picker into a sheet.
+ */
+#switcher {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+}
+#switcher button {
+  height: 44px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1 var(--mono);
+  cursor: pointer;
+}
+#switcher .current {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border-left: 3px solid var(--status, var(--line-2));
+  text-align: left;
+}
+#switcher .current .key { color: var(--emerald); font-weight: 700; }
+#switcher .current .nm { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#switcher .current .tag { color: var(--status, var(--dim)); font-size: 11px; }
+#switcher .current .chev { display: grid; color: var(--muted); }
+#switcher .next {
+  flex: 0 0 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--muted);
+}
+#switcher .next:disabled { color: var(--dim); opacity: .5; cursor: default; }
+#switcher .next svg { display: block; }
+
+/* Desktop has the key legend; the buttons are the phone's version of it. */
+.picker-actions { display: none; }
+
+@media (max-width: 720px) {
+  /* The ring is not drawn: tiles are unreadable at this size and the one
+     terminal you can read wants every pixel. Tiles stay in the DOM so slot
+     bookkeeping is untouched; a hidden canvas simply never paints. */
+  #ring { display: flex; flex-direction: column; padding: 6px; }
+  /* `#ring .tile`, not `.tile`: `.tile.empty` sets display: grid and outranks
+     a lone class, and an empty tile that stays visible stacks under the
+     terminal as a dashed sliver. */
+  #ring .tile { display: none; }
+  .focus-cell { flex: 1 1 auto; }
+
+  /* The picker becomes a bottom sheet with rows sized for thumbs. */
+  #overlay { place-items: end stretch; }
+  .panel {
+    width: 100%;
+    max-height: 78vh;
+    border-bottom: none;
+    border-radius: 10px 10px 0 0;
+    padding-bottom: max(24px, env(safe-area-inset-bottom));
+  }
+  /* The list scrolls inside the sheet so the buttons below it stay in reach. */
+  .panel.picker { display: flex; flex-direction: column; }
+  .panel.picker .rows { flex: 1 1 auto; min-height: 0; overflow: hidden auto; }
+  .row { min-height: 44px; align-items: center; padding: 0 12px; font-size: 13px; }
+  .row .key { min-width: 20px; }
+  /* A shell's window title is a whole path; the row keeps its width. */
+  .row .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .tag { flex: 0 0 auto; }
+  .btn:disabled { opacity: .45; cursor: default; }
+  .picker-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+  }
+  .picker-actions .btn { flex: 1 1 auto; height: 44px; }
+  .legend { display: none; }
+
+  /* Ring size is a desktop choice; the phone has no ring to size. */
+  .ring-size { display: none; }
+}

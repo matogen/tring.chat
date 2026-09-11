@@ -5,6 +5,12 @@ Status: approved design, awaiting implementation plan
 
 ## 0. Changelog
 
+**2026-09-11 — Phone view.** Below 720px the ring is not drawn and a switcher bar
+(§5.11) takes its place: the focused session's slot, name and status, a tap to open the
+picker, a tap to the next finished session. The picker becomes a bottom sheet with 44px
+rows and two buttons standing in for its key legend. Nothing changes on the daemon or in
+the protocol; the daemon still owns sixteen slots per project.
+
 **2026-09-04 — Claude usage view.** An optional non-terminal view (§4.5, §5.6, §5.10)
 reporting what Claude Code has spent. It is a **view mode, not a project**: no slots, no
 root, no shells, nothing persisted by `ProjectManager`. `GET /api/usage` serves it; the
@@ -528,6 +534,38 @@ both carry `display: grid`, so `el.hidden = true` silently did nothing and the t
 split the screen. And only a real limit gets amber and red: a per-project bar is scaled
 against the busiest project, so its top row is always 100% and would always look alarming
 while meaning nothing of the sort.
+
+### 5.11 Phone view
+
+`(max-width: 720px)` — `MOBILE_QUERY` in `switcher.ts` — is the one breakpoint. Below it:
+
+- **The ring is not drawn.** `#ring` becomes a block holding only the focus cell, and
+  `.tile` is `display: none`. Tiles stay in the DOM: `renderRing` and `paintStatuses`
+  are untouched, and a hidden canvas has zero width, which `Thumbnail.paint` already
+  treats as "nothing to draw". Thumbnails were never readable at phone size, and the one
+  terminal you can read wants every pixel.
+- **A switcher bar sits under the project bar** (`#switcher`, rendered by
+  `renderSwitcher`). Left, a button carrying the focused session's slot number, name and
+  status with the status colour on its edge, exactly as a tile would show them; tapping
+  it opens the picker. Right, a "next finished" button with the mint badge counting this
+  project's finished sessions, disabled at zero. The count is per project because
+  `nextDone` walks the viewed project's slots; the tab badges still carry the others.
+- **The picker is the same picker, as a bottom sheet.** `#overlay` anchors the panel to
+  the bottom edge, rows grow to 44px, and a `.picker-actions` row with "Next finished"
+  and "New session" replaces the key legend, which is hidden. Both buttons call the same
+  functions the `n` and `c` keys do.
+- **The settings dialog hides ring size.** There is no ring to size; the choice is kept
+  in `localStorage` for when the window is wide again.
+
+`paintSwitcher` runs from `paintStatuses`, from the usage view's show/hide, and from the
+media query's `change` event, which also refits the terminal — crossing the breakpoint
+changes the terminal's size and what surrounds it in the same instant. The bar is
+`hidden` whenever the query does not match or the usage view is up, so on desktop the
+element costs nothing.
+
+Reaching the daemon from a phone is a deployment question, not a UI one: it binds to
+`127.0.0.1` by default, so `--host 0.0.0.0 --token <secret>` or a private network such
+as Tailscale is needed. The README says so.
 
 ## 6. Distribution
 
