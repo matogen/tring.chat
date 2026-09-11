@@ -175,6 +175,15 @@ describe('HTTP API', () => {
     expect(ok.status).toBe(200)
   })
 
+  it('serves the web app manifest with the type browsers require to install it', async () => {
+    const r = await rig()
+    await mkdir(path.join(r.dir, 'dist'), { recursive: true })
+    await writeFile(path.join(r.dir, 'dist', 'manifest.webmanifest'), '{"name":"tring"}')
+    const res = await fetch(`${r.base}/manifest.webmanifest`)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('application/manifest+json')
+  })
+
   it('serves a placeholder page while the web bundle is unbuilt', async () => {
     const r = await rig()
     const res = await fetch(`${r.base}/`)

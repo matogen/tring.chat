@@ -16,6 +16,8 @@ const MIME: Record<string, string> = {
   '.woff': 'font/woff',
   '.png': 'image/png',
   '.ico': 'image/x-icon',
+  // Browsers refuse to install a PWA whose manifest is served as anything else.
+  '.webmanifest': 'application/manifest+json',
 }
 
 export interface HttpOptions {
