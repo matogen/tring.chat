@@ -116,6 +116,18 @@ tring --host 0.0.0.0 --token some-long-secret
 
 then open `http://<your-machine>:7331/?token=some-long-secret` on the phone. A private
 network such as Tailscale is the safer way to do this than opening the port on a LAN.
+## Install it as an app
+
+tring is a progressive web app. Once it is open in a browser, install it and it gets its
+own icon and window with no address bar:
+
+- **Android (Chrome):** the browser menu, then *Install app* or *Add to Home screen*.
+- **iPhone and iPad (Safari):** the share button, then *Add to Home Screen*.
+- **Desktop (Chrome, Edge):** the install icon at the right of the address bar.
+
+If the daemon runs with `--token`, open it once with `?token=<secret>` on the URL before
+installing. The token is remembered in the browser, so the installed app starts without
+it. Opening a link with a new token replaces the remembered one.
 
 ## Projects
 

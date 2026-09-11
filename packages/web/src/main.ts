@@ -652,6 +652,12 @@ function hideToast(): void {
   toast = null
 }
 
+// Installable as an app (spec §5.12). Production only: Vite's dev server does
+// not serve the worker, and a worker registered against it would shadow HMR.
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => { /* still a web page */ })
+}
+
 window.addEventListener('resize', () => fitTerminal())
 // Crossing the phone breakpoint swaps ring for switcher, and the terminal
 // changes size with it, so both are redone together.

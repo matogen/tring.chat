@@ -10,6 +10,9 @@ Status: approved design, awaiting implementation plan
 picker, a tap to the next finished session. The picker becomes a bottom sheet with 44px
 rows and two buttons standing in for its key legend. Nothing changes on the daemon or in
 the protocol; the daemon still owns sixteen slots per project.
+**2026-09-11 — Installable.** A web app manifest, icons and a passthrough service worker
+(§5.12) make tring a progressive web app. The bearer token is remembered in
+`localStorage` on the first visit so the installed app can start from a bare URL.
 
 **2026-09-04 — Claude usage view.** An optional non-terminal view (§4.5, §5.6, §5.10)
 reporting what Claude Code has spent. It is a **view mode, not a project**: no slots, no
@@ -566,6 +569,24 @@ element costs nothing.
 Reaching the daemon from a phone is a deployment question, not a UI one: it binds to
 `127.0.0.1` by default, so `--host 0.0.0.0 --token <secret>` or a private network such
 as Tailscale is needed. The README says so.
+### 5.12 Installable app
+
+`packages/web/public/` ships `manifest.webmanifest`, `sw.js` and `icons/`; Vite copies
+them to the bundle root unchanged, and the daemon serves `.webmanifest` as
+`application/manifest+json`, without which no browser offers to install. The manifest
+declares `display: standalone`, the brand background and bar colours, and 192, 512 and
+maskable 512 icons rasterised from the favicon mark; iOS reads `apple-touch-icon` and the
+`apple-mobile-web-app-*` metas from `index.html` instead.
+
+The service worker exists only so every browser counts the page as installable. It
+passes every request straight through — a terminal deck has no offline mode worth having,
+and caching `index.html` would pin a stale bundle across daemon upgrades. It is registered
+in production builds only, so it never shadows Vite's dev server.
+
+`resolveToken` in `token.ts` is what makes the installed app usable behind `--token`: the
+manifest's `start_url` cannot carry a query string, so a token found on the URL is stored
+under `tring.token` and read back on later starts. A token on the URL always wins, so a
+rotated secret needs the link opened once more and nothing else.
 
 ## 6. Distribution
 
