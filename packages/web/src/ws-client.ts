@@ -5,8 +5,10 @@ import {
 /** In dev Vite serves the page; the daemon is still the one holding the PTYs. */
 export const DAEMON = import.meta.env.DEV ? 'http://127.0.0.1:7331' : location.origin
 
+import { resolveToken } from './token.ts'
+
 /** Present only when the daemon was started with --token (LAN binding). */
-export const TOKEN = new URLSearchParams(location.search).get('token') ?? undefined
+export const TOKEN = resolveToken(location.search, localStorage)
 
 export async function api<T>(path: string): Promise<T> {
   const res = await fetch(`${DAEMON}${path}`, {

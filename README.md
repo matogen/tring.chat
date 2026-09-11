@@ -100,6 +100,19 @@ npm i -g ./packages/server          # install this checkout as `tring`
 Flags: `--port` (7331), `--host` (127.0.0.1), `--token`, `--scrollback` (5000),
 `--idle-ms` (3000), `--shell`, `--no-open`, `--no-update-check`, `--version`.
 
+## Install it as an app
+
+tring is a progressive web app. Once it is open in a browser, install it and it gets its
+own icon and window with no address bar:
+
+- **Android (Chrome):** the browser menu, then *Install app* or *Add to Home screen*.
+- **iPhone and iPad (Safari):** the share button, then *Add to Home Screen*.
+- **Desktop (Chrome, Edge):** the install icon at the right of the address bar.
+
+If the daemon runs with `--token`, open it once with `?token=<secret>` on the URL before
+installing. The token is remembered in the browser, so the installed app starts without
+it. Opening a link with a new token replaces the remembered one.
+
 ## Projects
 
 A project is a name and a root directory, and it owns its own 16 slots and its own
