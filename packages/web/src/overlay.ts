@@ -334,6 +334,7 @@ export const TILE_COLORS = [
 export function openSessionDialog(
   session: SessionInfo,
   onSubmit: (v: { name: string; color: string | null }) => void,
+  onDelete?: () => void,
 ): void {
   const panel = el('div', 'panel')
   panel.append(el('h2', undefined, `Slot ${session.slot}`))
@@ -375,6 +376,15 @@ export function openSessionDialog(
   form.append(colorField)
 
   const actions = el('div', 'actions')
+  if (onDelete) {
+    // Same shape as the project dialog: the destructive action sits apart from
+    // Cancel/Save so it is never the button you hit on the way to Save.
+    const del = el('button', 'btn danger', 'Delete') as HTMLButtonElement
+    del.type = 'button'
+    del.onclick = () => { close(); onDelete() }
+    actions.append(del)
+    actions.style.justifyContent = 'space-between'
+  }
   const cancel = el('button', 'btn', 'Cancel') as HTMLButtonElement
   cancel.type = 'button'
   cancel.onclick = () => close()
