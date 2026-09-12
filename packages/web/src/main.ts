@@ -17,11 +17,13 @@ import {
   applyRing, placeInGrid, RING_SIZES, ringSize, setRingSize, type RingSize,
 } from './ring-layout.ts'
 import { renderBar } from './project-bar.ts'
+import { MOBILE_QUERY, renderSwitcher } from './switcher.ts'
 import * as usage from './usage-panel.ts'
 import * as ui from './overlay.ts'
 import { tring } from './sound.ts'
 
 const barEl = document.getElementById('bar') as HTMLElement
+const switcherEl = document.getElementById('switcher') as HTMLElement
 const ringEl = document.getElementById('ring') as HTMLElement
 const usageEl = document.getElementById('usage') as HTMLElement
 
@@ -35,6 +37,8 @@ let overlayMode: 'picker' | 'projects' | null = null
 let update: UpdateInfo | null = null
 let viewMode: 'ring' | 'usage' = 'ring'
 let usageTimer: ReturnType<typeof setInterval> | null = null
+/** The phone view: no ring, a switcher bar instead (spec §5.11). */
+const mobile = window.matchMedia(MOBILE_QUERY)
 
 const thumbs = new Map<string, Thumbnail>()
 /** The last screen seen per session, so a rebuilt tile is not born blank. */
@@ -43,6 +47,11 @@ const tiles = new Map<number, HTMLElement>()
 /** Project id -> the session you were last in, so switching back returns you. */
 const lastFocused = new Map<string, string>()
 let restoreFocusFor: string | null = null
+/**
+ * On a phone a session you just created has no tile to tap, so it is focused
+ * the moment it arrives. Desktop keeps focus explicit: the ring never moves you.
+ */
+let focusOnArrival: number | null = null
 
 /* ---------- terminal ---------- */
 
@@ -98,6 +107,7 @@ function handleMessage(msg: ServerMessage): void {
       viewedId = msg.activeProjectId ?? projects[0]?.id ?? null
       render()
       restoreProjectFocus()
+      focusArrival()
       if (usage.wasActive()) showUsage()
       maybeAskForFirstProject()
       break
@@ -307,8 +317,28 @@ function paintStatuses(): void {
     paintTile(tile, sessionAt(slot))
   }
   paintBar()
+  paintSwitcher()
   const done = globalDone()
   document.title = done > 0 ? `(${done}) tring` : 'tring'
+}
+
+/**
+ * On a phone the ring is hidden by the stylesheet, so this bar is the only
+ * thing that says which session is in the centre and how many have finished.
+ * The count is this project's: "next finished" walks this project's slots.
+ */
+let switcherSig = ''
+function paintSwitcher(): void {
+  switcherEl.hidden = !mobile.matches || viewMode !== 'ring'
+  if (switcherEl.hidden) { switcherSig = ''; return }
+  const focused = focusedId ? sessionById(focusedId) ?? null : null
+  const done = sessions().filter((s) => s.status === 'done').length
+  // Rebuilt only when what it shows changes. Every status message repaints,
+  // and a button replaced between finger-down and finger-up is a lost tap.
+  const sig = `${focused?.id}|${focused?.status}|${focused?.name}|${focused?.title}|${done}`
+  if (sig === switcherSig) return
+  switcherSig = sig
+  renderSwitcher(switcherEl, focused, done, { onOpen: openPicker, onNext: nextDone })
 }
 
 /* ---------- actions ---------- */
@@ -357,6 +387,7 @@ function showUsage(): void {
   usageTimer = setInterval(() => void refreshUsage(), 30_000)
   usage.setActive(true)
   paintBar()
+  paintSwitcher()
 }
 
 function showRing(): void {
@@ -368,6 +399,7 @@ function showRing(): void {
   ringEl.hidden = false
   usage.setActive(false)
   paintBar()
+  paintSwitcher()
   requestAnimationFrame(() => fitTerminal())
 }
 
@@ -414,6 +446,15 @@ function activateProject(id: string): void {
   ws.send({ type: 'activateProject', projectId: id })
 }
 
+function focusArrival(): void {
+  const slot = focusOnArrival
+  if (slot === null) return
+  const s = sessionAt(slot)
+  if (!s) return
+  focusOnArrival = null
+  focusSession(s.id)
+}
+
 /** Puts you back in the session you were last using in this project. */
 function restoreProjectFocus(): void {
   const want = restoreFocusFor
@@ -439,6 +480,7 @@ function promptNewSession(slot: number): void {
   const project = viewed()
   if (!project) return
   ui.openNewSessionDialog({ cwd: project.root, slot }, (v) => {
+    if (mobile.matches) focusOnArrival = slot
     ws.send({ type: 'create', projectId: project.id, slot, cwd: v.cwd, ...(v.command ? { command: v.command } : {}), ...(v.name ? { name: v.name } : {}) })
   })
 }
@@ -498,14 +540,29 @@ document.addEventListener('keydown', (e) => {
 
   if (isPrefix(e)) {
     e.preventDefault()
-    showRing()
-    overlayMode = 'picker'
-    ui.openPicker(viewed(), projects, globalDone(), {
-      onPickSlot: (slot) => focusSlot(slot),
-      onPickProject: (id) => activateProject(id),
-    })
+    openPicker()
   }
 })
+
+/** Ctrl+Space on desktop, a tap on the switcher on a phone: the same picker. */
+function openPicker(): void {
+  if (ui.isOpen()) return
+  showRing()
+  overlayMode = 'picker'
+  ui.openPicker(viewed(), projects, globalDone(), {
+    onPickSlot: (slot) => { overlayMode = null; focusSlot(slot) },
+    onPickProject: (id) => { overlayMode = null; activateProject(id) },
+    onNextDone: () => { overlayMode = null; nextDone() },
+    onNewSession: () => { overlayMode = null; newSessionInFirstEmptySlot() },
+  })
+}
+
+function newSessionInFirstEmptySlot(): void {
+  const size = effectiveSize()
+  const empty = [...Array(size)].map((_, i) => i + 1).find((s) => !sessionAt(s))
+  if (empty) promptNewSession(empty)
+  else showToast(`all ${size} slots are full`)
+}
 
 function pickerKey(e: KeyboardEvent): void {
   if (overlayMode === null) return // a dialog is up; let it have its keys
@@ -558,14 +615,10 @@ function pickerKey(e: KeyboardEvent): void {
       overlayMode = 'projects'
       ui.openProjectPicker(projects, (id) => { overlayMode = null; activateProject(id) })
       break
-    case 'new-session': {
+    case 'new-session':
       ui.close(); overlayMode = null
-      const size = effectiveSize()
-      const empty = [...Array(size)].map((_, i) => i + 1).find((s) => !sessionAt(s))
-      if (empty) promptNewSession(empty)
-      else showToast(`all ${size} slots are full`)
+      newSessionInFirstEmptySlot()
       break
-    }
     case 'rename':
       if (!current) break
       ui.close(); overlayMode = null
@@ -606,4 +659,10 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
 }
 
 window.addEventListener('resize', () => fitTerminal())
+// Crossing the phone breakpoint swaps ring for switcher, and the terminal
+// changes size with it, so both are redone together.
+mobile.addEventListener('change', () => {
+  paintSwitcher()
+  requestAnimationFrame(() => fitTerminal())
+})
 ws.connect()

@@ -1,6 +1,7 @@
 import type { ProjectInfo, SessionInfo } from '@tring/shared/protocol'
 import { legendForSlot } from '@tring/shared/keymap'
 import { RING_SIZES, ringSize, type RingSize } from './ring-layout.ts'
+import { MOBILE_QUERY } from './switcher.ts'
 import { api } from './ws-client.ts'
 
 const root = document.getElementById('overlay') as HTMLElement
@@ -109,6 +110,8 @@ function directoryBrowser(input: HTMLInputElement): HTMLElement {
 export interface PickerCallbacks {
   onPickSlot: (slot: number) => void
   onPickProject: (projectId: string) => void
+  onNextDone: () => void
+  onNewSession: () => void
 }
 
 export function openPicker(
@@ -117,7 +120,7 @@ export function openPicker(
   doneCount: number,
   cb: PickerCallbacks,
 ): void {
-  const panel = el('div', 'panel')
+  const panel = el('div', 'panel picker')
   panel.append(el('h2', undefined, project ? project.name : 'No project'))
   panel.append(el('p', 'hint',
     `${doneCount} session${doneCount === 1 ? '' : 's'} finished across all projects`))
@@ -126,19 +129,34 @@ export function openPicker(
   const bySlot = new Map<number, SessionInfo>()
   for (const s of project?.sessions ?? []) bySlot.set(s.slot, s)
 
+  // A phone has no Ctrl or Shift to press: the key column is just the slot.
+  const touch = window.matchMedia(MOBILE_QUERY).matches
   for (let slot = 1; slot <= ringSize(); slot++) {
     const s = bySlot.get(slot)
     const row = el('button', `row st-${s?.status ?? 'idle'}`)
     // busy sessions are dimmed but still selectable
     if (s?.status === 'busy') row.classList.add('dim')
     if (!s) row.classList.add('dim')
-    row.append(el('span', 'key', legendForSlot(slot)))
+    row.append(el('span', 'key', touch ? String(slot) : legendForSlot(slot)))
     row.append(el('span', 'nm', s ? (s.name ?? s.title ?? s.cwd.split('/').pop() ?? 'shell') : '— empty'))
     if (s) row.append(el('span', 'tag', s.status))
     row.onclick = () => { close(); cb.onPickSlot(slot) }
     rows.append(row)
   }
   panel.append(rows)
+
+  // What the legend's keys do, as buttons, for a screen with no keyboard.
+  // Shown only in the phone view (style.css); the legend takes over on desktop.
+  const actions = el('div', 'picker-actions')
+  const next = el('button', 'btn', 'Next finished') as HTMLButtonElement
+  next.type = 'button'
+  next.disabled = doneCount === 0
+  next.onclick = () => { close(); cb.onNextDone() }
+  const create = el('button', 'btn', 'New session') as HTMLButtonElement
+  create.type = 'button'
+  create.onclick = () => { close(); cb.onNewSession() }
+  actions.append(next, create)
+  panel.append(actions)
 
   const legend = el('div', 'legend')
   legend.innerHTML =
@@ -386,7 +404,7 @@ export function openSettingsDialog(current: Settings, onApply: (next: Settings) 
   panel.append(el('h2', undefined, 'Settings'))
 
   let ring = current.ring
-  const ringField = el('div', 'field')
+  const ringField = el('div', 'field ring-size')
   ringField.append(el('span', undefined, 'Terminals around the focus'))
   const choices = el('div', 'choices')
   for (const size of RING_SIZES) {
@@ -404,7 +422,7 @@ export function openSettingsDialog(current: Settings, onApply: (next: Settings) 
   ringField.append(choices)
   panel.append(ringField)
 
-  panel.append(el('p', 'hint',
+  panel.append(el('p', 'hint ring-size',
     'Slots stay where they are. Shrinking needs the slots above the new size ' +
     'to be empty first, so nothing is killed or hidden behind your back.'))
 
