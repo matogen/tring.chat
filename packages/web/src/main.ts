@@ -12,6 +12,7 @@ import type {
 import { actionForEvent, isPrefix, legendForSlot, slotForEvent } from '@tring/shared/keymap'
 import { WsClient } from './ws-client.ts'
 import { FocusTerminal } from './focus-terminal.ts'
+import { installDropTarget } from './drop.ts'
 import { Thumbnail } from './thumbnail.ts'
 import {
   applyRing, placeInGrid, RING_SIZES, ringSize, setRingSize, type RingSize,
@@ -72,6 +73,14 @@ focusTerm.onInput = (data) => {
 // The prefix never reaches the PTY, and nothing reaches it while an overlay
 // is up (spec §5.4).
 focusTerm.shouldSendKey = (e) => !ui.isOpen() && !isPrefix(e)
+
+installDropTarget({
+  focused: () => focusedId !== null,
+  paste: (text) => {
+    if (focusedId) ws.send({ type: 'input', id: focusedId, data: text })
+  },
+  notify: flashToast,
+})
 
 /* ---------- state ---------- */
 
@@ -650,6 +659,13 @@ function showToast(message: string): void {
 function hideToast(): void {
   toast?.remove()
   toast = null
+}
+/** For toasts that report something finished, rather than a state you are in. */
+let toastTimer: ReturnType<typeof setTimeout> | null = null
+function flashToast(message: string): void {
+  showToast(message)
+  if (toastTimer) clearTimeout(toastTimer)
+  toastTimer = setTimeout(hideToast, 4000)
 }
 
 // Installable as an app (spec §5.12). Production only: Vite's dev server does

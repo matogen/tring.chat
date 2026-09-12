@@ -667,3 +667,9 @@ body {
   /* Ring size is a desktop choice; the phone has no ring to size. */
   .ring-size { display: none; }
 }
+
+/* Something is being dragged over the window: say where it will land. */
+body.dropping .focus-cell {
+  border-color: var(--mint);
+  box-shadow: inset 0 0 0 1px var(--mint);
+}

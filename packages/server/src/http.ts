@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs'
-import { readdir, stat } from 'node:fs/promises'
+import { mkdir, readdir, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import path from 'node:path'
@@ -40,6 +40,26 @@ const readBody = (req: IncomingMessage): Promise<string> =>
       if (data.length > 1e6) req.destroy() // hooks post nothing large
     })
     req.on('end', () => resolve(data))
+  })
+
+/** Big enough for a screenshot or a log, small enough that /tmp survives. */
+const DROP_MAX = 25_000_000
+
+const readRaw = (req: IncomingMessage, cap: number): Promise<Buffer> =>
+  new Promise((resolve, reject) => {
+    const parts: Buffer[] = []
+    let size = 0
+    req.on('data', (c: Buffer) => {
+      size += c.length
+      if (size > cap) {
+        req.destroy()
+        reject(new Error('too large'))
+        return
+      }
+      parts.push(c)
+    })
+    req.on('end', () => resolve(Buffer.concat(parts)))
+    req.on('error', reject)
   })
 
 /**
@@ -124,6 +144,35 @@ export function createHandler(opts: HttpOptions) {
       } catch {
         usage = null
         return json(res, 500, { error: 'cannot read Claude Code transcripts' })
+      }
+    }
+
+    // A dropped file. Chrome never tells a page where a file lives on disk,
+    // and with a Windows browser driving a WSL daemon that path would name the
+    // wrong machine anyway — so the bytes come across and the daemon hands back
+    // a path it can actually open. Same reasoning as /api/fs above.
+    if (url.pathname === '/api/drop' && req.method === 'POST') {
+      // The timestamp prefix is what makes traversal impossible, whatever the
+      // client called the file.
+      const safe = (url.searchParams.get('name') ?? '').replace(/[^\w.-]+/g, '_').slice(0, 80)
+      // ponytail: dropped files accumulate in the OS temp dir and are only
+      // reaped by whatever cleans /tmp. Sweep on daemon start if it bites.
+      const dir = path.join(os.tmpdir(), 'tring-drops')
+      // Refused up front, so the browser reads a reason instead of a reset
+      // socket. The cap inside readRaw still stands for a header that lies.
+      if (Number(req.headers['content-length'] ?? 0) > DROP_MAX) {
+        json(res, 413, { error: `file is bigger than ${DROP_MAX / 1e6}MB` })
+        req.resume()
+        return
+      }
+      try {
+        const bytes = await readRaw(req, DROP_MAX)
+        await mkdir(dir, { recursive: true })
+        const file = path.join(dir, `${Date.now().toString(36)}-${safe || 'file'}`)
+        await writeFile(file, bytes)
+        return json(res, 200, { path: file })
+      } catch {
+        return json(res, 413, { error: `file is bigger than ${DROP_MAX / 1e6}MB` })
       }
     }
 
