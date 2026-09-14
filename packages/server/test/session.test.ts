@@ -4,11 +4,11 @@ import { Session } from '../src/session.ts'
 const live: Session[] = []
 afterEach(() => { for (const s of live.splice(0)) s.dispose() })
 
-function make(command?: string, idleMs = 200): Session {
+function make(command?: string, idleMs = 200, token?: string | null): Session {
   const s = new Session({
     id: 's1', projectId: 'p1', projectName: 'demo', slot: 1,
     cwd: process.cwd(), command: command ?? null,
-    url: 'http://127.0.0.1:7331', idleMs, scrollback: 100,
+    url: 'http://127.0.0.1:7331', token: token ?? null, idleMs, scrollback: 100,
   })
   live.push(s)
   return s
@@ -49,6 +49,29 @@ describe('Session', () => {
     s.write('echo "[$TRING_SLOT|$TRING_PROJECT|$TRING_SESSION_ID]"\n')
     await waitFor(() => s.serialize().includes('[1|demo|s1]'))
     expect(s.serialize()).toContain('[1|demo|s1]')
+  })
+
+  it('hands the hook the token it now needs to authenticate with', async () => {
+    const s = make(undefined, 200, 'f'.repeat(64))
+    s.write('echo "[$TRING_TOKEN]"\n')
+    await waitFor(() => s.serialize().includes(`[${'f'.repeat(64)}]`))
+    expect(s.serialize()).toContain(`[${'f'.repeat(64)}]`)
+  })
+
+  it('leaves no stale TRING_TOKEN behind when the daemon has none', async () => {
+    // The daemon copies its own environment into every shell, so a
+    // TRING_TOKEN it inherited must not be passed off as this daemon's.
+    const before = process.env['TRING_TOKEN']
+    process.env['TRING_TOKEN'] = 'inherited-from-somewhere-else'
+    try {
+      const s = make(undefined, 200, null)
+      s.write('echo "[${TRING_TOKEN:-unset}]"\n')
+      await waitFor(() => s.serialize().includes('[unset]'))
+      expect(s.serialize()).toContain('[unset]')
+    } finally {
+      if (before === undefined) delete process.env['TRING_TOKEN']
+      else process.env['TRING_TOKEN'] = before
+    }
   })
 
   it('reports the exit code and lands in exited', async () => {

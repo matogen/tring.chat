@@ -97,9 +97,9 @@ npm test                            # vitest
 npm i -g ./packages/server          # install this checkout as `tring`
 ```
 
-Flags: `--port` (7331), `--host` (127.0.0.1), `--token`, `--scrollback` (5000),
-`--idle-ms` (3000), `--shell`, `--fs-root`, `--allow-origin`, `--insecure-no-token`,
-`--no-open`, `--no-update-check`, `--version`.
+Flags: `--port` (7331), `--host` (127.0.0.1), `--token`, `--tls-cert`, `--tls-key`,
+`--scrollback` (5000), `--idle-ms` (3000), `--shell`, `--fs-root`, `--allow-origin`,
+`--insecure-no-token`, `--no-open`, `--no-update-check`, `--version`.
 
 ## On a phone
 
@@ -108,48 +108,88 @@ bar under the project tabs shows which session you are in. Tap it to get the sam
 `Ctrl+Space` opens on desktop, as a sheet you can thumb through; the button beside it jumps
 to the next finished session and counts how many are waiting.
 
-The daemon only listens on `127.0.0.1` by default. To reach it from a phone, bind it to
-the network and require a token:
+The daemon only listens on `127.0.0.1` by default. Reaching it from a phone means binding
+it to the network, and that traffic has to be encrypted — it carries the token, every
+keystroke you type into a shell and everything the shell prints back, which is exactly
+where SSH passphrases, API keys and `.env` contents live.
+
+**Use an encrypted overlay network.** Tailscale or WireGuard, with the daemon still on the
+address that network gives you. This is the supported way, not the cautious one:
 
 ```
-tring --host 0.0.0.0 --token "$(openssl rand -hex 32)"
+tring --host 100.x.y.z          # the Tailscale address of this machine
 ```
 
-then open `http://<your-machine>:7331/?token=some-long-secret` on the phone. A private
-network such as Tailscale is the safer way to do this than opening the port on a LAN.
+If you must serve the LAN directly, terminate TLS yourself:
 
-Binding off localhost without a token is refused at startup rather than warned about: the
-daemon spawns shells, and off loopback the token is the only thing in front of them.
-`--insecure-no-token` overrides that if the network is already trusted that far.
+```
+tring --host 0.0.0.0 --tls-cert cert.pem --tls-key key.pem
+```
+
+Then open the link the daemon prints on the phone. `--tls-cert`/`--tls-key` switch the
+daemon to `https` and `wss`; the page follows automatically. Bound off localhost over
+plain `http`, the daemon warns at startup, because anyone on that network segment can read
+the token off the wire and then has a shell.
+
+Binding off localhost with `--insecure-no-token` is refused at startup rather than warned
+about: the daemon spawns shells, and off loopback the token is the only thing in front of
+them.
 
 The token is remembered on that first visit and then taken back off the address bar, but
 a secret that has travelled in a URL is only as private as the URL: it has already been
 through your history, any proxy log on the way, and whatever chat app you sent the link
-in. Treat the link as the secret, and rotate with a new `--token` rather than assuming an
-old link has expired.
+in. Treat the link as the secret, and rotate it by deleting `~/.config/tring/token` (or
+passing a new `--token`) rather than assuming an old link has expired.
 
 ## Who can reach the daemon
 
-The daemon spawns shells, so it only answers requests from the page it serves itself.
-That check matters more than the bind address: the same-origin policy does not cover
-WebSockets, so without it any website you happened to have open could open a socket to
-`ws://127.0.0.1:7331` and type into your terminals. Binding to loopback keeps other
-machines out, not other websites.
+The daemon spawns shells, so **it requires a bearer token by default, on loopback as much
+as off it.** Binding to `127.0.0.1` is not an authentication boundary: every process on
+the machine can reach it — a postinstall script in some dependency of some project, a
+second user account, a container sharing the host network namespace — and "can run code
+on this box as any user" is not a boundary worth having in front of a shell.
+
+If you do not pass `--token`, one is generated on first run and kept at
+`~/.config/tring/token` with mode `0600`. It is stable across restarts, and the daemon
+hands it to the browser window it opens, so there is nothing to copy by hand.
+
+- **Scripts on the same machine** read the token back out of that file, which is what
+  keeps curl and `/api/sessions` working while other users on the box stay out:
+
+  ```
+  curl -s -H "Authorization: Bearer $(cat ~/.config/tring/token)" \
+    http://127.0.0.1:7331/api/sessions
+  ```
+
+  Inside a tring session there is nothing to read: `$TRING_TOKEN` is already set.
+- **Another browser** needs the link once — `http://127.0.0.1:7331/?token=<secret>`. The
+  page stores it and scrubs it from the address bar, so installed PWAs start without it.
+- `--insecure-no-token` turns authentication off entirely, and says so at startup. It is
+  the only way to get the old unauthenticated behaviour back.
+
+On top of the token, the daemon only answers requests from the page it serves itself. The
+same-origin policy does not cover WebSockets, so without that check any website you
+happened to have open could open a socket to `ws://127.0.0.1:7331` and type into your
+terminals.
 
 - A browser page from another origin is refused at the handshake. So is a domain rebound
   to 127.0.0.1, while the daemon is on loopback.
-- Non-browser clients send no `Origin` and are unaffected — the Claude Code hooks, curl
-  and `/api/sessions` scripts keep working exactly as before.
+- Non-browser clients send no `Origin` and are unaffected by *that* check — they need the
+  token instead.
 - `--allow-origin <origin>` adds one, for a front end you serve yourself. `npm run dev`
   sets it for the Vite server on :5173.
-- `--token` is what gates access once you bind past loopback, and is compared in constant
-  time. The origin check cannot cover for it there: the hostname is then your own and
-  unguessable to the daemon, so `Host` goes unpinned and a rebound name matches it. That
-  is why a token is required rather than recommended off loopback.
+- The token is compared in constant time. Off loopback the origin check cannot cover for
+  it: the hostname is then your own and unguessable to the daemon, so `Host` goes unpinned
+  and a rebound name matches it.
 - The directory picker (`/api/fs`) browses your home directory and the roots of projects
   you have already created. `--fs-root <path>` adds another — useful if your projects
   live somewhere like `D:\work`. Paths are resolved through symlinks before the check, so
   a link inside a root is not a way back out of it.
+
+What this does **not** protect against: the browser window the daemon opens is launched
+with the token on its command line, so on a shared machine another user who can read
+`/proc/<pid>/cmdline` can read it there. The same is true of `--token` on your own command
+line. If that matters, start with `--no-open` and open the printed link by hand.
 
 ## Install it as an app
 
@@ -160,9 +200,10 @@ own icon and window with no address bar:
 - **iPhone and iPad (Safari):** the share button, then *Add to Home Screen*.
 - **Desktop (Chrome, Edge):** the install icon at the right of the address bar.
 
-If the daemon runs with `--token`, open it once with `?token=<secret>` on the URL before
-installing. The token is remembered in the browser, so the installed app starts without
-it. Opening a link with a new token replaces the remembered one.
+Open it once with `?token=<secret>` on the URL before installing — the window the daemon
+opens for you already carries it, and `~/.config/tring/token` holds it otherwise. The
+token is remembered in the browser, so the installed app starts without it. Opening a link
+with a new token replaces the remembered one.
 
 ## Projects
 
@@ -361,7 +402,7 @@ instant Claude ends its turn instead of after the idle timeout:
   "hooks": {
     "Stop": [
       { "hooks": [ { "type": "command",
-        "command": "curl -s -X POST \"$TRING_URL/api/sessions/$TRING_SESSION_ID/done\"" } ] }
+        "command": "curl -s -X POST -H \"Authorization: Bearer $TRING_TOKEN\" \"$TRING_URL/api/sessions/$TRING_SESSION_ID/done\"" } ] }
     ]
   }
 }
@@ -370,14 +411,18 @@ instant Claude ends its turn instead of after the idle timeout:
 In a PowerShell session the same hook is:
 
 ```powershell
-curl.exe -s -X POST "$env:TRING_URL/api/sessions/$env:TRING_SESSION_ID/done"
+curl.exe -s -X POST -H "Authorization: Bearer $env:TRING_TOKEN" "$env:TRING_URL/api/sessions/$env:TRING_SESSION_ID/done"
 ```
 
 `curl.exe` rather than `curl`, which PowerShell aliases to `Invoke-WebRequest`.
 
-`TRING_URL`, `TRING_SESSION_ID`, `TRING_SLOT` and `TRING_PROJECT` are set in every
-session's environment. Session ids are globally unique, so this one snippet is correct
-in every session of every project and does not change as projects come and go.
+`TRING_URL`, `TRING_TOKEN`, `TRING_SESSION_ID`, `TRING_SLOT` and `TRING_PROJECT` are set
+in every session's environment. Session ids are globally unique, so this one snippet is
+correct in every session of every project and does not change as projects come and go.
+
+The `Authorization` header is what changed when the daemon started requiring a token by
+default. A hook written against an older tring still runs, but the request now comes back
+`401` and the tile waits for the idle timeout instead of turning green immediately.
 
 ## Stack
 
