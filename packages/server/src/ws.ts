@@ -69,6 +69,9 @@ export class Hub {
     pm.onSessionBrowserPrompt = (s, url) => {
       this.broadcast({ type: 'browserPrompt', id: s.id, url })
     }
+    // A browser that would not start is a message, not a crash. The tile stays
+    // a terminal and the user is told why.
+    pm.onBrowserError = (_s, message) => this.broadcast({ type: 'error', message })
 
     // One loop for the whole hub rather than one per socket: takeSnapshot()
     // reports a change only once, so a per-socket loop would starve the second
@@ -184,6 +187,8 @@ export class Hub {
         // Awaited nowhere: launching a browser takes a second or two and the
         // socket must stay responsive. The `browser` broadcast reports the
         // result when it arrives.
+        // attachBrowser never rejects (see session-manager); this only drops
+        // the resolved value, it is not swallowing a failure.
         void pm.findManager(msg.id)?.attachBrowser(msg.id, msg.url)
         break
       case 'detachBrowser':

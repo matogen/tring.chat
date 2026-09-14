@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { BrowserControl } from '@tring/shared/browser-control'
 import type { BrowserInfo } from '@tring/shared/protocol'
 import type { AttachedBrowser, BrowserActivity } from '../src/browser.ts'
+import { describeLaunchFailure } from '../src/session-manager.ts'
 import { Session } from '../src/session.ts'
 
 /**
@@ -210,5 +211,39 @@ describe('browser activity drives the tile', () => {
     stub.fire('blocked')
     expect(s.tracker.status).toBe('done')
     expect(s.tracker.notable).toBe(true)
+  })
+})
+
+/**
+ * A browser that will not start must never take the daemon with it — the
+ * daemon's job is serving terminals, and an unhandled rejection here kills
+ * every running shell over a feature the user switched on a moment ago. Found
+ * by running it: Chromium on a fresh Linux box is missing system libraries.
+ */
+describe('describeLaunchFailure', () => {
+  it('turns a missing system library into the command that fixes it', () => {
+    const real = new Error(
+      "browserType.launchPersistentContext: Target page, context or browser has been closed\n" +
+      'Browser logs:\n\n<launching> /home/me/.cache/ms-playwright/chromium-1243/chrome ' +
+      '--disable-field-trial-config --headless\n' +
+      '[pid=86583][err] /home/me/.cache/ms-playwright/chromium-1243/chrome: ' +
+      'error while loading shared libraries: libnspr4.so: cannot open shared object file',
+    )
+    const out = describeLaunchFailure(real)
+    expect(out).toContain('libnspr4.so')
+    expect(out).toContain('playwright install-deps')
+    // Not the page of Chromium command line that arrived.
+    expect(out.length).toBeLessThan(200)
+    expect(out).not.toContain('--disable-field-trial-config')
+  })
+
+  it('points a missing browser back at the download', () => {
+    expect(describeLaunchFailure(new Error("Executable doesn't exist at /x/chrome")))
+      .toContain('not installed')
+  })
+
+  it('falls back to the first line, which is the part that says why', () => {
+    const out = describeLaunchFailure(new Error('Something broke\nstack\nstack\nstack'))
+    expect(out).toBe('Could not start the browser: Something broke')
   })
 })

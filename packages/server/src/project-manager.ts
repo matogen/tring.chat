@@ -98,6 +98,7 @@ export class ProjectManager {
   onSessionBrowser: ((s: Session) => void) | null = null
   onSessionFrame: ((s: Session, jpeg: Buffer) => void) | null = null
   onSessionBrowserPrompt: ((s: Session, url: string) => void) | null = null
+  onBrowserError: ((s: Session, message: string) => void) | null = null
 
   /**
    * Built once and shared. Constructing it loads nothing: Playwright is only
@@ -281,6 +282,7 @@ export class ProjectManager {
     mgr.onSessionBrowser = (s) => this.onSessionBrowser?.(s)
     mgr.onSessionFrame = (s, jpeg) => this.onSessionFrame?.(s, jpeg)
     mgr.onSessionBrowserPrompt = (s, url) => this.onSessionBrowserPrompt?.(s, url)
+    mgr.onBrowserError = (s, message) => this.onBrowserError?.(s, message)
     return mgr
   }
 

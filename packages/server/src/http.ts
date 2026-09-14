@@ -225,9 +225,18 @@ export function createHandler(opts: HttpOptions) {
         case 'navigate': {
           const to = body['url']
           if (typeof to !== 'string') return json(res, 400, { error: 'url is required' })
-          // Policy is enforced inside the page's own route handler, so a
-          // refusal here looks the same as one the agent caused itself.
-          await browser.navigate(to)
+          const went = await browser.navigate(to)
+          if (!went) {
+            // Not an error: the agent should read this and wait, or pick
+            // somewhere else. The human has been offered the choice on the tile.
+            return json(res, 200, {
+              ok: false,
+              blocked: true,
+              error: `navigation to ${to} is not allowed for this project; ` +
+                'the human has been asked whether to permit it',
+              url: browser.info().url,
+            })
+          }
           return json(res, 200, { ok: true, url: browser.info().url })
         }
         case 'click':

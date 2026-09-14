@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:http'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { capabilityFor, isChromiumInstalled } from '../src/browser.ts'
+import { AttachedBrowser, capabilityFor, isChromiumInstalled } from '../src/browser.ts'
 import { createHandler } from '../src/http.ts'
 import { ProjectManager } from '../src/project-manager.ts'
 
@@ -205,5 +205,73 @@ describe('per-project browser settings', () => {
     cleanup.push(() => second.dispose())
     expect(second.browserSettings(id).enabled).toBe(true)
     expect(second.policyFor(id).allow).toEqual(['*.example.com'])
+  })
+})
+
+/**
+ * Found by running it against a real Chromium: a blocked navigation used to
+ * leave the page on `chrome-error://chromewebdata/`, throwing away whatever was
+ * loaded. Aborting a top-level navigation mid-flight does that, so the policy is
+ * checked before `goto` is ever called. The route guard still covers redirects
+ * and in-page links, where there is no way to avoid the error page.
+ */
+describe('a refused navigation does not disturb the page', () => {
+  const policy = { allow: ['localhost:*'], daemonPort: 7331, daemonHost: null }
+  const fakePage = () => {
+    const calls: string[] = []
+    const page = {
+      goto: async (url: string) => { calls.push(url) },
+      goBack: async () => { calls.push('back') },
+      reload: async () => { calls.push('reload') },
+      url: () => 'http://localhost:5173/app',
+      title: async () => 'app',
+      viewportSize: () => ({ width: 1280, height: 800 }),
+      context: () => ({ newCDPSession: async () => { throw new Error('no cdp') } }),
+      on: () => {},
+      route: async () => {},
+    }
+    return { page, calls }
+  }
+  const make = () => {
+    const { page, calls } = fakePage()
+    return { b: new AttachedBrowser('s1', page as never, () => policy), calls }
+  }
+
+  it('allows a navigation the policy permits', async () => {
+    const { b, calls } = make()
+    await expect(b.navigate('http://localhost:5173/other')).resolves.toBe(true)
+    expect(calls).toEqual(['http://localhost:5173/other'])
+  })
+
+  it('refuses one it does not, without calling goto at all', async () => {
+    const { b, calls } = make()
+    await expect(b.navigate('https://example.com/')).resolves.toBe(false)
+    expect(calls).toEqual([])
+    expect(b.info().url).toBe('http://localhost:5173/app')
+  })
+
+  it('offers a merely-not-allowed host to the human', async () => {
+    const { b } = make()
+    const prompts: string[] = []
+    b.onPrompt = (u) => prompts.push(u)
+    await b.navigate('https://example.com/')
+    expect(prompts).toEqual(['https://example.com/'])
+  })
+
+  /** tring's own address is refused and must never reach the prompt. */
+  it('refuses the daemon silently, with nothing for the user to allow', async () => {
+    const { b, calls } = make()
+    const prompts: string[] = []
+    b.onPrompt = (u) => prompts.push(u)
+    await expect(b.navigate('http://127.0.0.1:7331/?token=x')).resolves.toBe(false)
+    expect(calls).toEqual([])
+    expect(prompts).toEqual([])
+  })
+
+  it('lets history moves through, which carry no url to check', async () => {
+    const { b, calls } = make()
+    await expect(b.navigate('back')).resolves.toBe(true)
+    await expect(b.navigate('reload')).resolves.toBe(true)
+    expect(calls).toEqual(['back', 'reload'])
   })
 })

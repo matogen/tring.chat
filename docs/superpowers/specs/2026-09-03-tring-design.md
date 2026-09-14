@@ -505,6 +505,14 @@ on the tile as *allow once / always / deny*. An agent with a shell and an unrest
 browser can put anything it has read into a URL, and blocking navigation is a real boundary
 where hoping is not.
 
+**The check runs twice, in two places, for two reasons.** Before `goto`, so a refused
+navigation leaves the page untouched: aborting a top-level request mid-flight puts Chromium
+on its own error page, which throws away the logged-in view a human may be a moment from
+taking over — measured, not predicted, and the reason this exists. And inside the route
+guard, which is the actual boundary, because redirects, sub-frame loads and links clicked
+inside the page never pass through `goto` at all. There the error page is the unavoidable
+cost of stopping the request.
+
 **The daemon's own origin is refused unconditionally**, allowlist or not. `tring` serves a
 page that drives every terminal on the machine and hands it a bearer token in a query
 parameter; an agent that browses to `http://127.0.0.1:7331/?token=…` is typing into its
@@ -997,6 +1005,14 @@ when someone enables the feature (§5.7), and everything in §4.7 and §4.8 is b
 `import()` that never runs for a user who does not use it. A missing or half-downloaded
 browser reports `unavailable` and offers the download again; it is never an error at
 startup, and it never blocks the daemon from serving terminals.
+
+**A browser that will not start is a message, never a crash.** On Linux and WSL the
+download does not bring Chromium's system libraries with it, so a fresh box downloads
+150MB successfully and then fails to launch — the normal first experience, not an edge
+case. `attachBrowser` therefore never rejects: the failure is reported, the tile stays a
+terminal, and the launch error is reduced to the one line that says why, with the command
+that fixes it. An unhandled rejection here kills the daemon and every shell in it, which is
+a spectacular price for a feature switched on a moment ago.
 
 ## 7. Testing
 

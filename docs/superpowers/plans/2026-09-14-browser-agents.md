@@ -104,6 +104,27 @@ progress bar, the allowlist editor, README section.
   capability is per project, so every client viewing it needs the new answer, not only the
   one that flipped the switch.
 
+## Verification run — 2026-09-14
+
+Spec §9.11–§9.19 executed against a real Chromium, 23/23. The harness starts its own
+daemon on its own port with its own config dir, so it cannot touch a running tring.
+
+Two defects it found that nothing else would have:
+
+- **The first attach crashed the daemon.** A failed launch was an unhandled rejection, so
+  a browser that would not start killed every running shell. `attachBrowser` now never
+  rejects (§4.7). The failure that exposed it — missing system libraries on WSL — is the
+  *normal* first experience on Linux, not an edge case.
+- **A blocked navigation destroyed the page.** Aborting a top-level request leaves
+  Chromium on `chrome-error://chromewebdata/`, so refusing a navigation threw away the
+  logged-in view the human was about to take over. The policy is now checked before `goto`
+  as well as in the route guard (§4.7).
+
+One result worth not celebrating too early: the first frame count was `1`, which is what a
+broken frame-ack loop also looks like. A second harness drove a page repainting twice a
+second and got 13 frames across the full window, so production is genuinely continuous and
+the single frame was a static page behaving correctly.
+
 ## Verification
 
 Spec §9, steps 11–19, in order. The two that must not silently regress:

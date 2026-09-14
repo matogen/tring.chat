@@ -385,8 +385,29 @@ export class AttachedBrowser {
     })
   }
 
-  async navigate(to: BrowserNavigation): Promise<void> {
-    if (this.disposed) return
+  /**
+   * Returns false when the policy refused before anything moved.
+   *
+   * The check happens **here, before `goto`**, and not only in the route guard.
+   * Aborting a top-level navigation mid-flight leaves Chromium on its own error
+   * page, which throws away the page that was loaded — so a blocked navigation
+   * would destroy the logged-in view a human was about to take over. Refusing
+   * up front costs nothing and leaves the page untouched.
+   *
+   * The route guard stays as the real boundary: it covers redirects, sub-frame
+   * loads and links clicked inside the page, none of which pass through here.
+   * There an error page is the unavoidable cost of stopping the request.
+   */
+  async navigate(to: BrowserNavigation): Promise<boolean> {
+    if (this.disposed) return false
+    if (to !== 'back' && to !== 'forward' && to !== 'reload') {
+      const verdict = checkNavigation(to, this.policy())
+      if (!verdict.ok) {
+        if (isPromptable(verdict)) this.onPrompt?.(to)
+        this.onChange?.()
+        return false
+      }
+    }
     this.blockedOn = null
     try {
       if (to === 'back') await this.page.goBack()
@@ -394,10 +415,11 @@ export class AttachedBrowser {
       else if (to === 'reload') await this.page.reload()
       else await this.page.goto(to)
     } catch {
-      // A refused or failed navigation leaves the page where it was; the
-      // prompt or the error is already the user-visible part.
+      // A navigation that fails for its own reasons — DNS, a refused
+      // connection — is already visible as the page Chromium shows.
     }
     this.onChange?.()
+    return true
   }
 
   /** The human touched the page, which is also how they take the wheel. */

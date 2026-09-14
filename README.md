@@ -389,9 +389,20 @@ slot 7 can drive the browser in slot 7 and no other.
 **Chromium is not bundled.** It is ~150MB and downloads once, when you first switch the
 feature on — never at install time.
 
+**On Linux and WSL it also needs system libraries**, which the download does not include.
+Without them the browser refuses to start and tring says so, naming the missing library:
+
+```
+sudo npx playwright install-deps chromium
+```
+
+Terminals are unaffected either way. A browser that will not start is a message on the
+tile, never a daemon that fell over.
+
 **Where a page may go** is a per-project allowlist, `localhost:*` and `127.0.0.1:*` to
-begin with. Anything else is held and offered to you on the tile. tring's own address is
-always refused, allowlist or not: the page it serves drives every terminal you have.
+begin with. Anything else is held and offered to you on the tile, and the page you were
+looking at stays exactly where it was. tring's own address is always refused, allowlist or
+not: the page it serves drives every terminal you have.
 
 The allowlist covers navigation, not every request a page makes — an allowed page can
 still fetch from anywhere. It raises the cost of an agent posting your source somewhere;

@@ -37,6 +37,27 @@ export const SLOT_COUNT = 16
 
 const HEX = /^#[0-9a-f]{6}$/i
 
+/**
+ * Playwright's launch failures arrive as a page of Chromium command line and
+ * browser log, which is the right thing for a stack trace and the wrong thing
+ * for a toast. The one failure worth naming specifically is a missing system
+ * library: it is the normal state of a fresh Linux or WSL box, it has nothing
+ * to do with tring, and it has an exact fix.
+ */
+export function describeLaunchFailure(err: Error): string {
+  const text = err.message
+  const lib = /error while loading shared libraries: ([^:]+)/.exec(text)
+  if (lib) {
+    return `Chromium is missing system libraries (${lib[1]}). ` +
+      'Install them with:  sudo npx playwright install-deps chromium'
+  }
+  if (/Executable doesn't exist|ENOENT/.test(text)) {
+    return 'Chromium is not installed. Enable browser agents again to download it.'
+  }
+  // Anything else: the first line, which is the part that ever says why.
+  return `Could not start the browser: ${text.split('\n')[0]}`
+}
+
 /** The 16 fixed slots of one project (spec §4.3). */
 export class SessionManager {
   private readonly bySlot = new Map<number, Session>()
@@ -49,6 +70,8 @@ export class SessionManager {
   onSessionBrowser: ((s: Session) => void) | null = null
   onSessionFrame: ((s: Session, jpeg: Buffer) => void) | null = null
   onSessionBrowserPrompt: ((s: Session, url: string) => void) | null = null
+  /** A browser that would not start, reported instead of thrown. */
+  onBrowserError: ((s: Session, message: string) => void) | null = null
 
   constructor(private opts: SessionManagerOptions) {}
 
@@ -119,17 +142,30 @@ export class SessionManager {
    * a working tile keeps their shell, their process and their scrollback, which
    * is the claim the whole design rests on.
    */
+  /**
+   * Never rejects.
+   *
+   * Launching a browser fails for reasons that have nothing to do with tring —
+   * missing system libraries, a half-finished download, no memory — and the
+   * daemon's job is serving terminals. An unhandled rejection here takes the
+   * whole process down and every running shell with it, which is a spectacularly
+   * bad trade for a feature the user switched on a moment ago.
+   */
   async attachBrowser(id: string, url?: string): Promise<void> {
     const session = this.byId.get(id)
     const host = this.opts.browserHost
     if (!session || !host || session.browser) return
-    const browser = await host.attach(this.opts.projectId, session.id, url)
-    // The session may have been killed while the browser was opening.
-    if (!this.byId.has(id)) {
-      await browser.dispose()
-      return
+    try {
+      const browser = await host.attach(this.opts.projectId, session.id, url)
+      // The session may have been killed while the browser was opening.
+      if (!this.byId.has(id)) {
+        await browser.dispose()
+        return
+      }
+      session.attachBrowser(browser)
+    } catch (err) {
+      this.onBrowserError?.(session, describeLaunchFailure(err as Error))
     }
-    session.attachBrowser(browser)
   }
 
   detachBrowser(id: string): void {
