@@ -306,6 +306,10 @@ export class Session {
       status: this.tracker.status,
       since: this.tracker.since,
       exitCode: this.tracker.exitCode,
+      // Always null until a browser can be attached (spec §4.7). The field is
+      // on the wire first so the client renders one shape from the start,
+      // rather than learning a second one when attachment lands.
+      browser: null,
     }
   }
 

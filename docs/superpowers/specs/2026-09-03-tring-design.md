@@ -5,6 +5,49 @@ Status: approved design, awaiting implementation plan
 
 ## 0. Changelog
 
+**2026-09-14 — Browser agents.** A session can own a Playwright browser alongside its
+shell (§4.7, §4.8, §5.13). Optional, off by default, and gated on a daemon-side
+capability rather than a browser preference.
+
+**A browser is an attachment to a session, not a kind of session.** This is the whole
+design and everything else follows from it. A running PTY cannot be converted into a
+browser, so if the choice is to be offered on *every* tile — including the fifteen
+already running — it cannot mean "which process do I launch". It means "does this slot
+also own a page". Attaching starts a `BrowserContext`; detaching closes it; the shell
+runs untouched through both. No kill, no confirmation, no lost scrollback.
+
+`SessionInfo` therefore gains `browser: BrowserInfo | null`, **not** a `kind` enum. A
+session is always a shell and may additionally have a page, and a two-valued `kind` would
+misdescribe that the moment anything else is attachable. The dialogs still present it as
+a binary choice — *Terminal* or *Browser Agent* — because that is what the user is
+deciding; the model underneath stays honest.
+
+A slot holding a browser renders as a split: terminal on one side, live page on the
+other. The agent drives the page through tools scoped to *its own* context via
+`TRING_BROWSER_ID`, so the agent in slot 7 drives the browser in slot 7 — nothing to wire
+up and no way for two agents to contend for one page. Telling the agent what to do needs
+no new interface at all: it is Claude Code in the left pane and you type at it as you
+already do.
+
+Two drivers share one page, so control is explicit and visible (§4.7). The human takes
+the wheel by touching the page and returns it with a button; the agent's tools **block
+rather than error** while the human holds it, because an erroring tool makes an agent
+retry-loop against a wall.
+
+The case that justifies the feature is the login wall. An agent that hits SSO, a captcha
+or 2FA times out on a selector — an explicit "blocked on a human", far better than the
+shell's idle guess — the tile goes green and notable, and the human types the password
+with their own hands. Those keystrokes go through CDP into the page. They never pass
+through a tool call, so the credential is not in the agent's transcript, not in its
+context window and not in any log tring keeps. Every headless agent-browser makes you
+either paste the credential into the model's context or pre-seed a `storageState`. This
+property exists *only* because the browser is visible and interactive, and it is the
+argument for the split over a background browser with tools.
+
+Chromium is ~150MB and is not an npm dependency. It is fetched lazily on first enable,
+never at install time (§6): the install story already carries node-gyp on Linux and will
+not also carry a browser download.
+
 **2026-09-11 — Phone view.** Below 720px the ring is not drawn and a switcher bar
 (§5.11) takes its place: the focused session's slot, name and status, a tap to open the
 picker, a tap to the next finished session. The picker becomes a bottom sheet with 44px
@@ -111,6 +154,8 @@ see the others animating, and switching to a green one with two keystrokes.
 | Swap model | The centre is a view of one session. Focusing a session does not move it; the previously focused one simply stops being viewed |
 | Thumbnails | Server keeps a headless terminal per session and streams throttled screen snapshots; thumbnails are cheap canvases. Only the centre is a real xterm.js instance |
 | Theme | Brand tokens from the marketing site. Mint `#3ee9a4` is reserved for the `done` signal; chrome uses the darker greens. Fonts vendored, no CDN (§5.1) |
+| Browser agents | Optional. A Playwright `BrowserContext` **attaches to** an existing session rather than replacing it, so every tile can offer the choice without killing anything (§4.7) |
+| Browser control | One page, two possible drivers. The wheel is explicit and shown; the human grabs it by touching the page, the agent's tools block while they hold it (§4.7) |
 | Name | Repo `tring.chat`, package name `tring` |
 
 ## 3. Repository layout
@@ -130,6 +175,9 @@ tring.chat/
     src/session-manager.ts     16 slots within one project; create/kill/rename/respawn
     src/project-manager.ts     projects; active project, lazy respawn, projects.json persistence
     src/snapshot.ts            headless buffer → compact ScreenSnapshot
+    src/browser.ts             Playwright lifecycle: shared browser, per-session context, screencast (§4.7)
+    src/browser-control.ts     the wheel: who drives, grab/release, agent gating (§4.7)
+    src/browser-tools.ts       MCP endpoint; tools scoped to the caller's own context (§4.8)
     src/ws.ts                  WebSocket hub: state fan-out, focused output stream, snapshots
     src/http.ts                serves the web build; REST endpoints for hooks
     src/open-window.ts         launches the chromeless browser window (§6)
@@ -143,6 +191,7 @@ tring.chat/
     src/ring-layout.ts         5×5 CSS grid, centre spans 3×3, slots numbered clockwise
     src/thumbnail.ts           one <canvas> per slot, paints snapshots, status border
     src/focus-terminal.ts      the single xterm.js: fit + webgl addons, replay on switch
+    src/browser-pane.ts        the split half: screencast frames, input forwarding, control header (§5.13)
     src/picker.ts              Ctrl+Space overlay, key handling, next-done cycling
     src/new-session-dialog.ts  cwd, optional command, optional name
     index.html, style.css
@@ -152,6 +201,9 @@ tring.chat/
 Runtime dependencies: `node-pty`, `@xterm/headless`, `@xterm/addon-serialize`, `ws`,
 `@xterm/xterm`, `@xterm/addon-fit`, `@xterm/addon-webgl`, `@fontsource/inter`,
 `@fontsource/jetbrains-mono`.
+Optional: `playwright-core` — an `optionalDependency`, resolved lazily at first enable and
+absent from every code path that does not touch §4.7. `playwright-core` rather than
+`playwright` because the latter's install hook downloads browsers, which §6 forbids.
 Dev: `vite`, `typescript`, `vitest`, `tsx`.
 
 ## 4. Server
@@ -177,6 +229,10 @@ Dev: `vite`, `typescript`, `vitest`, `tsx`.
   addon. Used when a client focuses the session or reconnects.
 - `snapshot()` returns the visible rows as run-length cells `{text, fg, bg, bold}` for
   thumbnails.
+- A session may additionally own a browser context (§4.7). It is held as
+  `browser: BrowserSession | null` on the session, so the PTY half of this section is
+  unchanged whether one is attached or not, and `TRING_BROWSER_ID` joins the injected
+  environment while it is.
 
 ### 4.2 ActivityTracker (shared, pure)
 
@@ -232,9 +288,11 @@ The cwd defaults to the project root.
       "id": "p_a1b2",
       "name": "api-service",
       "root": "/home/dev/api-service",
+      "browser": { "enabled": true, "allow": ["localhost:*", "*.staging.example.com"], "eval": false },
       "sessions": [
         { "slot": 1, "name": "server", "cwd": "/home/dev/api-service", "command": "npm run dev" },
-        { "slot": 2, "name": null,     "cwd": "/home/dev/api-service", "command": null }
+        { "slot": 2, "name": null,     "cwd": "/home/dev/api-service", "command": null,
+          "browser": { "url": "https://app.staging.example.com/login" } }
       ]
     }
   ]
@@ -247,6 +305,12 @@ The cwd defaults to the project root.
 - Respawn starts a **plain shell** in the recorded cwd. The recorded `command` is kept and
   offered as a one-key re-run on the tile, never executed automatically — auto-running
   whatever was there last time is how four dev servers end up fighting over a port.
+- A recorded `browser` **is** reattached on respawn, and its last URL reopened. This is the
+  opposite of the `command` rule above and deliberately so: a re-run command executes work,
+  where a reattached browser restores a view. The profile is on disk either way (§4.7), so
+  the alternative is a logged-in session the user has to go and re-open by hand, having
+  already told us they wanted it. It obeys the allowlist like any other navigation, so a
+  URL that is no longer permitted opens blank rather than prompting at startup.
 - Scrollback is not restored. See §8.
 
 ### 4.4 WebSocket protocol
@@ -256,24 +320,38 @@ session id, so two tabs can sit in different projects.
 
 Client → server:
 `hello{token?}`, `focus{id|null, cols, rows}`, `input{id, data}`, `resize{cols, rows}`,
-`create{projectId?, slot?, cwd, command?, name?}`, `kill{id}`, `rename{id, name}`,
-`ack{id}`, `respawn{id}`, `activateProject{projectId}`, `createProject{name, root}`,
-`renameProject{projectId, name}`, `deleteProject{projectId}`.
+`create{projectId?, slot?, cwd, command?, name?, browser?, url?}`, `kill{id}`,
+`rename{id, name}`, `ack{id}`, `respawn{id}`, `activateProject{projectId}`,
+`createProject{name, root}`, `renameProject{projectId, name}`, `deleteProject{projectId}`,
+`attachBrowser{id, url?}`, `detachBrowser{id}`, `browserInput{id, event}`,
+`browserGrab{id}`, `browserRelease{id}`, `browserNavigate{id, url|'back'|'forward'|'reload'}`.
 
 Server → client:
-`state{projects[], activeProjectId}` on connect and on any structural change, where each
-project carries its sessions and their statuses;
+`state{projects[], activeProjectId, capabilities}` on connect and on any structural
+change, where each project carries its sessions and their statuses;
 `status{id, status, since, title}` for any session in any project;
 `output{id, data}` for the focused session only;
 `screen{id, ansi}` full replay when focus changes;
 `snapshot{id, rows}` throttled to at most 4 per second per session, sent only when the
 visible buffer changed since the last snapshot, and **only for sessions in the socket's
 active project**;
+`frame{id, …}` one screencast frame, binary, same gating as `snapshot` (§4.7);
+`browser{id, info}` url, title, control holder and load state changed;
 `exit{id, code}`;
 `error{message}`.
 
-Output frames are binary WebSocket frames prefixed with the session id; everything else
-is JSON.
+Output frames and screencast frames are binary WebSocket frames prefixed with the session
+id; everything else is JSON. Both carry a one-byte channel tag after the id separator, so
+PTY bytes and JPEG bytes are told apart without a second socket. The tag is on the wire
+rather than inferred from the payload — a JPEG whose leading bytes happen to be printable
+must never be writable into a terminal — and both halves of the app are built from
+`packages/shared` together, so there is no version in which one side writes the tag and
+the other does not expect it. A frame that ends at the separator carries no tag and is
+dropped rather than assumed to be PTY.
+
+`browserInput` carries a normalised `{kind: 'mouse'|'key'|'wheel', …}` rather than a raw
+DOM event: the daemon forwards it to CDP, and a shape the daemon defines is one the daemon
+can validate. See §4.7 for what it refuses.
 
 ### 4.5 HTTP
 
@@ -289,9 +367,17 @@ segment and every hook already installed keeps working.
   scan (§5.10), gathered in parallel and memoised for 30s (~1.8s cold, ~1ms warm). **The handler is built once, not per request** — it holds that cache,
   and a fresh closure per request throws it away silently (502ms per call instead of
   0.8ms, with no error to notice).
-- Default bind is 127.0.0.1, no auth. `--token` (or `TRING_TOKEN`) enables bearer auth on
-  both HTTP and the WebSocket `hello`, for the case where the daemon is bound to a LAN
-  address.
+- `GET /api/capabilities` returns `{browser: 'unavailable' | 'off' | 'on'}` (§4.7). Also
+  inlined into the `state` message, because the UI needs it before it draws a tile and a
+  second round trip would make the control flicker in.
+- `POST /api/browser/install` fetches Chromium and streams progress as
+  `{received, total}` lines. Refused when the capability is already `on`, so a double
+  click cannot start two downloads.
+- Default bind is 127.0.0.1. A bearer token is **required** by default, on loopback as
+  much as off it — loopback is not an authentication boundary when the daemon spawns
+  shells. One is generated on first run at `~/.config/tring/token` (mode `0600`) when
+  `--token` is not given; `--insecure-no-token` turns it off and is refused off loopback.
+  The same token covers HTTP, the WebSocket `hello` and the MCP endpoint of §4.8.
 
 ### 4.6 Claude Code integration
 
@@ -304,6 +390,122 @@ curl -s -X POST "$TRING_URL/api/sessions/$TRING_SESSION_ID/done"
 turns the tile green the moment Claude ends its turn. The env vars are inherited from the
 PTY, so the same hook config is correct in every session of every project. Without the
 hook the tile still goes green after `idleMs` of silence. The README documents the snippet.
+
+### 4.7 Browser sessions
+
+Optional, off by default. A session may own a Playwright `BrowserContext`; the shell is
+unaffected either way.
+
+**Attachment, not kind.** `attachBrowser{id}` creates a context for an existing session and
+`detachBrowser{id}` closes it, both while the PTY keeps running. This is what allows the
+choice on every tile (§5.9, §5.13): a running shell cannot be reborn as a browser, so the
+only non-destructive reading of "Terminal or Browser Agent" on a live session is
+attach/detach. `SessionInfo.browser` is `BrowserInfo | null`, never a `kind` enum:
+
+```ts
+interface BrowserInfo {
+  url: string
+  title: string | null
+  control: 'agent' | 'human'
+  loading: boolean
+  /** Set when the agent is parked on a selector a human probably needs to clear. */
+  blockedOn: string | null
+}
+```
+
+**One browser process, one context per session.** Contexts are cheap and are the isolation
+boundary Playwright actually provides; processes are neither. The shared process launches on
+the first attach in the daemon's lifetime and closes when the last context detaches.
+
+**Profiles are per project**, at `~/.config/tring/projects/<id>/browser/`, so a login
+survives a detach, a reattach and a daemon restart. Never the user's real Chrome profile:
+tring would be handing an agent every cookie on the machine, and "use my existing logins"
+is a decision that deserves its own explicit gesture rather than arriving as a side effect
+of attaching a browser. Importing a `storageState` is that gesture, and is out of scope for
+the first version.
+
+**Frames come from CDP screencast**, not a `page.screenshot()` loop:
+`Page.startScreencast{format: 'jpeg', quality, maxWidth, maxHeight}` pushes a frame only
+when the page actually changes, which is the same property that makes §5.3 cheap — an idle
+page costs nothing. Thumbnail subscribers get `maxWidth: 320, quality: 40`; a focused pane
+re-subscribes at its own size. Frames are gated exactly like snapshots: active project
+only, so a browser in a background project costs a live context and no pixels. Each frame
+is acknowledged (`Page.screencastFrameAck`) before the next is requested, so a slow client
+throttles the producer instead of queueing memory.
+
+**Status** feeds the same `ActivityTracker` (§4.2), which needs no new states:
+
+| Browser event | Tracker signal |
+|---|---|
+| navigation started, or an agent action begins | `busy` |
+| `load` plus network quiet, no agent action pending | `done` |
+| agent action times out on a selector, or a `dialog` opens | `done`, **notable**, `blockedOn` set |
+| page crash, context closed unexpectedly | `exited` |
+
+The third row is the one worth the feature. A Playwright action parked on a selector is an
+*explicit* "a human is needed here" — the same class of signal as the Stop hook of §4.6, and
+categorically better than the shell's idle guess, which cannot tell a finished agent from a
+stuck one. It rings.
+
+**Control: one page, two possible drivers.** Both the human and the agent can dispatch into
+the same page, and simultaneous input corrupts form state and moves the DOM under whichever
+of them is mid-action. So the wheel is explicit, single-valued and always rendered (§5.13):
+
+- The human **grabs implicitly** — any `browserInput` takes the wheel. Taking control should
+  be as fast as reaching for it, not a button to hunt for first.
+- The human **releases explicitly**, with a button. Never on a timer: a timeout that returns
+  control while someone is halfway through a login form is precisely the wrong behaviour,
+  and the moments when a human holds the wheel longest are the moments it matters most.
+- While the human holds it, the agent's tools **block and report "the human has control"**
+  rather than erroring. An error makes an agent retry-loop against a wall, burning tokens
+  and filling its context with failures; a block makes it wait, which is what a person in
+  the same position would do.
+- On release the agent is handed a fresh accessibility snapshot and "the human interacted;
+  you are at `<url>`". It is **not** handed a keystroke log — that would put the password
+  the human just typed by hand straight back into the transcript, undoing the one property
+  (§0) this design exists to provide.
+
+**Navigation is allowlisted per project.** `browser.allow` is a list of host patterns
+defaulting to `["localhost:*", "127.0.0.1:*"]`; a navigation elsewhere is held and surfaced
+on the tile as *allow once / always / deny*. An agent with a shell and an unrestricted
+browser can put anything it has read into a URL, and blocking navigation is a real boundary
+where hoping is not.
+
+**The daemon's own origin is refused unconditionally**, allowlist or not. `tring` serves a
+page that drives every terminal on the machine and hands it a bearer token in a query
+parameter; an agent that browses to `http://127.0.0.1:7331/?token=…` is typing into its
+own ring. The WebSocket origin check cannot catch this, because that request's origin is
+genuinely the daemon's.
+
+Also refused: `file://` and every other non-http(s) scheme, and downloads
+(`acceptDownloads: false`). `browserInput` is validated against the normalised shape of
+§4.4 — coordinates inside the viewport, key events carrying no modifiers the pane did not
+send — because it arrives from the page and lands in CDP.
+
+### 4.8 Browser tools
+
+How an agent drives its page. An MCP endpoint at `/mcp`, authenticated with the same token
+as everything else (§4.5), which an in-session agent already has as `$TRING_TOKEN` — so
+configuring it requires nothing pasted into a settings file.
+
+**Tools are scoped to the caller's own context.** The MCP session resolves
+`TRING_BROWSER_ID` from the calling process's environment; there is no tool taking a
+browser id, so an agent cannot address a page that is not its own. This is what makes
+"the agent in slot 7 drives the browser in slot 7" true by construction rather than by
+convention.
+
+| Tool | Notes |
+|---|---|
+| `browser_navigate{url}` | Subject to the allowlist; a held navigation returns "waiting for the human to allow this" |
+| `browser_snapshot{}` | The accessibility tree, not pixels. This is what a model steers with; screenshots are for the human |
+| `browser_click{ref}` / `browser_type{ref, text}` / `browser_select{ref, value}` | `ref` comes from the last snapshot |
+| `browser_wait{for, timeout}` | A timeout sets `blockedOn` and rings, rather than merely failing |
+| `browser_eval{js}` | Off unless `browser.eval` is enabled per project — it routes around the allowlist trivially (`fetch`) |
+
+Every tool returns "the human has control, waiting" and blocks while the wheel is held
+(§4.7). `browser_snapshot` is the exception and always answers: reading the page cannot
+collide with a human typing into it, and refusing it would leave an agent that has just
+been handed control unable to see what it was handed.
 
 ## 5. Web
 
@@ -381,7 +583,14 @@ rather than taking effect. A running session that renders nowhere would still ri
 still count in the tab badge, which is the one outcome worth code to make impossible.
 
 An empty slot is a dim "+ new session" placeholder that opens the new-session dialog with
-the cwd pre-filled to the project root.
+the cwd pre-filled to the project root. When the browser capability is `on` (§4.7) that
+dialog leads with the *Terminal / Browser Agent* choice; when it is not, the choice is not
+rendered at all rather than shown disabled, because a control that can never be used is
+worse than an absent one.
+
+The focus cell holds one session's view. For a session with a browser attached it splits in
+two — terminal and page (§5.13) — and the split belongs to the *cell*, not to the ring
+geometry above, which is unchanged.
 
 ### 5.3 Thumbnails
 
@@ -402,6 +611,18 @@ project switch — would show a black tile forever. Two rules close that:
   canvases and constructs new `Thumbnail`s, and a ring-size change involves no round
   trip at all, so without a client-side copy the tiles would blank until the next
   output.
+
+A session with a browser attached draws **both halves, miniaturised, in fixed positions** —
+the same split as the focus cell (§5.13), same orientation, same ratio. The tempting
+alternative, showing whichever half is currently active, was rejected: a tile whose content
+swaps underneath you costs more in recognition than it gains in detail. You do not *read* a
+thumbnail, you recognise it, and a rendered page is distinguishable from a terminal at
+100px on shape and colour alone — which is exactly the size where following the activity
+would be indistinguishable from the tile having been replaced.
+
+Screencast frames arrive as JPEG (§4.7) and are painted with `createImageBitmap` +
+`drawImage` into the browser half; the terminal half is the existing cell-run paint,
+unchanged. Both halves honour the one change-gate rule above.
 
 ### 5.4 Focus terminal
 
@@ -444,6 +665,7 @@ ones are dimmed but still selectable. Keys inside the picker:
 | `r` | rename focused session |
 | `x` | kill focused session, with confirmation |
 | `m` | mark focused session seen (`done` → `idle`) |
+| `b` | attach or detach a browser (§4.7); hidden while the capability is not `on` |
 | `Esc` | close |
 
 `p` is the only key projects add. `Ctrl+Tab` was rejected: it reads naturally with a tab
@@ -475,9 +697,23 @@ project becomes visible, so 36px of permanent ambient signal is the point, not o
 
 ### 5.7 Settings dialog
 
-Opened by the gear in the bar. Ring size is the only setting so far — four choices, the
-current one marked with `--emerald` — and the dialog exists so the next one has somewhere
-obvious to go instead of another icon in a 36px bar.
+Opened by the gear in the bar. Ring size — four choices, the current one marked with
+`--emerald` — then the Claude usage toggle (§5.10), then browser agents.
+
+**Browser agents is a three-state control, not a checkbox**, because the middle state is
+real: Chromium is not installed until someone asks for it (§6).
+
+| Capability | Control |
+|---|---|
+| `unavailable` | *Install Chromium (~150 MB)* with a progress bar, streamed from `POST /api/browser/install` |
+| `off` | A checkbox, unchecked |
+| `on` | A checkbox, checked, above the project's allowlist |
+
+Unlike ring size and the usage toggle — both per-browser `localStorage`, because both are
+display choices — this one **lives on the daemon** in `projects.json` and is enforced
+there. It spawns a browser process and stores cookies, so a second tab must not be able to
+disagree with the first about whether that is allowed, and a client-side flag in front of a
+server that would honour the request anyway is decoration.
 
 ### 5.8 Project dialog
 
@@ -494,6 +730,14 @@ tiers rather than more hues, because the usable arc is about 150° wide and twel
 crammed into it are indistinguishable at 2px. The tint is an `outline` on the tile
 and `.viewing` moves to an inset shadow, so status, colour and focus each own a ring and
 none of them competes for the same pixels.
+
+When the browser capability is `on`, the dialog also carries the *Terminal / Browser Agent*
+control — the same segmented control as the new-session dialog, and the reason this is the
+dialog that gets it: it is already the one gesture that edits a live session, reached from
+a right-click or `r`, so the choice appears on **every** tile without a new affordance
+anywhere. Changing it sends `attachBrowser` or `detachBrowser` (§4.7), not `create`; the
+shell keeps running and there is nothing to confirm. `b` in the picker is the keyboard path
+and toggles the same thing.
 
 ### 5.10 Usage view
 
@@ -588,6 +832,36 @@ manifest's `start_url` cannot carry a query string, so a token found on the URL 
 under `tring.token` and read back on later starts. A token on the URL always wins, so a
 rotated secret needs the link opened once more and nothing else.
 
+### 5.13 Browser pane
+
+The focus cell for a session with a browser attached, split in two: the xterm.js of §5.4
+on one side, the live page on the other.
+
+**The divider is draggable to either extreme**, and the ratio is remembered per session.
+The focus cell is already competing with the ring for width, and halving it at 16 slots on
+a laptop leaves a cramped terminal — so collapsing either half to nothing must not require
+detaching the browser or changing the slot's kind. Sessions differ: one is a shell that
+occasionally checks a page, another is a page with a shell attached, and the ratio is where
+that is expressed. On a phone (§5.11) the two become tabs, not columns.
+
+**The pane is a thin client.** It paints JPEG frames (§4.7) and forwards normalised mouse,
+key and wheel events as `browserInput`. It does not run the page, hold a DOM, or know a URL
+it was not told. This is the same division as the thumbnail — the daemon owns the truth and
+the client owns the pixels — and it is what keeps the feature working over Tailscale and on
+a phone, which a headed window on the daemon's machine would not.
+
+**A header strip carries the wheel.** Back, forward, reload, the URL, and the control state
+as words: *Agent driving* or *You're driving*, with a **Take control**/**Give back**
+button. Never an icon alone. Two parties can act on this page and the question "who is
+holding it right now" must be answerable from across the room, at a glance, without
+hovering anything — it is the one piece of state that makes the difference between typing a
+password into a form and typing it into a page an agent is mid-click on.
+
+Touching the pane grabs the wheel (§4.7), so the button's usual job is handing it back.
+While the human holds it, the pane is bordered in `--amber` and the agent's half shows what
+it is waiting on; `blockedOn` renders there too, so "the agent is stuck on a login form" and
+"you are driving" are one continuous story rather than two unrelated indicators.
+
 ## 6. Distribution
 
 **v0.1: global npm package.** `npm i -g tring-chat`, then `tring`. The daemon starts, then
@@ -610,6 +884,15 @@ mirrors, `serialize()`, the trackers) is in the daemon either way.
 the WebSocket and HTTP protocols in §4.4 and §4.5, never assumes a browser, and never
 hardcodes the origin. Nothing else needs to be built for the Electron move.
 
+**Chromium is never an install-time cost.** `npm i -g tring-chat` must not grow a 150 MB
+download, and on Linux it already asks for a build toolchain before it will finish at all
+(§8) — a second, larger prerequisite on top of that is how an install stops being
+attempted. So `playwright-core` is an `optionalDependency`, the browser is fetched only
+when someone enables the feature (§5.7), and everything in §4.7 and §4.8 is behind a lazy
+`import()` that never runs for a user who does not use it. A missing or half-downloaded
+browser reports `unavailable` and offers the download again; it is never an error at
+startup, and it never blocks the daemon from serving terminals.
+
 ## 7. Testing
 
 - `shared`: vitest for ActivityTracker — keystroke echo stays `idle`; sustained output goes
@@ -623,6 +906,18 @@ hardcodes the origin. Nothing else needs to be built for the Electron move.
 - One test asserts snapshots are **not** emitted for sessions outside the socket's active
   project while their statuses still are. This is the whole background-cost decision, so it
   is the one that must not silently regress.
+- `browser`: the control machine of §4.7 is pure and clock-injected like `ActivityTracker`,
+  so it is unit-tested without Playwright — a grab parks a pending agent action rather than
+  failing it; a release resumes it; a second grab while the human already holds the wheel is
+  a no-op. Navigation policy is pure too: the allowlist matcher, and the rule that the
+  daemon's own origin is refused **even when the allowlist would admit it** — that one gets
+  a test naming the `?token=` attack, because it is a rule a later refactor would otherwise
+  see as redundant and fold away.
+- Attach and detach are asserted to leave the PTY alive: the whole design rests on it, and
+  a regression would present as "my scrollback vanished when I clicked a toggle".
+- Playwright itself is exercised by one integration test behind a flag, skipped when no
+  browser is installed, so `npm test` stays fast and passes on a machine that has never
+  enabled the feature.
 - `web`: strict TypeScript build. Behaviour is verified manually per §9.
 
 ## 8. Known constraints
@@ -645,6 +940,23 @@ hardcodes the origin. Nothing else needs to be built for the Electron move.
   `--scrollback` flag (default 5000) is the valve.
 - Ctrl+Space may be claimed by an input method or window manager. The prefix key is
   configurable in the same keymap object.
+- **A browser context costs far more than a PTY.** A shell is a few MB; a Chromium context
+  with a real page is tens to hundreds. The §8 rule that memory scales with total sessions
+  holds, but the constant is much larger, and sixteen attached browsers is not a
+  configuration the design pretends to serve well. `--scrollback` is no help here; detaching
+  is. This is the reason browser-agent work tends to want an 8-slot ring, which the gear
+  already offers — a documentation answer, not a code one.
+- **A screencast is not a remote desktop.** JPEG frames and forwarded input are enough to
+  log in, click through a consent screen and see what an agent is doing. They are not
+  enough for video, WebGL, drag-and-drop with a file, or anything latency-sensitive, and
+  the pane does not pretend otherwise. The escape hatch is launching the context headed on
+  the daemon's machine, which is deliberately not the default because it forfeits the phone
+  and Tailscale story that §5.13 exists to preserve.
+- **The credential property of §0 depends on the human's keystrokes not being fed back to
+  the agent.** It is preserved by a resync that sends an accessibility snapshot and nothing
+  else, and the obvious "help the agent understand what just happened" improvement — a
+  transcript of the handover — would quietly destroy it. Noted here because it will look
+  like an oversight to someone who does not know why.
 
 ## 9. Verification
 
@@ -670,3 +982,28 @@ hardcodes the origin. Nothing else needs to be built for the Electron move.
    recorded `command` is offered rather than executed; and that scrollback is empty.
 10. Confirm `--mint` appears nowhere in the UI except done-status affordances, and that
     `git diff` and `ls` render in normal ANSI colours inside the terminal.
+11. With Chromium not installed, confirm the settings dialog offers the download and that
+    no tile shows a Terminal/Browser Agent control. Confirm the daemon starts, serves
+    terminals and logs nothing about Playwright.
+12. Install Chromium from the dialog. Confirm progress streams, the capability flips to
+    `on` without a reload, and the control appears on every tile.
+13. Attach a browser to a **running** session that has scrollback and a live process.
+    Confirm the shell survives, the scrollback is intact, the cell splits, and detaching
+    returns it to a full-width terminal with the process still running. This is the design's
+    central claim and the one step that must not be skipped.
+14. Run Claude Code in the terminal half and ask it to open a page and click something.
+    Confirm the page moves, the tile is amber while it works, and the thumbnail shows both
+    halves throughout.
+15. Ask it to log in somewhere real. Confirm it parks on the form, the tile goes green and
+    rings, and `blockedOn` is visible on the pane. Type the password by hand, hand control
+    back, and confirm the agent continues — then confirm the password appears nowhere in
+    the session transcript or the daemon log.
+16. Ask the agent to navigate to a host outside the allowlist. Confirm it is held and
+    prompted rather than blocked silently, and that the agent reports waiting rather than
+    failing.
+17. Ask the agent to navigate to the daemon's own URL with a token. Confirm it is refused
+    outright and cannot be allowed from the prompt.
+18. Switch to another project. Confirm frames stop for the background browser while its
+    status still updates, matching the snapshot rule of §4.4.
+19. Restart the daemon. Confirm attached browsers return with their profiles — a site you
+    logged into in step 15 is still logged in — and that the shells respawn per §4.3.

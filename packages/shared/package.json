@@ -8,6 +8,8 @@
     ".": "./src/index.ts",
     "./status": "./src/status.ts",
     "./keymap": "./src/keymap.ts",
-    "./protocol": "./src/protocol.ts"
+    "./protocol": "./src/protocol.ts",
+    "./browser-policy": "./src/browser-policy.ts",
+    "./browser-control": "./src/browser-control.ts"
   }
 }

@@ -5,6 +5,7 @@ import { describeSession, MOBILE_QUERY } from '../src/switcher.ts'
 const session = (over: Partial<SessionInfo>): SessionInfo => ({
   id: 's1', projectId: 'p1', slot: 3, cwd: '/home/me/code/api', status: 'busy',
   since: 0, title: null, name: null, color: null, command: null, exitCode: null,
+  browser: null,
   ...over,
 })
 

@@ -21,6 +21,32 @@ export interface ScreenSnapshot {
   rows: SnapshotCell[][]
 }
 
+/** Who may act on a session's page right now (spec §4.7). */
+export type BrowserControlHolder = 'agent' | 'human'
+
+/**
+ * A session's attached browser, or null when it has none (spec §4.7).
+ *
+ * Deliberately not a `kind: 'shell' | 'browser'` enum on the session. A session
+ * is always a shell and may *additionally* own a page — the browser attaches to
+ * a running PTY and detaches without killing it, which is the whole reason the
+ * choice can be offered on a tile that is already working. An enum would
+ * describe a thing that replaces the shell, which is not what this is.
+ */
+export interface BrowserInfo {
+  url: string
+  title: string | null
+  control: BrowserControlHolder
+  loading: boolean
+  /**
+   * What the agent is parked on — a selector it is waiting for, or a dialog it
+   * cannot dismiss. Set when a human is probably needed (a login form, a
+   * captcha), which is an explicit signal rather than the idle guess a shell
+   * has to make.
+   */
+  blockedOn: string | null
+}
+
 export interface SessionInfo {
   id: string
   projectId: string
@@ -35,6 +61,21 @@ export interface SessionInfo {
   status: SessionStatus
   since: number
   exitCode: number | null
+  /** The attached page, or null. See BrowserInfo on why this is not a `kind`. */
+  browser: BrowserInfo | null
+}
+
+/**
+ * Whether browser agents can be used, asked for, or neither (spec §4.7).
+ *
+ * Three states because the middle one is real: Chromium is ~150MB and is not
+ * an npm dependency, so "installed but off" and "not installed" need different
+ * controls — a checkbox and a download button.
+ */
+export type BrowserCapability = 'unavailable' | 'off' | 'on'
+
+export interface Capabilities {
+  browser: BrowserCapability
 }
 
 export interface ProjectInfo {
@@ -49,12 +90,33 @@ export interface UpdateInfo {
   latest: string
 }
 
+/**
+ * One input event for an attached page (spec §4.4).
+ *
+ * Normalised by the client rather than forwarded as a raw DOM event: the
+ * daemon hands these to CDP, and a shape the daemon defines is a shape the
+ * daemon can validate. Coordinates are in CSS pixels within the page viewport.
+ */
+export type BrowserInputEvent =
+  | { kind: 'mouse'; action: 'move' | 'down' | 'up'; x: number; y: number; button?: 'left' | 'middle' | 'right'; clicks?: number }
+  | { kind: 'wheel'; x: number; y: number; dx: number; dy: number }
+  | { kind: 'key'; action: 'down' | 'up'; key: string; code: string; text?: string; ctrl?: boolean; alt?: boolean; shift?: boolean; meta?: boolean }
+
+export type BrowserNavigation = string | 'back' | 'forward' | 'reload'
+
 export type ClientMessage =
   | { type: 'hello'; token?: string }
   | { type: 'focus'; id: string | null; cols: number; rows: number }
   | { type: 'input'; id: string; data: string }
   | { type: 'resize'; cols: number; rows: number }
-  | { type: 'create'; projectId?: string; slot?: number; cwd: string; command?: string; name?: string }
+  | { type: 'create'; projectId?: string; slot?: number; cwd: string; command?: string; name?: string; browser?: boolean; url?: string }
+  | { type: 'attachBrowser'; id: string; url?: string }
+  | { type: 'detachBrowser'; id: string }
+  | { type: 'browserInput'; id: string; event: BrowserInputEvent }
+  | { type: 'browserGrab'; id: string }
+  | { type: 'browserRelease'; id: string }
+  | { type: 'browserNavigate'; id: string; to: BrowserNavigation }
+  | { type: 'browserView'; id: string; width: number; height: number }
   | { type: 'kill'; id: string }
   | { type: 'rename'; id: string; name: string }
   | { type: 'color'; id: string; color: string | null }
@@ -71,6 +133,19 @@ export type ServerMessage =
       projects: ProjectInfo[]
       activeProjectId: string | null
       update?: UpdateInfo | null
+      /**
+       * Inlined rather than left to `GET /api/capabilities` alone: the UI needs
+       * this before it draws its first tile, and a second round trip would make
+       * the Terminal/Browser Agent control flicker into existence.
+       */
+      capabilities?: Capabilities
+    }
+  | { type: 'browser'; id: string; browser: BrowserInfo | null }
+  | {
+      type: 'browserPrompt'
+      id: string
+      /** A navigation held because the allowlist does not cover it (spec §4.7). */
+      url: string
     }
   | {
       type: 'status'
@@ -86,23 +161,53 @@ export type ServerMessage =
   | { type: 'exit'; id: string; code: number }
   | { type: 'error'; message: string }
 
+/** Raw PTY bytes. */
+export const CHANNEL_PTY = 0x00
+/** One JPEG screencast frame from an attached page (spec §4.7). */
+export const CHANNEL_FRAME = 0x01
+
+export type Channel = typeof CHANNEL_PTY | typeof CHANNEL_FRAME
+
 /**
- * Output travels as a binary frame — a UTF-8 session id, a 0x00 separator,
- * then raw PTY bytes — so the hot path never JSON-encodes terminal data.
+ * Binary frame layout: a UTF-8 session id, a 0x00 separator, a one-byte
+ * channel tag, then the payload. The hot path never JSON-encodes terminal
+ * data, and screencast JPEGs ride the same socket rather than opening a
+ * second one.
+ *
+ * The tag is a real byte on the wire rather than something inferred from the
+ * payload, so a JPEG that happens to start with printable bytes can never be
+ * written into a terminal. Both halves of the app are built and shipped from
+ * this package together, so there is no version in which one side writes the
+ * tag and the other does not expect it.
  */
-export function encodeOutput(id: string, data: Buffer | Uint8Array): Uint8Array {
+export function encodeBinary(id: string, channel: Channel, data: Buffer | Uint8Array): Uint8Array {
   const head = new TextEncoder().encode(id + '\0')
-  const out = new Uint8Array(head.length + data.length)
+  const out = new Uint8Array(head.length + 1 + data.length)
   out.set(head, 0)
-  out.set(data, head.length)
+  out[head.length] = channel
+  out.set(data, head.length + 1)
   return out
 }
 
-export function decodeOutput(frame: Uint8Array): { id: string; data: Uint8Array } | null {
+export function decodeBinary(
+  frame: Uint8Array,
+): { id: string; channel: number; data: Uint8Array } | null {
   const sep = frame.indexOf(0)
-  if (sep < 0) return null
+  // A frame with no separator, or one that ends at the separator, carries no
+  // channel byte and cannot be routed. Dropping it beats guessing PTY.
+  if (sep < 0 || sep + 1 >= frame.length) return null
   return {
     id: new TextDecoder().decode(frame.subarray(0, sep)),
-    data: frame.subarray(sep + 1),
+    channel: frame[sep + 1]!,
+    data: frame.subarray(sep + 2),
   }
+}
+
+/** PTY output, the overwhelmingly common case. */
+export function encodeOutput(id: string, data: Buffer | Uint8Array): Uint8Array {
+  return encodeBinary(id, CHANNEL_PTY, data)
+}
+
+export function decodeOutput(frame: Uint8Array): { id: string; channel: number; data: Uint8Array } | null {
+  return decodeBinary(frame)
 }
