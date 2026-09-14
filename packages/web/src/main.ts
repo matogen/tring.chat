@@ -12,6 +12,8 @@ import type {
 import { actionForEvent, isPrefix, legendForSlot, slotForEvent } from '@tring/shared/keymap'
 import { WsClient } from './ws-client.ts'
 import { FocusTerminal } from './focus-terminal.ts'
+import { BrowserPane } from './browser-pane.ts'
+import { DEFAULT_RATIO, halves, loadRatio, ratioForPointer, saveRatio } from './split.ts'
 import { Thumbnail } from './thumbnail.ts'
 import {
   applyRing, placeInGrid, RING_SIZES, ringSize, setRingSize, type RingSize,
@@ -57,12 +59,34 @@ let focusOnArrival: number | null = null
 
 const focusCell = document.createElement('div')
 focusCell.className = 'focus-cell'
-const focusTerm = new FocusTerminal(focusCell)
+/**
+ * The terminal lives in its own half from the start, even when there is no
+ * browser to split with.
+ *
+ * §5.4's rule is that the focus cell is never detached, because re-attaching a
+ * live xterm does not repaint and the previous session's pixels survive. Giving
+ * the terminal a permanent wrapper extends that: a browser pane is added and
+ * removed as a *sibling*, so the terminal's own DOM is never touched by a
+ * split appearing or disappearing.
+ */
+const termHalf = document.createElement('div')
+termHalf.className = 'term-half'
+focusCell.append(termHalf)
+const focusTerm = new FocusTerminal(termHalf)
+
+/** The pane for the focused session's page, when it has one (spec §5.13). */
+let pane: BrowserPane | null = null
+let paneSessionId: string | null = null
+let splitRatio = DEFAULT_RATIO
 
 const ws = new WsClient({
   onOpen: () => hideToast(),
   onClose: () => showToast('daemon disconnected — reconnecting'),
   onOutput: (id, data) => { if (id === focusedId) focusTerm.write(data) },
+  onFrame: (id, jpeg) => {
+    thumbs.get(id)?.paintFrame(jpeg)
+    if (id === paneSessionId) pane?.paintFrame(jpeg)
+  },
   onMessage: handleMessage,
 })
 
@@ -136,6 +160,20 @@ function handleMessage(msg: ServerMessage): void {
       thumbs.get(msg.id)?.paint(msg.snapshot)
       break
     }
+    case 'browser': {
+      const s = sessionById(msg.id)
+      if (s) s.browser = msg.browser
+      thumbs.get(msg.id)?.setSplit(Boolean(msg.browser))
+      if (msg.id === focusedId) syncPane()
+      else if (msg.id === paneSessionId && !msg.browser) syncPane()
+      paintStatuses()
+      break
+    }
+    case 'browserPrompt':
+      // Stage 4 turns this into an allow/deny on the tile; until then it is at
+      // least visible rather than a navigation that silently did nothing.
+      showToast(`blocked: ${msg.url}`)
+      break
     case 'exit':
       paintStatuses()
       break
@@ -164,6 +202,7 @@ function render(): void {
   paintBar()
   renderRing()
   paintStatuses()
+  syncPane()
 }
 
 /** Rebuild tiles only when the slot layout actually changed, so repainting a
@@ -207,6 +246,7 @@ function renderRing(): void {
       // screen when it changes — so without this an idle session goes black
       // until it next prints something, which may be never.
       const shot = lastShots.get(s.id)
+      thumb.setSplit(Boolean(s.browser))
       if (shot) thumb.paint(shot)
 
       // The centred label: the slot number in a circle (visible only while
@@ -347,6 +387,108 @@ function fitTerminal(): void {
   const { cols, rows } = focusTerm.fitNow()
   if (focusedId) ws.send({ type: 'resize', cols, rows })
   for (const t of thumbs.values()) t.refresh()
+  pane?.refresh()
+  reportViews()
+}
+
+/* ---------- browser pane (spec §5.13) ---------- */
+
+/**
+ * Bring the split into line with whatever the focused session now is.
+ *
+ * Adding and removing a pane is a sibling operation — the terminal half is
+ * never rebuilt — so a page appearing mid-session costs no scrollback and no
+ * reflow of the terminal's own DOM.
+ */
+function syncPane(): void {
+  const s = focusedId ? sessionById(focusedId) : undefined
+  const wanted = s?.browser ?? null
+
+  if (!wanted) {
+    if (pane) {
+      pane.dispose()
+      divider.remove()
+      pane = null
+      paneSessionId = null
+      termHalf.style.flexBasis = '100%'
+      requestAnimationFrame(() => fitTerminal())
+    }
+    return
+  }
+
+  if (!pane) {
+    pane = new BrowserPane()
+    pane.onNavigate = (to) => {
+      if (paneSessionId) ws.send({ type: 'browserNavigate', id: paneSessionId, to })
+    }
+    focusCell.append(divider, pane.root)
+  }
+  if (paneSessionId !== s!.id) {
+    paneSessionId = s!.id
+    splitRatio = loadRatio(s!.id)
+    applySplit()
+  }
+  pane.update(wanted)
+  reportViews()
+}
+
+function applySplit(): void {
+  const { term, browser } = halves(splitRatio)
+  termHalf.style.flexBasis = term
+  if (pane) pane.root.style.flexBasis = browser
+  requestAnimationFrame(() => fitTerminal())
+}
+
+const divider = document.createElement('div')
+divider.className = 'split-divider'
+divider.setAttribute('role', 'separator')
+divider.title = 'Drag to resize — either half can be collapsed'
+divider.onpointerdown = (e) => {
+  divider.setPointerCapture(e.pointerId)
+  const rect = focusCell.getBoundingClientRect()
+  // The phone view stacks the halves (§5.11), so the drag axis follows the
+  // layout rather than assuming columns.
+  const stacked = mobile.matches
+  const move = (ev: PointerEvent): void => {
+    splitRatio = stacked
+      ? ratioForPointer(ev.clientY - rect.top, rect.height)
+      : ratioForPointer(ev.clientX - rect.left, rect.width)
+    applySplit()
+  }
+  const up = (): void => {
+    divider.removeEventListener('pointermove', move)
+    divider.removeEventListener('pointerup', up)
+    if (paneSessionId) saveRatio(paneSessionId, splitRatio)
+  }
+  divider.addEventListener('pointermove', move)
+  divider.addEventListener('pointerup', up)
+}
+
+/**
+ * Tell the daemon what size each visible page should be screencast at.
+ *
+ * One page has one screencast, so the daemon takes the best size any viewer
+ * asked for (§4.7). The client's job is only to say what it is showing.
+ */
+function reportViews(): void {
+  for (const s of sessions()) {
+    if (!s.browser) continue
+    if (s.id === paneSessionId && pane) {
+      const { width, height } = pane.size()
+      ws.send({ type: 'browserView', id: s.id, width, height })
+      continue
+    }
+    const tile = tiles.get(s.slot)
+    const canvas = tile?.querySelector('canvas')
+    if (!canvas) continue
+    // Half the tile, because that is the half a split thumbnail gives a page.
+    ws.send({
+      type: 'browserView',
+      id: s.id,
+      width: Math.max(1, Math.round(canvas.clientWidth / 2)),
+      height: Math.max(1, Math.round(canvas.clientHeight)),
+    })
+  }
 }
 
 function focusSession(id: string | null): void {
@@ -356,6 +498,7 @@ function focusSession(id: string | null): void {
   focusedId = id
   if (!id) {
     focusTerm.clear()
+    syncPane()
     paintStatuses()
     return
   }
@@ -363,6 +506,9 @@ function focusSession(id: string | null): void {
   if (s) lastFocused.set(s.projectId, id)
   const { cols, rows } = focusTerm.fitNow()
   ws.send({ type: 'focus', id, cols, rows })
+  // After `focus`, so the daemon has already moved this page to the front of
+  // the queue for the larger screencast the pane is about to ask for.
+  syncPane()
   focusTerm.focus()
   paintStatuses()
 }

@@ -45,11 +45,20 @@ Three things the implementation changed in the spec, all amended there:
 - **Capability detection reads the filesystem**, because importing `playwright-core` costs
   ~400ms at every daemon start (§6). A test pins the cost.
 
-**3. web, view only** — `browser-pane.ts` painting frames into a split focus cell, the
-header strip, the draggable divider with a per-session ratio, and the two-half thumbnail in
-`thumbnail.ts`. Read-only: no input forwarding yet. At the end of this stage you can watch a
-browser you cannot touch, which is already most of the value and isolates the rendering
-work from the input work.
+**3. web, view only** *(done)* — `browser-pane.ts` painting frames into a split focus cell,
+the header strip, the draggable divider with a per-session ratio (`split.ts`, pure and
+tested like `ring-layout.ts`), and the two-half thumbnail in `thumbnail.ts`. Navigation
+buttons are wired because they are `browserNavigate` messages the daemon already answers;
+mouse and key dispatch into the page is stage 4.
+
+The terminal moved into a permanent `.term-half` wrapper so the pane is a sibling — §5.4's
+"never detach the focus cell" rule extended to the split. The phone view stacks rather than
+becoming tabs, and §5.13 now records why: a tab hides the other half, which is the one thing
+this product exists not to do.
+
+**Not yet visually verified** — no Chromium is installed on this machine, so frames have
+never actually been rendered. The pure geometry is unit-tested and the whole thing
+typechecks and builds, but the canvas sizing, flex-basis and JPEG decode paths have not run.
 
 **4. web, input** — normalised mouse/key/wheel forwarding, implicit grab, the explicit
 give-back button, the amber border while the human holds the wheel. The §9.15 login

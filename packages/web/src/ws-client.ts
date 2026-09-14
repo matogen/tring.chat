@@ -1,5 +1,5 @@
 import {
-  decodeOutput, type ClientMessage, type ServerMessage,
+  CHANNEL_FRAME, CHANNEL_PTY, decodeBinary, type ClientMessage, type ServerMessage,
 } from '@tring/shared/protocol'
 
 /** In dev Vite serves the page; the daemon is still the one holding the PTYs. */
@@ -28,6 +28,8 @@ export async function api<T>(path: string): Promise<T> {
 export interface Handlers {
   onMessage: (msg: ServerMessage) => void
   onOutput: (id: string, data: Uint8Array) => void
+  /** One JPEG screencast frame from an attached page (spec §4.7). */
+  onFrame: (id: string, jpeg: Uint8Array) => void
   onOpen: () => void
   onClose: () => void
 }
@@ -53,8 +55,12 @@ export class WsClient {
     }
     ws.onmessage = (ev) => {
       if (ev.data instanceof ArrayBuffer) {
-        const frame = decodeOutput(new Uint8Array(ev.data))
-        if (frame) this.h.onOutput(frame.id, frame.data)
+        // The channel tag is a byte on the wire, so a JPEG whose leading bytes
+        // happen to be printable can never be written into a terminal (§4.4).
+        const frame = decodeBinary(new Uint8Array(ev.data))
+        if (!frame) return
+        if (frame.channel === CHANNEL_PTY) this.h.onOutput(frame.id, frame.data)
+        else if (frame.channel === CHANNEL_FRAME) this.h.onFrame(frame.id, frame.data)
         return
       }
       this.h.onMessage(JSON.parse(String(ev.data)) as ServerMessage)

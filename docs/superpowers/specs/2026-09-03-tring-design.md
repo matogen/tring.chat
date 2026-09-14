@@ -883,7 +883,22 @@ The focus cell is already competing with the ring for width, and halving it at 1
 a laptop leaves a cramped terminal — so collapsing either half to nothing must not require
 detaching the browser or changing the slot's kind. Sessions differ: one is a shell that
 occasionally checks a page, another is a page with a shell attached, and the ratio is where
-that is expressed. On a phone (§5.11) the two become tabs, not columns.
+that is expressed. A collapsed half stays in the DOM at `0%` with its divider, because a
+half that had been removed could not be dragged back open.
+
+**On a phone (§5.11) the split stacks**, and keeps its draggable divider on the vertical
+axis. Tabs were the first answer and are the wrong one: a tab hides the other half
+completely, and an app whose whole thesis is seeing what your agents are doing should not
+make "watch the page" and "watch the agent" mutually exclusive on the one screen where you
+are least able to check. Two 50%-tall halves are both legible where two 50%-wide columns on
+a 390px screen are neither, and either can still be collapsed to nothing by someone who
+genuinely wants one at a time.
+
+**The terminal half exists even when no browser is attached.** §5.4's rule is that the focus
+cell is never detached, because re-attaching a live xterm does not repaint and the previous
+session's pixels survive the rebuild. A permanent wrapper extends that rule to the split:
+the pane is added and removed as a *sibling*, so a page appearing or disappearing
+mid-session never touches the terminal's own DOM.
 
 **The pane is a thin client.** It paints JPEG frames (§4.7) and forwards normalised mouse,
 key and wheel events as `browserInput`. It does not run the page, hold a DOM, or know a URL
