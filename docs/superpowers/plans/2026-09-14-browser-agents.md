@@ -60,9 +60,21 @@ this product exists not to do.
 never actually been rendered. The pure geometry is unit-tested and the whole thing
 typechecks and builds, but the canvas sizing, flex-basis and JPEG decode paths have not run.
 
-**4. web, input** — normalised mouse/key/wheel forwarding, implicit grab, the explicit
-give-back button, the amber border while the human holds the wheel. The §9.15 login
-walkthrough becomes runnable here.
+**4. web, input** *(done)* — normalised mouse/key/wheel forwarding, implicit grab, the
+explicit give-back button, the amber border while the human holds the wheel.
+
+- `BrowserInfo` gains the page's `viewport`, because frames are letterboxed and a click has
+  to be mapped back through that scale. The viewport is deliberately not resized to match
+  the pane (§5.13).
+- `shared/browser-input.ts` rebuilds every event field by field before it reaches CDP, and
+  is the one new security surface this stage adds (§4.7). 17 tests.
+- `letterbox`/`toPagePoint` live in `split.ts` beside the divider geometry, so painting and
+  input mapping cannot drift apart.
+
+**Still not visually verified.** Stages 3 and 4 are both rendering and input code that has
+never run — no Chromium is installed. The pure geometry and the sanitiser are tested, and
+everything typechecks and builds, but no frame has been painted and no click has reached a
+page. This is the accumulated risk to clear before stage 6 calls anything finished.
 
 **5. tools** — `browser-tools.ts`: the MCP endpoint, `TRING_SESSION_ID` scoping, the tool
 table of §4.8, blocking-not-erroring while the human drives, and the accessibility-snapshot

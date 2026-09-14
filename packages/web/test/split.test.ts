@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
-  clampRatio, DEFAULT_RATIO, halves, loadRatio, ratioForPointer, saveRatio, SNAP,
+  clampRatio, DEFAULT_RATIO, halves, letterbox, loadRatio, ratioForPointer, saveRatio,
+  SNAP, toPagePoint,
 } from '../src/split.ts'
 
 const store = (initial: Record<string, string> = {}) => {
@@ -69,6 +70,69 @@ describe('halves', () => {
       const { term, browser } = halves(r)
       expect(parseFloat(term) + parseFloat(browser)).toBeCloseTo(100, 5)
     }
+  })
+})
+
+describe('letterbox', () => {
+  it('fills exactly when the aspect ratios match', () => {
+    expect(letterbox({ width: 640, height: 400 }, { width: 1280, height: 800 }))
+      .toEqual({ x: 0, y: 0, width: 640, height: 400 })
+  })
+
+  it('bars the sides when the canvas is wider than the page', () => {
+    const box = letterbox({ width: 1000, height: 400 }, { width: 1280, height: 800 })
+    expect(box).toEqual({ x: 180, y: 0, width: 640, height: 400 })
+  })
+
+  it('bars the top and bottom when the canvas is taller', () => {
+    const box = letterbox({ width: 640, height: 800 }, { width: 1280, height: 800 })
+    expect(box).toEqual({ x: 0, y: 200, width: 640, height: 400 })
+  })
+
+  it('survives a frame it has not received yet', () => {
+    expect(letterbox({ width: 100, height: 50 }, { width: 0, height: 0 }))
+      .toEqual({ x: 0, y: 0, width: 100, height: 50 })
+  })
+})
+
+describe('toPagePoint', () => {
+  const canvas = { width: 1000, height: 400 }
+  const frame = { width: 1280, height: 800 }
+  const viewport = { width: 1280, height: 800 }
+  // Drawn at x=180, 640 wide, 400 tall.
+
+  it('maps the centre of the frame to the centre of the page', () => {
+    expect(toPagePoint({ x: 500, y: 200 }, canvas, frame, viewport))
+      .toEqual({ x: 640, y: 400 })
+  })
+
+  it('maps the frame corners to the page corners', () => {
+    expect(toPagePoint({ x: 180, y: 0 }, canvas, frame, viewport)).toEqual({ x: 0, y: 0 })
+    expect(toPagePoint({ x: 820, y: 400 }, canvas, frame, viewport))
+      .toEqual({ x: 1280, y: 800 })
+  })
+
+  it('scales through a frame smaller than the page', () => {
+    // A thumbnail-sized screencast of the same 1280x800 page.
+    const small = { width: 320, height: 200 }
+    expect(toPagePoint({ x: 500, y: 200 }, canvas, small, viewport))
+      .toEqual({ x: 640, y: 400 })
+  })
+
+  /**
+   * A click on a bar is a click on nothing. Clamping it to the nearest edge is
+   * how you dismiss a dialog you meant to read.
+   */
+  it('refuses a point in the letterbox bars rather than clamping it', () => {
+    expect(toPagePoint({ x: 10, y: 200 }, canvas, frame, viewport)).toBeNull()
+    expect(toPagePoint({ x: 990, y: 200 }, canvas, frame, viewport)).toBeNull()
+    const tall = { width: 640, height: 800 }
+    expect(toPagePoint({ x: 320, y: 10 }, tall, frame, viewport)).toBeNull()
+  })
+
+  it('refuses everything before the first frame arrives', () => {
+    expect(toPagePoint({ x: 5, y: 5 }, canvas, { width: 0, height: 0 }, viewport))
+      .not.toBeNull()
   })
 })
 

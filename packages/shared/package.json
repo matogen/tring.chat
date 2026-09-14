@@ -10,6 +10,7 @@
     "./keymap": "./src/keymap.ts",
     "./protocol": "./src/protocol.ts",
     "./browser-policy": "./src/browser-policy.ts",
-    "./browser-control": "./src/browser-control.ts"
+    "./browser-control": "./src/browser-control.ts",
+    "./browser-input": "./src/browser-input.ts"
   }
 }

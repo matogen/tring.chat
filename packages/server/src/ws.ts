@@ -1,4 +1,5 @@
 import type { WebSocket, WebSocketServer } from 'ws'
+import { sanitizeInput } from '@tring/shared/browser-input'
 import {
   CHANNEL_FRAME, encodeBinary, encodeOutput,
   type Capabilities, type ClientMessage, type ServerMessage, type UpdateInfo,
@@ -188,9 +189,15 @@ export class Hub {
       case 'detachBrowser':
         pm.findManager(msg.id)?.detachBrowser(msg.id)
         break
-      case 'browserInput':
-        void pm.findSession(msg.id)?.browser?.input(msg.event)
+      case 'browserInput': {
+        const browser = pm.findSession(msg.id)?.browser
+        if (!browser) break
+        // Rebuilt field by field rather than forwarded: this arrived over a
+        // socket and is about to become a CDP dispatch (spec §4.7).
+        const event = sanitizeInput(msg.event, browser.info().viewport)
+        if (event) void browser.input(event)
         break
+      }
       case 'browserGrab':
         pm.findSession(msg.id)?.browser?.grab()
         break

@@ -421,6 +421,15 @@ function syncPane(): void {
     pane.onNavigate = (to) => {
       if (paneSessionId) ws.send({ type: 'browserNavigate', id: paneSessionId, to })
     }
+    // No explicit grab is sent: the daemon takes any browserInput as the human
+    // reaching for the wheel (spec §4.7), so there is no window in which an
+    // event has been dispatched but control has not moved.
+    pane.onInput = (event) => {
+      if (paneSessionId) ws.send({ type: 'browserInput', id: paneSessionId, event })
+    }
+    pane.onRelease = () => {
+      if (paneSessionId) ws.send({ type: 'browserRelease', id: paneSessionId })
+    }
     focusCell.append(divider, pane.root)
   }
   if (paneSessionId !== s!.id) {

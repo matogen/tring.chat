@@ -211,6 +211,24 @@ body {
   color: var(--amber);
 }
 
+/* Only handing control back is a button. Taking it is touching the page, so
+   there is deliberately no "take control" counterpart (spec §4.7). */
+.browser-release {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--amber);
+  background: transparent;
+  color: var(--amber);
+  font: 600 10px/1.4 var(--sans);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.browser-release:hover { background: var(--amber); color: var(--bg); }
+
+.browser-stage { cursor: default; }
+.browser-stage:focus-visible { outline: 1px solid var(--emerald); outline-offset: -1px; }
+
 .browser-blocked {
   flex: 0 0 auto;
   padding: 4px 8px;

@@ -30,6 +30,16 @@ const FOCUS_QUALITY = 60
 /** The page is given a moment to settle before a navigation counts as finished. */
 const SETTLE_MS = 400
 
+/**
+ * Fixed, and not tied to the pane's size.
+ *
+ * Resizing the viewport whenever the divider moves would reflow the page under
+ * an agent that is mid-action, and make a selector that resolved a moment ago
+ * resolve differently. The pane letterboxes instead, and maps input back
+ * through the scale.
+ */
+const VIEWPORT = { width: 1280, height: 800 }
+
 type Chromium = typeof import('playwright-core')['chromium']
 
 /**
@@ -225,7 +235,7 @@ export class BrowserHost {
     const dir = path.join(this.opts.profileRoot, projectId, 'browser')
     await mkdir(dir, { recursive: true })
     return await (await chromium()).launchPersistentContext(dir, {
-      viewport: { width: 1280, height: 800 },
+      viewport: { ...VIEWPORT },
       // An agent that can save files has a second filesystem surface with none
       // of the daemon's path checks in front of it (spec §4.7).
       acceptDownloads: false,
@@ -320,6 +330,7 @@ export class AttachedBrowser {
       control: this.control.holder,
       loading: this.loading,
       blockedOn: this.blockedOn,
+      viewport: this.page.viewportSize() ?? { width: VIEWPORT.width, height: VIEWPORT.height },
     }
   }
 

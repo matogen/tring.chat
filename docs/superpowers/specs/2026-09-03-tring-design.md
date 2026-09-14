@@ -510,9 +510,16 @@ own ring. The WebSocket origin check cannot catch this, because that request's o
 genuinely the daemon's.
 
 Also refused: `file://` and every other non-http(s) scheme, and downloads
-(`acceptDownloads: false`). `browserInput` is validated against the normalised shape of
-§4.4 — coordinates inside the viewport, key events carrying no modifiers the pane did not
-send — because it arrives from the page and lands in CDP.
+(`acceptDownloads: false`).
+
+**`browserInput` is rebuilt field by field, never forwarded.** It arrives over a socket and
+becomes an `Input.dispatchKeyEvent`, and the daemon cannot assume the sender is the pane.
+The result is constructed from known fields only, so anything the sender invented cannot
+ride along. Unknown event kinds, non-finite numbers and non-string key names are refused
+outright; coordinates are **clamped rather than refused**, because a point a pixel outside
+a viewport that is mid-resize is a race rather than an attack and dropping it loses a click
+the user made. Wheel deltas are bounded, since one event carrying an enormous delta scrolls
+a page anywhere in a single dispatch.
 
 **What the allowlist is and is not.** It governs *navigation*, in every frame including
 redirects and iframes, and only main-frame refusals are offered to the user — prompting for
@@ -905,6 +912,20 @@ key and wheel events as `browserInput`. It does not run the page, hold a DOM, or
 it was not told. This is the same division as the thumbnail — the daemon owns the truth and
 the client owns the pixels — and it is what keeps the feature working over Tailscale and on
 a phone, which a headed window on the daemon's machine would not.
+
+**Frames are letterboxed, and input is mapped back through the same box.** The page keeps a
+fixed viewport rather than being resized to match the pane: a divider drag would otherwise
+reflow the page under an agent mid-action, and make a selector that resolved a moment ago
+resolve differently. So a frame is scaled to fit with bars at the sides or the ends, and a
+click has to be mapped back through that scale before it means anything — which is why
+`BrowserInfo` carries the page's own viewport. A click **on a bar** maps to nothing and is
+dropped rather than clamped to the nearest edge: clamping is how you dismiss a dialog you
+meant to read. Painting and input mapping share one geometry function so they cannot drift.
+
+**The client never sends an explicit grab.** Any `browserInput` *is* the grab (§4.7), so
+there is no window in which an event has been dispatched to the page but control has not
+moved. `browserGrab` exists for a deliberate take-the-wheel with no pointer event behind it;
+the pane does not use it.
 
 **A header strip carries the wheel.** Back, forward, reload, the URL, and the control state
 as words: *Agent driving* or *You're driving*, with a **Take control**/**Give back**

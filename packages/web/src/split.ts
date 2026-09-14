@@ -46,6 +46,49 @@ export function halves(ratio: Ratio): { term: string; browser: string } {
   return { term: `${t}%`, browser: `${Math.round((100 - t) * 10) / 10}%` }
 }
 
+export interface Box { width: number; height: number }
+
+/**
+ * Where a frame lands inside a canvas, and the scale it was drawn at.
+ *
+ * A screencast is scaled to fit the size the viewer asked for and keeps the
+ * page's aspect ratio, so it is letterboxed: there are bars, and a click in one
+ * means nothing. This is the one piece of geometry both the painting and the
+ * input mapping have to agree on, so they share it.
+ */
+export function letterbox(canvas: Box, frame: Box): {
+  x: number; y: number; width: number; height: number
+} {
+  if (frame.width <= 0 || frame.height <= 0) {
+    return { x: 0, y: 0, width: canvas.width, height: canvas.height }
+  }
+  const scale = Math.min(canvas.width / frame.width, canvas.height / frame.height)
+  const width = frame.width * scale
+  const height = frame.height * scale
+  return { x: (canvas.width - width) / 2, y: (canvas.height - height) / 2, width, height }
+}
+
+/**
+ * Canvas coordinates to page coordinates, or null in the letterbox bars.
+ *
+ * Null rather than a clamped edge coordinate: a click on a bar is not a click
+ * near the edge of the page, it is a click on nothing, and turning it into one
+ * at the boundary is how you dismiss a dialog you meant to read.
+ */
+export function toPagePoint(
+  point: { x: number; y: number }, canvas: Box, frame: Box, viewport: Box,
+): { x: number; y: number } | null {
+  const box = letterbox(canvas, frame)
+  if (box.width <= 0 || box.height <= 0) return null
+  const dx = point.x - box.x
+  const dy = point.y - box.y
+  if (dx < 0 || dy < 0 || dx > box.width || dy > box.height) return null
+  return {
+    x: (dx / box.width) * viewport.width,
+    y: (dy / box.height) * viewport.height,
+  }
+}
+
 type Store = Pick<Storage, 'getItem' | 'setItem'>
 
 /** Remembered per session: the right split for a tile is a property of its work. */

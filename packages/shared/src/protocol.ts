@@ -39,6 +39,16 @@ export interface BrowserInfo {
   control: BrowserControlHolder
   loading: boolean
   /**
+   * The page's own viewport, in CSS pixels.
+   *
+   * Needed because frames are letterboxed: a screencast is scaled to fit the
+   * size the viewer asked for, so a click at some point on the canvas has to be
+   * mapped back through that scale before it means anything to the page. The
+   * viewport is deliberately *not* resized to match the pane — a divider drag
+   * would otherwise reflow the page under an agent mid-action.
+   */
+  viewport: { width: number; height: number }
+  /**
    * What the agent is parked on — a selector it is waiting for, or a dialog it
    * cannot dismiss. Set when a human is probably needed (a login form, a
    * captcha), which is an explicit signal rather than the idle guess a shell
