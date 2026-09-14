@@ -16,6 +16,7 @@ export interface SessionManagerOptions {
   projectName: string
   root: string
   url: string
+  token?: string | null
   scrollback: number
   idleMs: number
   shell?: string
@@ -56,6 +57,7 @@ export class SessionManager {
       name: spec.name ?? null,
       color: HEX.test(spec.color ?? '') ? spec.color! : null,
       url: this.opts.url,
+      token: this.opts.token ?? null,
       scrollback: this.opts.scrollback,
       idleMs: this.opts.idleMs,
       ...(this.opts.shell ? { shell: this.opts.shell } : {}),

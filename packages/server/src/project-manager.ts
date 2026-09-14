@@ -29,6 +29,8 @@ export interface PersistedState {
 
 export interface ProjectManagerOptions {
   url: string
+  /** Handed to each session as $TRING_TOKEN so its hooks can authenticate. */
+  token?: string | null
   scrollback: number
   idleMs: number
   statePath?: string
@@ -187,6 +189,7 @@ export class ProjectManager {
       projectName: e.name,
       root: e.root,
       url: this.opts.url,
+      token: this.opts.token ?? null,
       scrollback: this.opts.scrollback,
       idleMs: this.opts.idleMs,
       ...(this.opts.shell ? { shell: this.opts.shell } : {}),

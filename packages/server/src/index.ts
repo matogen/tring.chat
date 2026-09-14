@@ -1,117 +1,86 @@
-import { existsSync } from 'node:fs'
-import { createServer } from 'node:http'
+import { existsSync, readFileSync } from 'node:fs'
+import { createServer, type RequestListener } from 'node:http'
+import { createServer as createSecureServer } from 'node:https'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { WebSocketServer } from 'ws'
-import { DEFAULT_HOST, DEFAULT_PORT, DEFAULT_SCROLLBACK } from '@tring/shared/protocol'
-import { DEFAULT_IDLE_MS } from '@tring/shared/status'
+import { parseArgs, UsageError, type Args } from './args.ts'
 import { ProjectManager } from './project-manager.ts'
 import { createHandler } from './http.ts'
 import {
-  bindNeedsToken, createOriginCheck, SECURITY_HEADERS, upgradeGuard,
+  bindNeedsToken, createOriginCheck, isLoopbackBind, SECURITY_HEADERS, upgradeGuard,
 } from './security.ts'
+import { defaultTokenPath, loadOrCreateToken } from './token.ts'
 import { Hub } from './ws.ts'
 import { openWindow, describeFallback } from './open-window.ts'
 import { checkForUpdate, currentVersion } from './update-check.ts'
 
-interface Args {
-  port: number
-  host: string
+interface Auth {
   token: string | null
-  scrollback: number
-  idleMs: number
-  open: boolean
-  shell: string | null
-  updateCheck: boolean
-  allowOrigin: string[]
-  fsRoot: string[]
-  insecureNoToken: boolean
+  /** True when we minted or read it ourselves, which is worth a startup line. */
+  persisted: boolean
 }
 
-/** Repeatable flags also accept one comma-separated value, as env vars must. */
-const listOf = (value: string | undefined): string[] =>
-  (value ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+/**
+ * The token the daemon will run with, minting and persisting one if needed.
+ *
+ * There is no unauthenticated default any more: on loopback as much as off it,
+ * the only way to get one is to ask for it by name with --insecure-no-token.
+ */
+function resolveAuth(args: Args): Auth {
+  if (args.insecureNoToken) return { token: null, persisted: false }
+  if (args.token) return { token: args.token, persisted: false }
+  return { token: loadOrCreateToken(), persisted: true }
+}
 
-function parseArgs(argv: string[]): Args {
-  const args: Args = {
-    port: Number(process.env['TRING_PORT'] ?? DEFAULT_PORT),
-    host: process.env['TRING_HOST'] ?? DEFAULT_HOST,
-    token: process.env['TRING_TOKEN'] ?? null,
-    scrollback: DEFAULT_SCROLLBACK,
-    idleMs: DEFAULT_IDLE_MS,
-    open: !process.env['TRING_NO_OPEN'],
-    shell: process.env['TRING_SHELL'] ?? null,
-    updateCheck: !process.env['TRING_NO_UPDATE_CHECK'],
-    allowOrigin: listOf(process.env['TRING_ALLOW_ORIGIN']),
-    fsRoot: listOf(process.env['TRING_FS_ROOT']),
-    insecureNoToken: !!process.env['TRING_INSECURE_NO_TOKEN'],
-  }
-  for (let i = 0; i < argv.length; i++) {
-    const [flag, inline] = argv[i]!.split('=', 2)
-    const value = inline ?? argv[++i]
-    switch (flag) {
-      case '--port': args.port = Number(value); break
-      case '--host': args.host = String(value); break
-      case '--token': args.token = String(value); break
-      case '--scrollback': args.scrollback = Number(value); break
-      case '--idle-ms': args.idleMs = Number(value); break
-      case '--shell': args.shell = String(value); break
-      case '--allow-origin': args.allowOrigin.push(...listOf(String(value))); break
-      case '--fs-root': args.fsRoot.push(...listOf(String(value))); break
-      case '--insecure-no-token': args.insecureNoToken = true; i--; break
-      case '--no-open': args.open = false; i--; break
-      case '--no-update-check': args.updateCheck = false; i--; break
-      case '--version': console.log(currentVersion()); process.exit(0)
-      case '--help':
-        console.log(`tring — focus-centred terminal deck
-
-  --port <n>        default ${DEFAULT_PORT}
-  --host <addr>     default ${DEFAULT_HOST}
-  --token <secret>  require bearer auth (use when binding off localhost)
-  --scrollback <n>  lines kept per session, default ${DEFAULT_SCROLLBACK}
-  --idle-ms <n>     quiet period before a session is done, default ${DEFAULT_IDLE_MS}
-  --shell <path>    shell to spawn; default $SHELL, or powershell.exe on
-                    Windows. Use --shell wsl.exe for WSL shells from Windows
-  --fs-root <path>  extra directory the project picker may browse; repeatable.
-                    Home and existing project roots are always browsable
-  --allow-origin <o> extra browser origin allowed to reach the daemon;
-                    repeatable. Only the page the daemon serves is allowed by
-                    default, which is what stops any website you visit from
-                    opening a socket to it
-  --insecure-no-token
-                    bind off localhost with no --token anyway. The daemon
-                    spawns shells, so this hands one to everything that can
-                    reach the port, and to any site that can rebind a name
-                    to it. Only for a network you already trust that far
-  --no-open         do not launch a browser window
-  --no-update-check do not ask npm whether a newer tring exists
-  --version         print the version and exit`)
-        process.exit(0)
+function loadTls(certFile: string, keyFile: string): { cert: Buffer; key: Buffer } {
+  const read = (file: string, what: string): Buffer => {
+    try {
+      return readFileSync(file)
+    } catch (err) {
+      throw new UsageError(`cannot read the TLS ${what} at ${file}: ${(err as Error).message}`)
     }
   }
-  return args
+  return { cert: read(certFile, 'certificate'), key: read(keyFile, 'key') }
 }
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2))
 
-  // Refused before anything is opened, not warned about after the port is
-  // already up. Off loopback the Origin check alone cannot hold the line — the
-  // hostname is the user's own, so Host goes unpinned and a rebound domain
-  // matches it — which leaves the token as the only gate on a shell.
-  if (bindNeedsToken(args.host, args.token) && !args.insecureNoToken) {
-    console.error(`refusing to bind ${args.host} without --token.
+  let auth: Auth
+  try {
+    auth = resolveAuth(args)
+  } catch (err) {
+    // Never falls through to running unauthenticated: that silent downgrade is
+    // the whole failure mode the generated token exists to close.
+    throw new UsageError(`cannot read or create ${defaultTokenPath()}: ${(err as Error).message}
+  Fix the permissions on that path, pass --token, or accept an unauthenticated
+  daemon on purpose with --insecure-no-token.`)
+  }
+  const { token } = auth
+
+  // Defence in depth, and deliberately unreachable: resolveAuth() hands back a
+  // null token only when --insecure-no-token asked for one, so nothing else can
+  // get here. It stays so that "bound off loopback with no token" cannot become
+  // reachable again through a refactor without someone deleting this on purpose
+  // — off loopback the Origin check cannot hold the line, since the hostname is
+  // the user's own, Host goes unpinned, and a rebound domain matches it.
+  if (bindNeedsToken(args.host, token) && !args.insecureNoToken) {
+    throw new UsageError(`refusing to bind ${args.host} without a token.
 
   The daemon spawns shells, so off localhost the token is the only thing
   between the port and a shell on this machine.
 
-    tring --host ${args.host} --token "$(openssl rand -hex 32)"
-
-  Pass --insecure-no-token if the network is already trusted that far.`)
-    process.exit(1)
+    tring --host ${args.host} --token "$(openssl rand -hex 32)"`)
   }
 
-  const url = `http://${args.host}:${args.port}`
+  const tls = args.tlsCert && args.tlsKey ? loadTls(args.tlsCert, args.tlsKey) : null
+  const url = `${tls ? 'https' : 'http'}://${args.host}:${args.port}`
+  // Everything the daemon carries is the kind of thing that must not travel in
+  // clear: the bearer token, every keystroke typed into a shell, and whatever
+  // the shell prints back — SSH passphrases, .env contents, source.
+  const cleartextOffBox = !tls && !isLoopbackBind(args.host)
+
   // Installed builds carry the web bundle at dist/web; a dev checkout running
   // from source finds it in the sibling workspace.
   const here = path.dirname(fileURLToPath(import.meta.url))
@@ -122,6 +91,9 @@ async function main(): Promise<void> {
 
   const pm = await ProjectManager.open({
     url,
+    // Reaches each session as $TRING_TOKEN, so the documented Stop hook can
+    // authenticate itself without the user copying a secret into settings.json.
+    token,
     scrollback: args.scrollback,
     idleMs: args.idleMs,
     ...(args.shell ? { shell: args.shell } : {}),
@@ -135,26 +107,38 @@ async function main(): Promise<void> {
   // Built once, not per request: the handler holds the usage-scan cache, and a
   // fresh closure per request would throw that away on every call.
   const handle = createHandler({
-    pm, webRoot, token: args.token, sameOrigin, fsRoots: args.fsRoot,
+    pm, webRoot, token, sameOrigin, fsRoots: args.fsRoot,
   })
-  const server = createServer((req, res) => {
+  const listener: RequestListener = (req, res) => {
     void handle(req, res).catch(() => {
       if (!res.headersSent) res.writeHead(500, SECURITY_HEADERS).end('internal error')
     })
-  })
+  }
+  const server = tls ? createSecureServer(tls, listener) : createServer(listener)
 
   // Rejected at the handshake, before Hub ever sees a socket: an origin that
   // is refused here never gets to send a `hello` at all.
   const wss = new WebSocketServer({ server, verifyClient: upgradeGuard(sameOrigin) })
-  const hub = new Hub({ pm, token: args.token })
+  const hub = new Hub({ pm, token })
   hub.attach(wss)
+
+  // The one link that carries the secret. The client stores it and scrubs it
+  // from the address bar on arrival, so it is needed once per browser.
+  const authUrl = token ? `${url}/?token=${encodeURIComponent(token)}` : url
 
   server.listen(args.port, args.host, () => {
     console.log(`tring listening on ${url}`)
-    // Only reachable via --insecure-no-token; the plain case exits above.
-    if (bindNeedsToken(args.host, args.token)) {
-      console.warn('warning: bound off localhost with no token — anything that can reach ' +
-        `${args.host}:${args.port} can open a shell here`)
+    if (auth.persisted) console.log(`  token: ${defaultTokenPath()}`)
+    // Only reachable via --insecure-no-token now; every other path has a token.
+    if (!token) {
+      console.warn('warning: running with no token — every process on this machine ' +
+        'can open a shell here' +
+        (isLoopbackBind(args.host) ? '' : `, as can anything that reaches ${args.host}:${args.port}`))
+    }
+    if (cleartextOffBox) {
+      console.warn(`warning: ${url} is plain http — the token, every keystroke and all ` +
+        'terminal output cross the network in clear. Use an encrypted overlay ' +
+        '(Tailscale, WireGuard) or pass --tls-cert/--tls-key.')
     }
     if (args.updateCheck) {
       // Fire and forget: an offline machine or a registry outage must never
@@ -167,8 +151,10 @@ async function main(): Promise<void> {
         })
     }
     if (args.open) {
-      const opened = openWindow(url)
-      if (!opened) console.log(`no browser found — ${describeFallback(url)}`)
+      const opened = openWindow(authUrl)
+      if (!opened) console.log(`no browser found — ${describeFallback(authUrl)}`)
+    } else if (token) {
+      console.log(`open ${authUrl}`)
     }
   })
 
@@ -182,4 +168,10 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => void shutdown())
 }
 
-void main()
+void main().catch((err: unknown) => {
+  if (err instanceof UsageError) {
+    console.error(err.message)
+    process.exit(1)
+  }
+  throw err
+})

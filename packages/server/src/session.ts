@@ -31,6 +31,8 @@ export interface SessionOptions {
   name?: string | null
   color?: string | null
   url: string
+  /** The daemon's bearer token, exported as $TRING_TOKEN. Null when disabled. */
+  token?: string | null
   scrollback?: number
   idleMs?: number
   /** Overrides the platform default; see shell.ts. */
@@ -108,6 +110,12 @@ export class Session {
     env['TRING_SLOT'] = String(this.slot)
     env['TRING_PROJECT'] = opts.projectName
     env['TRING_URL'] = opts.url
+    // So the documented Stop hook can authenticate without anyone pasting a
+    // secret into settings.json. Deleted rather than left inherited when the
+    // daemon has no token, so $TRING_TOKEN is never a stale one from the
+    // environment the daemon happened to start in.
+    if (opts.token) env['TRING_TOKEN'] = opts.token
+    else delete env['TRING_TOKEN']
 
     const autorun = opts.autorun ?? true
     const args = this.command && autorun
