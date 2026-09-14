@@ -1,4 +1,4 @@
-import type { ProjectInfo, SessionInfo } from '@tring/shared/protocol'
+import type { BrowserCapability, ProjectInfo, SessionInfo } from '@tring/shared/protocol'
 import { legendForSlot } from '@tring/shared/keymap'
 import { RING_SIZES, ringSize, type RingSize } from './ring-layout.ts'
 import { MOBILE_QUERY } from './switcher.ts'
@@ -119,6 +119,7 @@ export function openPicker(
   projects: ProjectInfo[],
   doneCount: number,
   cb: PickerCallbacks,
+  browserEnabled = false,
 ): void {
   const panel = el('div', 'panel picker')
   panel.append(el('h2', undefined, project ? project.name : 'No project'))
@@ -161,7 +162,10 @@ export function openPicker(
   const legend = el('div', 'legend')
   legend.innerHTML =
     '<b>n</b> next finished &nbsp; <b>p</b> projects &nbsp; <b>c</b> new session &nbsp; ' +
-    '<b>r</b> rename &nbsp; <b>x</b> kill &nbsp; <b>m</b> mark seen &nbsp; <b>esc</b> close'
+    '<b>r</b> rename &nbsp; <b>x</b> kill &nbsp; <b>m</b> mark seen &nbsp; ' +
+    // Listed only when it does something, like the control on the tiles.
+    (browserEnabled ? '<b>b</b> browser &nbsp; ' : '') +
+    '<b>esc</b> close'
   panel.append(legend)
 
   open(panel)
@@ -188,6 +192,43 @@ export function openProjectPicker(projects: ProjectInfo[], onPick: (id: string) 
 }
 
 /* ---------- dialogs (spec §5.7, §5.8) ---------- */
+
+/**
+ * Terminal or Browser Agent (spec §5.9, §5.13).
+ *
+ * The same segmented control the ring-size setting uses, deliberately: this is
+ * the same kind of choice and should not look like a different one. Rendered
+ * only when the capability is `on` — a control that can never be used is worse
+ * than an absent one, so it is not shown disabled.
+ */
+function browserChoice(
+  enabled: boolean, initial: boolean, onChange: (browser: boolean) => void,
+): HTMLElement | null {
+  if (!enabled) return null
+  let browser = initial
+  const field = el('div', 'field ring-size')
+  field.append(el('span', undefined, 'Session type'))
+  const choices = el('div', 'choices')
+  const options: Array<[boolean, string, string]> = [
+    [false, 'Terminal', 'a shell'],
+    [true, 'Browser Agent', 'a shell and a page'],
+  ]
+  for (const [value, label, hint] of options) {
+    const b = el('button', 'choice' + (value === browser ? ' active' : '')) as HTMLButtonElement
+    b.type = 'button'
+    b.append(el('b', undefined, label))
+    b.append(el('span', undefined, hint))
+    b.onclick = () => {
+      browser = value
+      for (const c of Array.from(choices.children)) c.classList.remove('active')
+      b.classList.add('active')
+      onChange(browser)
+    }
+    choices.append(b)
+  }
+  field.append(choices)
+  return field
+}
 
 export function openProjectDialog(
   opts: {
@@ -261,14 +302,18 @@ export function openProjectDialog(
 }
 
 export function openNewSessionDialog(
-  defaults: { cwd: string; slot: number },
-  onSubmit: (v: { cwd: string; command: string | null; name: string | null }) => void,
+  defaults: { cwd: string; slot: number; browserEnabled?: boolean },
+  onSubmit: (v: {
+    cwd: string; command: string | null; name: string | null
+    browser: boolean; url: string | null
+  }) => void,
 ): void {
   const panel = el('div', 'panel')
   panel.append(el('h2', undefined, `New session in slot ${defaults.slot}`))
   panel.append(el('p', 'hint', 'Defaults to the project root.'))
 
   const form = el('form')
+  let browser = false
   const mk = (label: string, value: string, placeholder: string) => {
     const input = el('input') as HTMLInputElement
     input.value = value
@@ -278,10 +323,27 @@ export function openNewSessionDialog(
     form.append(field)
     return input
   }
+
+  // Leads the dialog, because it changes what the rest of it is for.
+  const urlField = el('label', 'field')
+  const url = el('input') as HTMLInputElement
+  url.placeholder = 'http://localhost:5173'
+  urlField.append(el('span', undefined, 'Start URL (optional)'), url)
+  urlField.hidden = true
+
+  const choice = browserChoice(Boolean(defaults.browserEnabled), false, (v) => {
+    browser = v
+    urlField.hidden = !v
+  })
+  if (choice) form.append(choice)
+
   const cwd = mk('Working directory', defaults.cwd, defaults.cwd)
   form.append(directoryBrowser(cwd))
   const command = mk('Command (optional)', '', 'claude')
   const name = mk('Name (optional)', '', 'agent')
+  // A Browser Agent is still a shell, so every field above still applies; the
+  // URL is the only thing the choice adds.
+  form.append(urlField)
 
   const actions = el('div', 'actions')
   const cancel = el('button', 'btn', 'Cancel') as HTMLButtonElement
@@ -299,6 +361,8 @@ export function openNewSessionDialog(
       cwd: cwd.value.trim() || defaults.cwd,
       command: command.value.trim() || null,
       name: name.value.trim() || null,
+      browser,
+      url: url.value.trim() || null,
     })
   }
   panel.append(form)
@@ -333,13 +397,25 @@ export const TILE_COLORS = [
 
 export function openSessionDialog(
   session: SessionInfo,
-  onSubmit: (v: { name: string; color: string | null }) => void,
+  onSubmit: (v: { name: string; color: string | null; browser: boolean }) => void,
+  opts: { browserEnabled?: boolean } = {},
 ): void {
   const panel = el('div', 'panel')
   panel.append(el('h2', undefined, `Slot ${session.slot}`))
   panel.append(el('p', 'hint', session.cwd))
 
   const form = el('form')
+
+  // The reason this dialog is the one that gets the control: it is already the
+  // single gesture that edits a live session, so the choice reaches every tile
+  // without a new affordance anywhere (spec §5.9).
+  let browser = Boolean(session.browser)
+  const choice = browserChoice(Boolean(opts.browserEnabled), browser, (v) => { browser = v })
+  if (choice) {
+    form.append(choice)
+    form.append(el('p', 'hint',
+      'Attaching keeps the shell running — nothing is restarted and no scrollback is lost.'))
+  }
 
   const name = el('input') as HTMLInputElement
   name.value = session.name ?? ''
@@ -386,7 +462,7 @@ export function openSessionDialog(
   form.onsubmit = (e) => {
     e.preventDefault()
     close()
-    onSubmit({ name: name.value.trim(), color })
+    onSubmit({ name: name.value.trim(), color, browser })
   }
   panel.append(form)
   open(panel)
@@ -397,9 +473,22 @@ export function openSessionDialog(
 export interface Settings {
   ring: RingSize
   usage: boolean
+  browser: boolean
 }
 
-export function openSettingsDialog(current: Settings, onApply: (next: Settings) => void): void {
+export interface SettingsContext {
+  capability: BrowserCapability
+  allow: string[]
+  /** Streams progress; resolves when Chromium is on disk. */
+  installBrowser?: (onProgress: (received: number, total: number) => void) => Promise<void>
+  onAllowChange?: (allow: string[]) => void
+}
+
+export function openSettingsDialog(
+  current: Settings,
+  onApply: (next: Settings) => void,
+  ctx: SettingsContext = { capability: 'unavailable', allow: [] },
+): void {
   const panel = el('div', 'panel')
   panel.append(el('h2', undefined, 'Settings'))
 
@@ -440,6 +529,84 @@ export function openSettingsDialog(current: Settings, onApply: (next: Settings) 
     'answers locally and bills nothing. Nothing is read from your credentials, and ' +
     'nothing leaves this machine.'))
 
+  /* ---- browser agents (spec §5.7) ---- */
+
+  let browserOn = current.browser
+  const allowInput = el('input') as HTMLInputElement
+  allowInput.value = ctx.allow.join(', ')
+  allowInput.placeholder = 'localhost:*, *.staging.example.com'
+
+  const browserField = el('div', 'field')
+  panel.append(browserField)
+  const browserHint = el('p', 'hint')
+  panel.append(browserHint)
+
+  const allowField = el('label', 'field')
+  allowField.append(el('span', undefined, 'Sites this project may open'), allowInput)
+  panel.append(allowField)
+  const allowHint = el('p', 'hint',
+    'Anything else is held and offered to you on the tile. tring’s own address is ' +
+    'always refused, allowlist or not — a page that can reach it can drive your terminals.')
+  panel.append(allowHint)
+
+  // Three states, because "installed but off" and "not installed" want
+  // different controls: a checkbox and a download button.
+  const paintBrowser = (capability: BrowserCapability): void => {
+    browserField.replaceChildren()
+    allowField.hidden = capability !== 'on'
+    allowHint.hidden = capability !== 'on'
+
+    if (capability === 'unavailable') {
+      const install = el('button', 'btn', 'Install Chromium (~150 MB)') as HTMLButtonElement
+      install.type = 'button'
+      const bar = el('div', 'install-bar')
+      const fill = el('div', 'install-fill')
+      bar.append(fill)
+      bar.hidden = true
+      install.onclick = () => {
+        if (!ctx.installBrowser) return
+        install.disabled = true
+        install.textContent = 'Downloading…'
+        bar.hidden = false
+        ctx.installBrowser((received, total) => {
+          if (total > 0) fill.style.width = `${Math.round((received / total) * 100)}%`
+        }).then(
+          () => paintBrowser('off'),
+          (err: Error) => {
+            install.disabled = false
+            install.textContent = 'Install Chromium (~150 MB)'
+            bar.hidden = true
+            browserHint.textContent = `Download failed: ${err.message}`
+          },
+        )
+      }
+      browserField.append(el('span', undefined, 'Browser agents'), install, bar)
+      browserHint.textContent =
+        'A session can own a browser beside its shell. Chromium is not bundled — it is ' +
+        'downloaded once, only if you want this.'
+      return
+    }
+
+    const label = el('label', 'toggle')
+    const box = el('input') as HTMLInputElement
+    box.type = 'checkbox'
+    box.checked = browserOn
+    box.onchange = () => {
+      browserOn = box.checked
+      allowField.hidden = !browserOn
+      allowHint.hidden = !browserOn
+    }
+    label.append(box, el('span', undefined, 'Enable browser agents for this project'))
+    browserField.append(label)
+    browserHint.textContent =
+      'Tiles gain a Terminal / Browser Agent choice. An attached page runs in this ' +
+      'project’s own profile, so a login survives a restart and never touches your ' +
+      'real browser profile.'
+    allowField.hidden = !browserOn
+    allowHint.hidden = !browserOn
+  }
+  paintBrowser(ctx.capability)
+
   const actions = el('div', 'actions')
   const cancel = el('button', 'btn', 'Cancel') as HTMLButtonElement
   cancel.type = 'button'
@@ -447,7 +614,9 @@ export function openSettingsDialog(current: Settings, onApply: (next: Settings) 
   const ok = el('button', 'btn primary', 'Save') as HTMLButtonElement
   ok.onclick = () => {
     close()
-    onApply({ ring, usage: toggle.checked })
+    const allow = allowInput.value.split(',').map((s) => s.trim()).filter(Boolean)
+    if (ctx.onAllowChange) ctx.onAllowChange(allow)
+    onApply({ ring, usage: toggle.checked, browser: browserOn })
   }
   actions.append(cancel, ok)
   panel.append(actions)

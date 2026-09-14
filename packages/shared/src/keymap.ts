@@ -47,6 +47,8 @@ export const PICKER_ACTIONS = {
   KeyR: 'rename',
   KeyX: 'kill',
   KeyM: 'mark-seen',
+  /** Attach or detach a browser; ignored while the capability is not `on`. */
+  KeyB: 'browser',
   Escape: 'close',
 } as const
 

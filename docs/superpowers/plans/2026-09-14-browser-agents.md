@@ -91,11 +91,18 @@ and inherits what §4.1 already injects.
 park-and-resume wiring is testable without a page. It is the piece that hangs an agent
 forever if it is wrong.
 
-**6. surface the choice** — the segmented control in `openNewSessionDialog` and
+**6. surface the choice** *(done)* — the segmented control in `openNewSessionDialog` and
 `openSessionDialog`, `b` in the picker, the three-state settings control with the install
-progress bar, the allowlist editor, README section. Last on purpose: until stage 5 lands
-there is nothing behind the control worth offering, and shipping it earlier means shipping
-a control that half-works.
+progress bar, the allowlist editor, README section.
+
+- The control reuses the ring-size `.choices` widget, because it is the same kind of
+  choice and should not look like a different one.
+- `SessionManager.setBrowserHost` exists because a project that is already running took
+  its host at spawn time, so a switch flipped now has to reach it. Disabling detaches what
+  is open: pages running under a switch that says off is a gap someone finds later.
+- `projectBrowser` goes to the daemon, not `localStorage`, and broadcasts state — the
+  capability is per project, so every client viewing it needs the new answer, not only the
+  one that flipped the switch.
 
 ## Verification
 

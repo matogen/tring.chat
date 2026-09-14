@@ -93,6 +93,8 @@ export interface ProjectInfo {
   name: string
   root: string
   sessions: SessionInfo[]
+  /** Host patterns this project's pages may navigate to (spec §4.7). */
+  browserAllow?: string[]
 }
 
 export interface UpdateInfo {
@@ -127,6 +129,11 @@ export type ClientMessage =
   | { type: 'browserRelease'; id: string }
   | { type: 'browserNavigate'; id: string; to: BrowserNavigation }
   | { type: 'browserView'; id: string; width: number; height: number }
+  /**
+   * Per-project browser settings. On the daemon rather than in localStorage
+   * because enabling this spawns a process and stores cookies (spec §5.7).
+   */
+  | { type: 'projectBrowser'; projectId: string; enabled?: boolean; allow?: string[]; eval?: boolean }
   | { type: 'kill'; id: string }
   | { type: 'rename'; id: string; name: string }
   | { type: 'color'; id: string; color: string | null }

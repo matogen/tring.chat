@@ -51,3 +51,28 @@ describe('keymap', () => {
     expect(actionForEvent(ev('KeyP', { ctrlKey: true }))).toBeNull()
   })
 })
+
+describe('the browser binding', () => {
+  const key = (code: string) => ({
+    code, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false,
+  })
+
+  it('binds b to attach or detach a browser', () => {
+    expect(actionForEvent(key('KeyB'))).toBe('browser')
+  })
+
+  /** It shares the picker with n/p/c/r/x/m, so it must not have taken one. */
+  it('leaves every existing action alone', () => {
+    expect(actionForEvent(key('KeyN'))).toBe('next-done')
+    expect(actionForEvent(key('KeyP'))).toBe('projects')
+    expect(actionForEvent(key('KeyC'))).toBe('new-session')
+    expect(actionForEvent(key('KeyR'))).toBe('rename')
+    expect(actionForEvent(key('KeyX'))).toBe('kill')
+    expect(actionForEvent(key('KeyM'))).toBe('mark-seen')
+    expect(actionForEvent(key('Escape'))).toBe('close')
+  })
+
+  it('is not a slot key', () => {
+    expect(slotForEvent(key('KeyB'))).toBeNull()
+  })
+})

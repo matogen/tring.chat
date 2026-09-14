@@ -207,6 +207,17 @@ export class Hub {
       case 'browserNavigate':
         void pm.findSession(msg.id)?.browser?.navigate(msg.to)
         break
+      case 'projectBrowser': {
+        pm.setBrowserSettings(msg.projectId, {
+          ...(msg.enabled !== undefined ? { enabled: msg.enabled } : {}),
+          ...(msg.allow !== undefined ? { allow: msg.allow } : {}),
+          ...(msg.eval !== undefined ? { eval: msg.eval } : {}),
+        })
+        // Capability is per project, so every client viewing it needs the new
+        // answer — not only the one that flipped the switch.
+        this.broadcastState()
+        break
+      }
       case 'browserView': {
         c.views.set(msg.id, {
           width: msg.width,

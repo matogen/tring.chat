@@ -226,9 +226,6 @@ body {
 }
 .browser-release:hover { background: var(--amber); color: var(--bg); }
 
-.browser-stage { cursor: default; }
-.browser-stage:focus-visible { outline: 1px solid var(--emerald); outline-offset: -1px; }
-
 .browser-blocked {
   flex: 0 0 auto;
   padding: 4px 8px;
@@ -241,7 +238,8 @@ body {
   white-space: nowrap;
 }
 
-.browser-stage { flex: 1 1 auto; min-height: 0; position: relative; }
+.browser-stage { flex: 1 1 auto; min-height: 0; position: relative; cursor: default; }
+.browser-stage:focus-visible { outline: 1px solid var(--emerald); outline-offset: -1px; }
 .browser-stage canvas { display: block; width: 100%; height: 100%; }
 
 .tile {
@@ -808,4 +806,20 @@ body {
 
   /* Ring size is a desktop choice; the phone has no ring to size. */
   .ring-size { display: none; }
+}
+
+/* Chromium is ~150MB and arrives over minutes, so the settings dialog shows a
+   bar rather than a spinner (spec §5.7). */
+.install-bar {
+  height: 4px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  overflow: hidden;
+}
+.install-fill {
+  height: 100%;
+  width: 0;
+  background: var(--emerald);
+  transition: width .2s linear;
 }

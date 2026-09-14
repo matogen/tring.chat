@@ -132,7 +132,14 @@ export class ProjectManager {
   setBrowserSettings(projectId: string, next: Partial<PersistedBrowser>): void {
     const e = this.entries.get(projectId)
     if (!e) return
+    const was = e.browser.enabled
     e.browser = { ...e.browser, ...next }
+    // A project that is already running took its host at spawn time, so a
+    // switch flipped now has to reach it. The allowlist needs no such call: it
+    // is read fresh on every navigation.
+    if (e.manager && e.browser.enabled !== was) {
+      e.manager.setBrowserHost(e.browser.enabled ? this.browserHost : null)
+    }
     this.changed()
   }
 
@@ -160,6 +167,7 @@ export class ProjectManager {
       // A project that has never been activated has nothing running, so it
       // truthfully reports no sessions and a zero done-count.
       sessions: e.manager?.list().map((s) => s.info()) ?? [],
+      browserAllow: e.browser.allow ?? [...DEFAULT_ALLOW],
     }))
   }
 

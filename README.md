@@ -244,6 +244,7 @@ streams thumbnails, which is what keeps several projects cheap.
 | `Space` | back to the previous session |
 | `c` / `r` / `x` | new session / rename and colour / kill |
 | `m` | mark seen |
+| `b` | attach or detach a browser (when browser agents are on) |
 | `Esc` | close the picker |
 
 Browsers reserve `Ctrl+1`–`Ctrl+8` for tab switching, so `Shift+digit` is the
@@ -343,6 +344,62 @@ why there is no percentage. There is nothing to configure either way: a bar need
 ceiling, and inventing one would be worse than having none.
 
 Reloading while the tab is open leaves you on it.
+
+## Browser agents
+
+Optional, off by default. Turn on **Enable browser agents** in the gear and every tile
+gains a choice: **Terminal**, or **Browser Agent**.
+
+A Browser Agent slot is still a shell. It just also owns a browser, and the focus pane
+splits in two — your agent on one side, the live page on the other. Drag the divider
+anywhere, including all the way to either edge; the ratio is remembered per session.
+
+```
+┌──────────────────┬──────────────────┐
+│ $ claude         │ ← → ↻  example   │
+│ > log into the   │ ┌──────────────┐ │
+│   staging site   │ │              │ │
+│ ● clicking…      │ │   live page  │ │
+│                  │ │              │ │
+└──────────────────┴──────────────────┘
+```
+
+**Attaching never restarts anything.** Switching a running session from Terminal to
+Browser Agent adds a page beside the shell that is already working — same process, same
+scrollback. Switching back closes the page and leaves the shell alone.
+
+**Either of you can drive.** The agent drives by default. Touch the page and you take
+over — the pane turns amber and says *You're driving* — and the agent's next action waits
+instead of failing. Hand it back with the button when you are done.
+
+That is what makes a login wall survivable. When an agent hits SSO, a captcha or 2FA it
+stops on the form, the tile turns green and rings, and you type the password with your own
+hands. Those keystrokes go straight into the page: they are not in the agent's transcript,
+not in its context, and not in any log tring keeps. Hand back, and it carries on.
+
+**Giving an agent the tools.** From inside a tring session:
+
+```
+claude mcp add tring-browser -- tring mcp
+```
+
+There is nothing to paste. It picks up the session from the environment, so the agent in
+slot 7 can drive the browser in slot 7 and no other.
+
+**Chromium is not bundled.** It is ~150MB and downloads once, when you first switch the
+feature on — never at install time.
+
+**Where a page may go** is a per-project allowlist, `localhost:*` and `127.0.0.1:*` to
+begin with. Anything else is held and offered to you on the tile. tring's own address is
+always refused, allowlist or not: the page it serves drives every terminal you have.
+
+The allowlist covers navigation, not every request a page makes — an allowed page can
+still fetch from anywhere. It raises the cost of an agent posting your source somewhere;
+it is not a seal. Running JavaScript in the page (`browser_eval`) is off separately,
+because one `fetch` from page script goes around the allowlist entirely.
+
+Each project gets its own browser profile under `~/.config/tring/projects/`, so a login
+survives a restart. Your real Chrome profile is never touched.
 
 ## Sound
 

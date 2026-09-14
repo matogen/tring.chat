@@ -7,10 +7,10 @@ import './theme.css'
 import './style.css'
 
 import type {
-  ProjectInfo, ScreenSnapshot, ServerMessage, SessionInfo, UpdateInfo,
+  BrowserCapability, ProjectInfo, ScreenSnapshot, ServerMessage, SessionInfo, UpdateInfo,
 } from '@tring/shared/protocol'
 import { actionForEvent, isPrefix, legendForSlot, slotForEvent } from '@tring/shared/keymap'
-import { WsClient } from './ws-client.ts'
+import { DAEMON, TOKEN, WsClient } from './ws-client.ts'
 import { FocusTerminal } from './focus-terminal.ts'
 import { BrowserPane } from './browser-pane.ts'
 import { DEFAULT_RATIO, halves, loadRatio, ratioForPointer, saveRatio } from './split.ts'
@@ -38,6 +38,8 @@ let askedForFirstProject = false
 let overlayMode: 'picker' | 'projects' | null = null
 let update: UpdateInfo | null = null
 let viewMode: 'ring' | 'usage' = 'ring'
+/** Whether tiles offer a Terminal / Browser Agent choice at all (spec §5.7). */
+let capability: BrowserCapability = 'unavailable'
 let usageTimer: ReturnType<typeof setInterval> | null = null
 /** The phone view: no ring, a switcher bar instead (spec §5.11). */
 const mobile = window.matchMedia(MOBILE_QUERY)
@@ -126,6 +128,7 @@ function handleMessage(msg: ServerMessage): void {
     case 'state': {
       projects = msg.projects
       update = msg.update ?? update
+      capability = msg.capabilities?.browser ?? capability
       const alive = new Set(projects.flatMap((p) => p.sessions).map((s) => s.id))
       for (const id of lastShots.keys()) if (!alive.has(id)) lastShots.delete(id)
       viewedId = msg.activeProjectId ?? projects[0]?.id ?? null
@@ -568,14 +571,61 @@ async function refreshUsage(): Promise<void> {
 }
 
 function openSettings(): void {
-  ui.openSettingsDialog({ ring: ringSize(), usage: usage.isEnabled() }, (v) => {
-    if (v.usage !== usage.isEnabled()) {
-      usage.setEnabled(v.usage)
-      if (!v.usage) showRing()
-    }
-    if (v.ring !== ringSize()) changeRingSize(v.ring)
-    else { paintBar(); void refreshUsage() }
+  const project = viewed()
+  ui.openSettingsDialog(
+    { ring: ringSize(), usage: usage.isEnabled(), browser: capability === 'on' },
+    (v) => {
+      if (v.usage !== usage.isEnabled()) {
+        usage.setEnabled(v.usage)
+        if (!v.usage) showRing()
+      }
+      // Unlike ring size and usage, this one lives on the daemon: it spawns a
+      // browser and stores cookies, so two tabs must not be able to disagree
+      // about whether that is allowed (spec §5.7).
+      if (project && v.browser !== (capability === 'on')) {
+        ws.send({ type: 'projectBrowser', projectId: project.id, enabled: v.browser })
+      }
+      if (v.ring !== ringSize()) changeRingSize(v.ring)
+      else { paintBar(); void refreshUsage() }
+    },
+    {
+      capability,
+      allow: project?.browserAllow ?? [],
+      installBrowser: installChromium,
+      onAllowChange: (allow) => {
+        if (project) ws.send({ type: 'projectBrowser', projectId: project.id, allow })
+      },
+    },
+  )
+}
+
+/** Streams `{received,total}` lines while ~150MB arrives (spec §4.5). */
+async function installChromium(
+  onProgress: (received: number, total: number) => void,
+): Promise<void> {
+  const res = await fetch(`${DAEMON}/api/browser/install`, {
+    method: 'POST',
+    headers: TOKEN ? { authorization: `Bearer ${TOKEN}` } : {},
   })
+  if (!res.ok || !res.body) throw new Error(`install failed (${res.status})`)
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) {
+      if (!line.trim()) continue
+      const msg = JSON.parse(line) as { received?: number; total?: number; error?: string }
+      if (msg.error) throw new Error(msg.error)
+      if (typeof msg.received === 'number' && typeof msg.total === 'number') {
+        onProgress(msg.received, msg.total)
+      }
+    }
+  }
 }
 
 function changeRingSize(size: RingSize): void {
@@ -634,10 +684,18 @@ function nextDone(): void {
 function promptNewSession(slot: number): void {
   const project = viewed()
   if (!project) return
-  ui.openNewSessionDialog({ cwd: project.root, slot }, (v) => {
-    if (mobile.matches) focusOnArrival = slot
-    ws.send({ type: 'create', projectId: project.id, slot, cwd: v.cwd, ...(v.command ? { command: v.command } : {}), ...(v.name ? { name: v.name } : {}) })
-  })
+  ui.openNewSessionDialog(
+    { cwd: project.root, slot, browserEnabled: capability === 'on' },
+    (v) => {
+      if (mobile.matches) focusOnArrival = slot
+      ws.send({
+        type: 'create', projectId: project.id, slot, cwd: v.cwd,
+        ...(v.command ? { command: v.command } : {}),
+        ...(v.name ? { name: v.name } : {}),
+        ...(v.browser ? { browser: true, ...(v.url ? { url: v.url } : {}) } : {}),
+      })
+    },
+  )
 }
 
 function promptNewProject(blocking: boolean): void {
@@ -647,14 +705,30 @@ function promptNewProject(blocking: boolean): void {
   )
 }
 
-/** Right-clicking a tile: the two things that belong to the tile itself. */
+/** Right-clicking a tile: the things that belong to the tile itself. */
 function sessionMenu(id: string): void {
   const s = sessionById(id)
   if (!s) return
-  ui.openSessionDialog(s, (v) => {
-    if (v.name !== (s.name ?? '')) ws.send({ type: 'rename', id, name: v.name })
-    if (v.color !== s.color) ws.send({ type: 'color', id, color: v.color })
-  })
+  ui.openSessionDialog(
+    s,
+    (v) => {
+      if (v.name !== (s.name ?? '')) ws.send({ type: 'rename', id, name: v.name })
+      if (v.color !== s.color) ws.send({ type: 'color', id, color: v.color })
+      if (v.browser !== Boolean(s.browser)) toggleBrowser(id, v.browser)
+    },
+    { browserEnabled: capability === 'on' },
+  )
+}
+
+/**
+ * Attach or detach, never create or kill (spec §4.7).
+ *
+ * The shell keeps running through both, which is the whole reason this can be
+ * offered on a tile that is already working.
+ */
+function toggleBrowser(id: string, wanted: boolean): void {
+  if (wanted) ws.send({ type: 'attachBrowser', id })
+  else ws.send({ type: 'detachBrowser', id })
 }
 
 function projectMenu(id: string): void {
@@ -709,7 +783,7 @@ function openPicker(): void {
     onPickProject: (id) => { overlayMode = null; activateProject(id) },
     onNextDone: () => { overlayMode = null; nextDone() },
     onNewSession: () => { overlayMode = null; newSessionInFirstEmptySlot() },
-  })
+  }, capability === 'on')
 }
 
 function newSessionInFirstEmptySlot(): void {
@@ -787,6 +861,12 @@ function pickerKey(e: KeyboardEvent): void {
       break
     case 'mark-seen':
       if (current) ws.send({ type: 'ack', id: current.id })
+      ui.close(); overlayMode = null
+      break
+    case 'browser':
+      // Silently ignored while the capability is not `on`, matching the
+      // control that is not drawn on the tiles either (spec §5.5).
+      if (current && capability === 'on') toggleBrowser(current.id, !current.browser)
       ui.close(); overlayMode = null
       break
   }

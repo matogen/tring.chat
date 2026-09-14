@@ -50,7 +50,21 @@ export class SessionManager {
   onSessionFrame: ((s: Session, jpeg: Buffer) => void) | null = null
   onSessionBrowserPrompt: ((s: Session, url: string) => void) | null = null
 
-  constructor(private readonly opts: SessionManagerOptions) {}
+  constructor(private opts: SessionManagerOptions) {}
+
+  /**
+   * Turn attachment on or off for a project that is already running.
+   *
+   * Withholding the host rather than keeping a flag beside it: with nothing to
+   * attach with, there is no path that could attach anyway. Disabling detaches
+   * what is already open, because leaving pages running under a switch that
+   * says off is the kind of gap someone finds later.
+   */
+  setBrowserHost(host: BrowserHost | null): void {
+    this.opts = { ...this.opts, browserHost: host }
+    if (host) return
+    for (const s of this.bySlot.values()) s.detachBrowser()
+  }
 
   create(spec: SessionSpec = {}): Session {
     const slot = spec.slot ?? this.firstEmptySlot()
