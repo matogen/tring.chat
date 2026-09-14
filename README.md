@@ -98,8 +98,8 @@ npm i -g ./packages/server          # install this checkout as `tring`
 ```
 
 Flags: `--port` (7331), `--host` (127.0.0.1), `--token`, `--scrollback` (5000),
-`--idle-ms` (3000), `--shell`, `--fs-root`, `--allow-origin`, `--no-open`,
-`--no-update-check`, `--version`.
+`--idle-ms` (3000), `--shell`, `--fs-root`, `--allow-origin`, `--insecure-no-token`,
+`--no-open`, `--no-update-check`, `--version`.
 
 ## On a phone
 
@@ -112,11 +112,15 @@ The daemon only listens on `127.0.0.1` by default. To reach it from a phone, bin
 the network and require a token:
 
 ```
-tring --host 0.0.0.0 --token some-long-secret
+tring --host 0.0.0.0 --token "$(openssl rand -hex 32)"
 ```
 
 then open `http://<your-machine>:7331/?token=some-long-secret` on the phone. A private
 network such as Tailscale is the safer way to do this than opening the port on a LAN.
+
+Binding off localhost without a token is refused at startup rather than warned about: the
+daemon spawns shells, and off loopback the token is the only thing in front of them.
+`--insecure-no-token` overrides that if the network is already trusted that far.
 
 The token is remembered on that first visit and then taken back off the address bar, but
 a secret that has travelled in a URL is only as private as the URL: it has already been
@@ -138,11 +142,14 @@ machines out, not other websites.
   and `/api/sessions` scripts keep working exactly as before.
 - `--allow-origin <origin>` adds one, for a front end you serve yourself. `npm run dev`
   sets it for the Vite server on :5173.
-- `--token` is still what gates access once you bind past loopback, and is now compared
-  in constant time.
+- `--token` is what gates access once you bind past loopback, and is compared in constant
+  time. The origin check cannot cover for it there: the hostname is then your own and
+  unguessable to the daemon, so `Host` goes unpinned and a rebound name matches it. That
+  is why a token is required rather than recommended off loopback.
 - The directory picker (`/api/fs`) browses your home directory and the roots of projects
   you have already created. `--fs-root <path>` adds another — useful if your projects
-  live somewhere like `D:\work`.
+  live somewhere like `D:\work`. Paths are resolved through symlinks before the check, so
+  a link inside a root is not a way back out of it.
 
 ## Install it as an app
 

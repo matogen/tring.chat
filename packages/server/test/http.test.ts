@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { createServer, type Server } from 'node:http'
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { ProjectManager } from '../src/project-manager.ts'
@@ -240,6 +240,32 @@ describe('directory listing', () => {
     expect(body.path).toBe(r.dir)
     // The dialog is not offered an "up" that would only be refused.
     expect(body.parent).toBeNull()
+  })
+
+  it('does not let a symlink inside a root walk back out of it', async () => {
+    // The containment check has to resolve what readdir will actually follow:
+    // lexically, `<root>/escape/etc` still looks like it is under the root.
+    const outside = await mkdtemp(path.join(os.tmpdir(), 'tring-outside-'))
+    await mkdir(path.join(outside, 'secrets'))
+    const r = await rig()
+    r.pm.createProject('demo', r.dir)
+    await symlink(outside, path.join(r.dir, 'escape'), 'dir')
+
+    const escaped = path.join(r.dir, 'escape', 'secrets')
+    const res = await fetch(`${r.base}/api/fs?path=${encodeURIComponent(escaped)}`)
+    expect(res.status).toBe(403)
+  })
+
+  it('still browses a root reached through a symlink of its own', async () => {
+    // Resolving only one side would refuse a symlinked home or project root.
+    const outside = await mkdtemp(path.join(os.tmpdir(), 'tring-real-'))
+    await mkdir(path.join(outside, 'src'))
+    const link = path.join(await mkdtemp(path.join(os.tmpdir(), 'tring-link-')), 'proj')
+    await symlink(outside, link, 'dir')
+
+    const r = await rig(undefined, [link])
+    const res = await fetch(`${r.base}/api/fs?path=${encodeURIComponent(path.join(link, 'src'))}`)
+    expect(res.status).toBe(200)
   })
 
   it('opens up a directory named with --fs-root', async () => {

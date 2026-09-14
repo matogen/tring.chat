@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { IncomingMessage } from 'node:http'
 import {
-  bearerEquals, createOriginCheck, secretEquals, SECURITY_HEADERS,
+  bearerEquals, bindNeedsToken, createOriginCheck, isLoopbackBind, secretEquals, SECURITY_HEADERS,
 } from '../src/security.ts'
 
 const req = (headers: Record<string, string>): IncomingMessage =>
@@ -59,6 +59,28 @@ describe('origin check', () => {
       .toBe(true)
     expect(lan(req({ host: 'box.tail1234.ts.net:7331', origin: 'https://evil.example' })))
       .toBe(false)
+  })
+})
+
+describe('token required off loopback', () => {
+  it('knows which bind addresses only this machine can reach', () => {
+    for (const host of ['127.0.0.1', 'localhost', '::1', '127.1.2.3', null]) {
+      expect(isLoopbackBind(host), String(host)).toBe(true)
+    }
+    for (const host of ['0.0.0.0', '::', '192.168.1.10', 'box.tail1234.ts.net']) {
+      expect(isLoopbackBind(host), host).toBe(false)
+    }
+  })
+
+  it('demands a token exactly when the port leaves the machine', () => {
+    // Off loopback the Origin check cannot stand in for one: Host is unpinned
+    // there, so a rebound domain supplies a Host and Origin that agree.
+    expect(bindNeedsToken('0.0.0.0', null)).toBe(true)
+    expect(bindNeedsToken('192.168.1.10', null)).toBe(true)
+    expect(bindNeedsToken('0.0.0.0', 's3cret')).toBe(false)
+    // Loopback is gated by the name check instead, so no token is needed.
+    expect(bindNeedsToken('127.0.0.1', null)).toBe(false)
+    expect(bindNeedsToken(undefined, null)).toBe(false)
   })
 })
 

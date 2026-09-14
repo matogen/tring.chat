@@ -19,6 +19,31 @@ export function hostname(host: string): string {
   return (/^(\[[^\]]*\]|[^:]*)/.exec(host)?.[1] ?? host).toLowerCase()
 }
 
+/**
+ * Whether a bind address only ever accepts connections from this machine.
+ *
+ * Takes the address as given to --host rather than a Host header, so no port
+ * is stripped: `::1` is a bind address, `[::1]:7331` is not.
+ */
+export function isLoopbackBind(host: string | null | undefined): boolean {
+  return !host || LOOPBACK.test(host)
+}
+
+/**
+ * A daemon reachable from other machines needs a secret; loopback does not.
+ *
+ * The Origin check cannot stand in for one here. Bound past loopback the
+ * hostname is the user's own and unguessable to us, so Host is unpinned — and
+ * a rebound domain then supplies a Host *and* an Origin that agree with each
+ * other. On loopback the name itself is the tell; off it, only the token is.
+ */
+export function bindNeedsToken(
+  host: string | null | undefined,
+  token: string | null | undefined,
+): boolean {
+  return !isLoopbackBind(host) && !token
+}
+
 /** The `host:port` an Origin denotes, or null if it is not one we can trust. */
 function originHost(origin: string): string | null {
   try {
@@ -50,7 +75,7 @@ export function createOriginCheck(opts: OriginOptions = {}): OriginCheck {
   // a Host header that is anything else is a domain an attacker rebound to
   // 127.0.0.1 rather than a way the user actually reaches the deck. Bound
   // anywhere else the hostname is the user's own and we cannot guess it.
-  const pinned = !opts.host || LOOPBACK.test(opts.host)
+  const pinned = isLoopbackBind(opts.host)
 
   return function sameOrigin(req: IncomingMessage): boolean {
     const host = req.headers.host?.toLowerCase()

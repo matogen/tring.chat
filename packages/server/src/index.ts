@@ -7,7 +7,9 @@ import { DEFAULT_HOST, DEFAULT_PORT, DEFAULT_SCROLLBACK } from '@tring/shared/pr
 import { DEFAULT_IDLE_MS } from '@tring/shared/status'
 import { ProjectManager } from './project-manager.ts'
 import { createHandler } from './http.ts'
-import { createOriginCheck, SECURITY_HEADERS, upgradeGuard } from './security.ts'
+import {
+  bindNeedsToken, createOriginCheck, SECURITY_HEADERS, upgradeGuard,
+} from './security.ts'
 import { Hub } from './ws.ts'
 import { openWindow, describeFallback } from './open-window.ts'
 import { checkForUpdate, currentVersion } from './update-check.ts'
@@ -23,6 +25,7 @@ interface Args {
   updateCheck: boolean
   allowOrigin: string[]
   fsRoot: string[]
+  insecureNoToken: boolean
 }
 
 /** Repeatable flags also accept one comma-separated value, as env vars must. */
@@ -41,6 +44,7 @@ function parseArgs(argv: string[]): Args {
     updateCheck: !process.env['TRING_NO_UPDATE_CHECK'],
     allowOrigin: listOf(process.env['TRING_ALLOW_ORIGIN']),
     fsRoot: listOf(process.env['TRING_FS_ROOT']),
+    insecureNoToken: !!process.env['TRING_INSECURE_NO_TOKEN'],
   }
   for (let i = 0; i < argv.length; i++) {
     const [flag, inline] = argv[i]!.split('=', 2)
@@ -54,6 +58,7 @@ function parseArgs(argv: string[]): Args {
       case '--shell': args.shell = String(value); break
       case '--allow-origin': args.allowOrigin.push(...listOf(String(value))); break
       case '--fs-root': args.fsRoot.push(...listOf(String(value))); break
+      case '--insecure-no-token': args.insecureNoToken = true; i--; break
       case '--no-open': args.open = false; i--; break
       case '--no-update-check': args.updateCheck = false; i--; break
       case '--version': console.log(currentVersion()); process.exit(0)
@@ -73,6 +78,11 @@ function parseArgs(argv: string[]): Args {
                     repeatable. Only the page the daemon serves is allowed by
                     default, which is what stops any website you visit from
                     opening a socket to it
+  --insecure-no-token
+                    bind off localhost with no --token anyway. The daemon
+                    spawns shells, so this hands one to everything that can
+                    reach the port, and to any site that can rebind a name
+                    to it. Only for a network you already trust that far
   --no-open         do not launch a browser window
   --no-update-check do not ask npm whether a newer tring exists
   --version         print the version and exit`)
@@ -84,6 +94,23 @@ function parseArgs(argv: string[]): Args {
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2))
+
+  // Refused before anything is opened, not warned about after the port is
+  // already up. Off loopback the Origin check alone cannot hold the line — the
+  // hostname is the user's own, so Host goes unpinned and a rebound domain
+  // matches it — which leaves the token as the only gate on a shell.
+  if (bindNeedsToken(args.host, args.token) && !args.insecureNoToken) {
+    console.error(`refusing to bind ${args.host} without --token.
+
+  The daemon spawns shells, so off localhost the token is the only thing
+  between the port and a shell on this machine.
+
+    tring --host ${args.host} --token "$(openssl rand -hex 32)"
+
+  Pass --insecure-no-token if the network is already trusted that far.`)
+    process.exit(1)
+  }
+
   const url = `http://${args.host}:${args.port}`
   // Installed builds carry the web bundle at dist/web; a dev checkout running
   // from source finds it in the sibling workspace.
@@ -124,8 +151,10 @@ async function main(): Promise<void> {
 
   server.listen(args.port, args.host, () => {
     console.log(`tring listening on ${url}`)
-    if (!args.token && args.host !== '127.0.0.1' && args.host !== 'localhost') {
-      console.warn('warning: bound off localhost without --token')
+    // Only reachable via --insecure-no-token; the plain case exits above.
+    if (bindNeedsToken(args.host, args.token)) {
+      console.warn('warning: bound off localhost with no token — anything that can reach ' +
+        `${args.host}:${args.port} can open a shell here`)
     }
     if (args.updateCheck) {
       // Fire and forget: an offline machine or a registry outage must never

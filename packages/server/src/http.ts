@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs'
-import { readdir, stat } from 'node:fs/promises'
+import { readdir, realpath, stat } from 'node:fs/promises'
 import os from 'node:os'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import path from 'node:path'
@@ -77,6 +77,16 @@ export function createHandler(opts: HttpOptions) {
   }
 
   /**
+   * Resolved through symlinks, since that is what `readdir` will follow.
+   *
+   * A path that does not exist cannot be read either way, so it falls back to
+   * the lexical form and is refused or 400s on its own merits.
+   */
+  const real = async (p: string): Promise<string> => {
+    try { return await realpath(p) } catch { return path.resolve(p) }
+  }
+
+  /**
    * Where the picker may look.
    *
    * Serving a picker is not a reason to serve `ls /`. Unconstrained, this
@@ -85,10 +95,17 @@ export function createHandler(opts: HttpOptions) {
    * for whoever gets to the shell next. Home, the roots of projects that
    * already exist, and anything named with --fs-root; the roots list is read
    * per request, so a project created a moment ago is browsable at once.
+   *
+   * Compared after both sides are resolved: a lexical check reads a symlink
+   * out of the tree as still inside it, which hands back the whole machine
+   * again through any link that happens to sit in a browsable root. Resolving
+   * the roots too keeps a symlinked home (`/home/me` -> `/mnt/data/me`) from
+   * failing the other way.
    */
-  const browsable = (dir: string): boolean => {
+  const browsable = async (dir: string): Promise<boolean> => {
     const roots = [homeDir(), ...pm.list().map((p) => p.root), ...(opts.fsRoots ?? [])]
-    return roots.some((root) => within(root, dir))
+    const [target, ...resolved] = await Promise.all([dir, ...roots].map(real))
+    return resolved.some((root) => within(root, target!))
   }
 
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -142,7 +159,7 @@ export function createHandler(opts: HttpOptions) {
     if (url.pathname === '/api/fs' && req.method === 'GET') {
       const raw = url.searchParams.get('path')?.trim()
       const dir = raw ? path.resolve(raw) : homeDir()
-      if (!browsable(dir)) return json(res, 403, { error: 'outside the browsable roots' })
+      if (!await browsable(dir)) return json(res, 403, { error: 'outside the browsable roots' })
       try {
         const found = await readdir(dir, { withFileTypes: true })
         const entries = found
@@ -151,7 +168,7 @@ export function createHandler(opts: HttpOptions) {
           .sort((a, b) => a.name.localeCompare(b.name))
         // Stop offering "up" at the edge rather than offering a step that 403s.
         const parent = path.dirname(dir)
-        const up = parent !== dir && browsable(parent) ? parent : null
+        const up = parent !== dir && await browsable(parent) ? parent : null
         return json(res, 200, { path: dir, parent: up, entries })
       } catch {
         return json(res, 400, { error: `cannot read ${dir}` })
