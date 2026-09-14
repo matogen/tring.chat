@@ -1,9 +1,12 @@
 import { createReadStream } from 'node:fs'
-import { readdir, stat } from 'node:fs/promises'
+import { readdir, realpath, stat } from 'node:fs/promises'
 import os from 'node:os'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import path from 'node:path'
 import type { ProjectManager } from './project-manager.ts'
+import {
+  bearerEquals, createOriginCheck, SECURITY_HEADERS, type OriginCheck,
+} from './security.ts'
 import { collectUsage, defaultTranscriptDir, type UsageReport } from './usage.ts'
 
 const MIME: Record<string, string> = {
@@ -24,12 +27,25 @@ export interface HttpOptions {
   pm: ProjectManager
   webRoot: string
   token?: string | null
+  /** Shared with the WebSocket upgrade so both doors answer to one rule. */
+  sameOrigin?: OriginCheck
+  /** Directories the browse endpoint may reach outside the home tree. */
+  fsRoots?: readonly string[]
+}
+
+/** No response leaves without the header block — a 404 is framable too. */
+const head = (res: ServerResponse, code: number, type: string): void => {
+  res.writeHead(code, { ...SECURITY_HEADERS, 'content-type': type })
 }
 
 const json = (res: ServerResponse, code: number, body: unknown): void => {
-  const payload = JSON.stringify(body)
-  res.writeHead(code, { 'content-type': 'application/json; charset=utf-8' })
-  res.end(payload)
+  head(res, code, 'application/json; charset=utf-8')
+  res.end(JSON.stringify(body))
+}
+
+const text = (res: ServerResponse, code: number, body: string): void => {
+  head(res, code, 'text/plain; charset=utf-8')
+  res.end(body)
 }
 
 const readBody = (req: IncomingMessage): Promise<string> =>
@@ -50,13 +66,58 @@ const USAGE_CACHE_MS = 30_000
 
 export function createHandler(opts: HttpOptions) {
   const { pm, webRoot, token } = opts
+  const sameOrigin = opts.sameOrigin ?? createOriginCheck()
   let usage: { at: number; report: Promise<UsageReport> } | null = null
+
+  const homeDir = (): string => process.env['HOME'] ?? os.homedir()
+
+  const within = (root: string, dir: string): boolean => {
+    const rel = path.relative(path.resolve(root), dir)
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
+  }
+
+  /**
+   * Resolved through symlinks, since that is what `readdir` will follow.
+   *
+   * A path that does not exist cannot be read either way, so it falls back to
+   * the lexical form and is refused or 400s on its own merits.
+   */
+  const real = async (p: string): Promise<string> => {
+    try { return await realpath(p) } catch { return path.resolve(p) }
+  }
+
+  /**
+   * Where the picker may look.
+   *
+   * Serving a picker is not a reason to serve `ls /`. Unconstrained, this
+   * endpoint enumerates the whole machine — usernames, install paths, project
+   * layouts — for anything that can reach the API, which is ideal groundwork
+   * for whoever gets to the shell next. Home, the roots of projects that
+   * already exist, and anything named with --fs-root; the roots list is read
+   * per request, so a project created a moment ago is browsable at once.
+   *
+   * Compared after both sides are resolved: a lexical check reads a symlink
+   * out of the tree as still inside it, which hands back the whole machine
+   * again through any link that happens to sit in a browsable root. Resolving
+   * the roots too keeps a symlinked home (`/home/me` -> `/mnt/data/me`) from
+   * failing the other way.
+   */
+  const browsable = async (dir: string): Promise<boolean> => {
+    const roots = [homeDir(), ...pm.list().map((p) => p.root), ...(opts.fsRoots ?? [])]
+    const [target, ...resolved] = await Promise.all([dir, ...roots].map(real))
+    return resolved.some((root) => within(root, target!))
+  }
 
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url ?? '/', 'http://localhost')
 
+    // Ahead of the token check, and covering the static bundle as well as the
+    // API: a page that has no business here does not get to learn whether it
+    // guessed the secret either.
+    if (!sameOrigin(req)) return text(res, 403, 'forbidden origin')
+
     if (url.pathname.startsWith('/api/')) {
-      if (token && req.headers.authorization !== `Bearer ${token}`) {
+      if (token && !bearerEquals(token, req.headers.authorization)) {
         return json(res, 401, { error: 'unauthorized' })
       }
       return await api(req, res, url)
@@ -94,19 +155,21 @@ export function createHandler(opts: HttpOptions) {
     // Directory listing for the project/session dialogs. A browser can never
     // hand back an absolute path — webkitdirectory and showDirectoryPicker
     // both withhold it — so the picker has to be served by the side that
-    // actually has the filesystem. No extra privilege is granted here: this
-    // daemon already spawns arbitrary shells, and --token still gates it.
+    // actually has the filesystem.
     if (url.pathname === '/api/fs' && req.method === 'GET') {
       const raw = url.searchParams.get('path')?.trim()
-      const dir = raw ? path.resolve(raw) : (process.env['HOME'] ?? os.homedir())
+      const dir = raw ? path.resolve(raw) : homeDir()
+      if (!await browsable(dir)) return json(res, 403, { error: 'outside the browsable roots' })
       try {
         const found = await readdir(dir, { withFileTypes: true })
         const entries = found
           .filter((e) => (e.isDirectory() || e.isSymbolicLink()) && !e.name.startsWith('.'))
           .map((e) => ({ name: e.name, path: path.join(dir, e.name) }))
           .sort((a, b) => a.name.localeCompare(b.name))
+        // Stop offering "up" at the edge rather than offering a step that 403s.
         const parent = path.dirname(dir)
-        return json(res, 200, { path: dir, parent: parent === dir ? null : parent, entries })
+        const up = parent !== dir && await browsable(parent) ? parent : null
+        return json(res, 200, { path: dir, parent: up, entries })
       } catch {
         return json(res, 400, { error: `cannot read ${dir}` })
       }
@@ -142,24 +205,24 @@ export function createHandler(opts: HttpOptions) {
     const file = path.resolve(webRoot, rel)
     // Never serve outside the bundle, whatever the request contains.
     if (file !== webRoot && !file.startsWith(webRoot + path.sep)) {
-      res.writeHead(403).end('forbidden')
+      text(res, 403, 'forbidden')
       return
     }
     try {
       const info = await stat(file)
       if (!info.isFile()) throw new Error('not a file')
-      res.writeHead(200, { 'content-type': MIME[path.extname(file)] ?? 'application/octet-stream' })
+      head(res, 200, MIME[path.extname(file)] ?? 'application/octet-stream')
       createReadStream(file).pipe(res)
     } catch {
       if (rel === 'index.html') {
-        res.writeHead(200, { 'content-type': MIME['.html']! })
+        head(res, 200, MIME['.html']!)
         res.end('<!doctype html><meta charset="utf-8"><title>tring</title>' +
           '<body style="font:14px ui-monospace,monospace;background:#040c0a;color:#dceee7;padding:2rem">' +
           '<p>Daemon is running. The web bundle is not built yet.</p>' +
           '<p style="color:#8aa79d">Run <code>npm run build -w @tring/web</code>.</p>')
         return
       }
-      res.writeHead(404).end('not found')
+      text(res, 404, 'not found')
     }
   }
 }

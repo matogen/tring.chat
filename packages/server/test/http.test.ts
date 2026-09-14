@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { createServer, type Server } from 'node:http'
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { ProjectManager } from '../src/project-manager.ts'
@@ -15,13 +15,16 @@ afterEach(async () => {
   }
 })
 
-async function rig(token?: string): Promise<Rig> {
+async function rig(token?: string, fsRoots?: string[]): Promise<Rig> {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'tring-http-'))
   const pm = await ProjectManager.open({
     url: 'http://127.0.0.1:0', scrollback: 50, idleMs: 150,
     statePath: path.join(dir, 'projects.json'), tickMs: 40,
   })
-  const handler = createHandler({ pm, webRoot: path.join(dir, 'dist'), token: token ?? null })
+  const handler = createHandler({
+    pm, webRoot: path.join(dir, 'dist'), token: token ?? null,
+    ...(fsRoots ? { fsRoots } : {}),
+  })
   const server = createServer((req, res) => void handler(req, res))
   await new Promise<void>((res) => server.listen(0, '127.0.0.1', res))
   const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
@@ -195,12 +198,16 @@ describe('HTTP API', () => {
 describe('directory listing', () => {
   it('lists subdirectories of a path so the dialog can browse', async () => {
     const r = await rig()
-    const res = await fetch(`${r.base}/api/fs?path=${encodeURIComponent(r.dir)}`)
+    r.pm.createProject('demo', r.dir)
+    await mkdir(path.join(r.dir, 'src', 'nested'), { recursive: true })
+
+    const res = await fetch(`${r.base}/api/fs?path=${encodeURIComponent(path.join(r.dir, 'src'))}`)
     expect(res.status).toBe(200)
-    const body = await res.json() as { path: string; parent: string | null; entries: unknown[] }
-    expect(body.path).toBe(r.dir)
-    expect(body.parent).not.toBeNull()
-    expect(Array.isArray(body.entries)).toBe(true)
+    const body = await res.json() as
+      { path: string; parent: string | null; entries: { name: string }[] }
+    expect(body.entries.map((e) => e.name)).toContain('nested')
+    // Still inside the project root, so walking back up is offered.
+    expect(body.parent).toBe(r.dir)
   })
 
   it('defaults to the home directory when given no path', async () => {
@@ -211,8 +218,99 @@ describe('directory listing', () => {
 
   it('reports a directory it cannot read rather than throwing', async () => {
     const r = await rig()
-    const res = await fetch(`${r.base}/api/fs?path=/definitely/not/here`)
+    const inside = path.join(process.env['HOME']!, 'definitely-not-here-tring')
+    const res = await fetch(`${r.base}/api/fs?path=${encodeURIComponent(inside)}`)
     expect(res.status).toBe(400)
+  })
+
+  it('refuses to enumerate the machine outside the roots it was given', async () => {
+    // Unconstrained this endpoint is `ls /` for anything that reaches the API,
+    // which is exactly the reconnaissance step before a shell.
+    const r = await rig()
+    const res = await fetch(`${r.base}/api/fs?path=${encodeURIComponent(path.parse(r.dir).root)}`)
+    expect(res.status).toBe(403)
+  })
+
+  it('browses a project root that sits outside home, and stops at its edge', async () => {
+    const r = await rig()
+    r.pm.createProject('demo', r.dir)
+
+    const body = await (await fetch(`${r.base}/api/fs?path=${encodeURIComponent(r.dir)}`))
+      .json() as { path: string; parent: string | null }
+    expect(body.path).toBe(r.dir)
+    // The dialog is not offered an "up" that would only be refused.
+    expect(body.parent).toBeNull()
+  })
+
+  it('does not let a symlink inside a root walk back out of it', async () => {
+    // The containment check has to resolve what readdir will actually follow:
+    // lexically, `<root>/escape/etc` still looks like it is under the root.
+    const outside = await mkdtemp(path.join(os.tmpdir(), 'tring-outside-'))
+    await mkdir(path.join(outside, 'secrets'))
+    const r = await rig()
+    r.pm.createProject('demo', r.dir)
+    await symlink(outside, path.join(r.dir, 'escape'), 'dir')
+
+    const escaped = path.join(r.dir, 'escape', 'secrets')
+    const res = await fetch(`${r.base}/api/fs?path=${encodeURIComponent(escaped)}`)
+    expect(res.status).toBe(403)
+  })
+
+  it('still browses a root reached through a symlink of its own', async () => {
+    // Resolving only one side would refuse a symlinked home or project root.
+    const outside = await mkdtemp(path.join(os.tmpdir(), 'tring-real-'))
+    await mkdir(path.join(outside, 'src'))
+    const link = path.join(await mkdtemp(path.join(os.tmpdir(), 'tring-link-')), 'proj')
+    await symlink(outside, link, 'dir')
+
+    const r = await rig(undefined, [link])
+    const res = await fetch(`${r.base}/api/fs?path=${encodeURIComponent(path.join(link, 'src'))}`)
+    expect(res.status).toBe(200)
+  })
+
+  it('opens up a directory named with --fs-root', async () => {
+    const outside = await mkdtemp(path.join(os.tmpdir(), 'tring-root-'))
+    const r = await rig(undefined, [outside])
+    const res = await fetch(`${r.base}/api/fs?path=${encodeURIComponent(outside)}`)
+    expect(res.status).toBe(200)
+  })
+})
+
+describe('origin and headers', () => {
+  it('refuses a request carrying another site as its origin', async () => {
+    // Confirms the fix for the cross-origin path: a page on any site could
+    // otherwise reach this API, and the WebSocket beside it.
+    const r = await rig()
+    const res = await fetch(`${r.base}/api/sessions`, {
+      headers: { origin: 'https://evil.example' },
+    })
+    expect(res.status).toBe(403)
+  })
+
+  it('accepts the origin it serves the page from', async () => {
+    const r = await rig()
+    const res = await fetch(`${r.base}/api/sessions`, { headers: { origin: r.base } })
+    expect(res.status).toBe(200)
+  })
+
+  it('sends the header block on the page, the API and a 404 alike', async () => {
+    const r = await rig()
+    for (const p of ['/', '/api/sessions', '/nope.js']) {
+      const res = await fetch(`${r.base}${p}`)
+      expect(res.headers.get('x-frame-options'), p).toBe('DENY')
+      expect(res.headers.get('x-content-type-options'), p).toBe('nosniff')
+      expect(res.headers.get('content-security-policy'), p).toContain("frame-ancestors 'none'")
+    }
+  })
+
+  it('still takes the bearer token, and still refuses a wrong one', async () => {
+    const r = await rig('secret')
+    expect((await fetch(`${r.base}/api/sessions`, {
+      headers: { authorization: 'Bearer nope' },
+    })).status).toBe(401)
+    expect((await fetch(`${r.base}/api/sessions`, {
+      headers: { authorization: 'Bearer secret' },
+    })).status).toBe(200)
   })
 })
 

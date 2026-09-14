@@ -8,7 +8,13 @@ export const DAEMON = import.meta.env.DEV ? 'http://127.0.0.1:7331' : location.o
 import { resolveToken } from './token.ts'
 
 /** Present only when the daemon was started with --token (LAN binding). */
-export const TOKEN = resolveToken(location.search, localStorage)
+export const TOKEN = resolveToken(location.search, localStorage, () => {
+  // Remembered now, so drop it from the address bar rather than leaving the
+  // secret in history and in the Referer of everything opened from here.
+  const url = new URL(location.href)
+  url.searchParams.delete('token')
+  history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+})
 
 export async function api<T>(path: string): Promise<T> {
   const res = await fetch(`${DAEMON}${path}`, {
