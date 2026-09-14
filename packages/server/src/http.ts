@@ -196,6 +196,78 @@ export function createHandler(opts: HttpOptions) {
       }
     }
 
+    // Browser actions for the agent (spec §4.8). Addressed by **session** id,
+    // because that is what an in-session agent already has as
+    // $TRING_SESSION_ID — a browser id could never reach a shell whose
+    // environment was fixed before the page was attached.
+    const action = url.pathname.match(/^\/api\/browser\/([^/]+)\/([a-z]+)$/)
+    if (action) {
+      const session = pm.findSession(decodeURIComponent(action[1]!))
+      if (!session) return json(res, 404, { error: 'no such session' })
+      const browser = session.browser
+      if (!browser) return json(res, 409, { error: 'this session has no browser attached' })
+
+      const what = action[2]!
+      if (what === 'snapshot' && req.method === 'GET') {
+        return json(res, 200, await browser.snapshot())
+      }
+      if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+
+      let body: Record<string, unknown>
+      try {
+        body = JSON.parse((await readBody(req)) || '{}') as Record<string, unknown>
+      } catch {
+        return json(res, 400, { error: 'malformed body' })
+      }
+      const ref = typeof body['ref'] === 'string' ? body['ref'] : null
+
+      switch (what) {
+        case 'navigate': {
+          const to = body['url']
+          if (typeof to !== 'string') return json(res, 400, { error: 'url is required' })
+          // Policy is enforced inside the page's own route handler, so a
+          // refusal here looks the same as one the agent caused itself.
+          await browser.navigate(to)
+          return json(res, 200, { ok: true, url: browser.info().url })
+        }
+        case 'click':
+          if (!ref) return json(res, 400, { error: 'ref is required' })
+          return json(res, 200, await browser.act('click', (l) => l(ref).click()))
+        case 'type': {
+          const text = typeof body['text'] === 'string' ? body['text'] : null
+          if (!ref || text === null) return json(res, 400, { error: 'ref and text are required' })
+          return json(res, 200, await browser.act('type', (l) => l(ref).fill(text)))
+        }
+        case 'select': {
+          const value = typeof body['value'] === 'string' ? body['value'] : null
+          if (!ref || value === null) return json(res, 400, { error: 'ref and value are required' })
+          return json(res, 200, await browser.act('select', async (l) => {
+            await l(ref).selectOption(value)
+          }))
+        }
+        case 'wait': {
+          const target = typeof body['for'] === 'string' ? body['for'] : null
+          if (!target) return json(res, 400, { error: 'for is required' })
+          const timeout = typeof body['timeout'] === 'number' ? body['timeout'] : 10_000
+          return json(res, 200, await browser.act('wait', async (l) => {
+            await l(target).waitFor({ timeout })
+          }))
+        }
+        case 'eval': {
+          // Off unless the project turned it on: one fetch() from page script
+          // routes around the navigation allowlist completely (spec §4.7).
+          if (!pm.browserSettings(session.projectId).eval) {
+            return json(res, 403, { error: 'browser_eval is disabled for this project' })
+          }
+          const js = typeof body['js'] === 'string' ? body['js'] : null
+          if (!js) return json(res, 400, { error: 'js is required' })
+          return json(res, 200, await browser.evaluate(js))
+        }
+        default:
+          return json(res, 404, { error: 'not found' })
+      }
+    }
+
     if (url.pathname === '/api/capabilities' && req.method === 'GET') {
       return json(res, 200, opts.capabilities?.() ?? { browser: 'unavailable' })
     }

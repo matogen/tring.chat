@@ -3,7 +3,7 @@ import { mkdir, readdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import type { BrowserContext, CDPSession, Page } from 'playwright-core'
-import { BrowserControl } from '@tring/shared/browser-control'
+import { ActionGate, BrowserControl } from '@tring/shared/browser-control'
 import {
   checkNavigation, isPromptable, type NavigationPolicy,
 } from '@tring/shared/browser-policy'
@@ -39,6 +39,20 @@ const SETTLE_MS = 400
  * through the scale.
  */
 const VIEWPORT = { width: 1280, height: 800 }
+
+/**
+ * How long a parked agent action waits before reporting back.
+ *
+ * Bounded only so an HTTP request cannot hang indefinitely. Timing out is not
+ * a failure: it returns "the human has control", which the agent can wait on
+ * and retry, rather than an error it would retry-loop against (spec §4.8).
+ */
+const GATE_MS = 120_000
+
+/** What a tool call returns. `blocked` is a wait, not a failure. */
+export type ActionResult =
+  | ({ ok: true; note?: string } & Record<string, unknown>)
+  | { ok: false; error: string; blocked?: boolean }
 
 type Chromium = typeof import('playwright-core')['chromium']
 
@@ -275,6 +289,10 @@ export class AttachedBrowser {
   onClosed: (() => void) | null = null
 
   private cdp: CDPSession | null = null
+  /** Turns a parked action into an awaitable; see ActionGate. */
+  private readonly gate: ActionGate
+  /** Set on handback, cleared by the next action that reports it. */
+  private handedBack = false
   private title: string | null = null
   private loading = false
   private blockedOn: string | null = null
@@ -290,6 +308,7 @@ export class AttachedBrowser {
     private readonly policy: () => NavigationPolicy,
   ) {
     this.control = new BrowserControl(Date.now())
+    this.gate = new ActionGate(this.control, GATE_MS)
   }
 
   async start(url?: string): Promise<void> {
@@ -392,11 +411,103 @@ export class AttachedBrowser {
     if (this.control.grab(Date.now())) this.onChange?.()
   }
 
-  /** Returns the parked agent actions, oldest first, for the caller to resume. */
+  /** Returns the parked agent actions, oldest first, now resumed. */
   release(): string[] {
-    const resumed = this.control.release(Date.now())
+    const resumed = this.gate.release()
+    // The agent's next action is told the page moved under it. Deliberately a
+    // fresh look at the page and nothing else — a transcript of the handover
+    // would put the password the human just typed straight back into the
+    // context this design exists to keep it out of (spec §0, §8).
+    this.handedBack = true
     this.onChange?.()
     return resumed
+  }
+
+  /* ---------- agent actions (spec §4.8) ---------- */
+
+  /**
+   * Wait until the agent may act.
+   *
+   * Parked, not refused: an erroring tool makes an agent retry-loop against a
+   * wall, burning tokens and filling its context with failures, where a blocked
+   * one makes it wait the way a person would. The wait is bounded only so an
+   * HTTP request cannot hang forever — timing out returns "still waiting",
+   * which is a result the agent can act on, not an error.
+   */
+  private async park(actionId: string, readOnly = false): Promise<boolean> {
+    const granted = this.gate.wait(actionId, { readOnly })
+    // Only report a change if it actually parked; the common case runs at once.
+    if (this.gate.waiting > 0) this.onChange?.()
+    return await granted
+  }
+
+  /** A note for the agent's next result, once, after a handover. */
+  private takeHandback(): string | null {
+    if (!this.handedBack) return null
+    this.handedBack = false
+    return 'The human took control of this page and has handed it back. ' +
+      'The page may have moved; this snapshot is current.'
+  }
+
+  /**
+   * The accessibility tree, not pixels.
+   *
+   * This is what a model steers with; screenshots are for the human half of the
+   * split. Always allowed, even while the human drives (§4.8): reading cannot
+   * collide with someone typing, and an agent that has just been handed control
+   * would otherwise be unable to see what it was handed.
+   */
+  async snapshot(): Promise<ActionResult> {
+    await this.park('snapshot', true)
+    try {
+      const tree = await this.page.ariaSnapshot({ mode: 'ai' })
+      return this.ok({ url: this.safeUrl(), title: this.title, snapshot: tree })
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
+  }
+
+  async act(
+    actionId: string,
+    fn: (locate: (ref: string) => ReturnType<Page['locator']>) => Promise<void>,
+  ): Promise<ActionResult> {
+    if (!(await this.park(actionId))) {
+      return { ok: false, blocked: true, error: 'the human has control of this page' }
+    }
+    this.blockedOn = null
+    try {
+      // `aria-ref=eN` resolves the refs the AI-mode snapshot hands out, so an
+      // agent addresses what it just read rather than guessing a CSS selector.
+      await fn((ref) => this.page.locator(`aria-ref=${ref}`))
+      return this.ok({ url: this.safeUrl() })
+    } catch (err) {
+      const message = (err as Error).message
+      // A timeout waiting for a selector is the signal this whole feature is
+      // for: the agent is stuck on something a human probably needs to clear.
+      if (/Timeout|waiting for/i.test(message)) {
+        this.blockedOn = message.split('\n')[0] ?? 'waiting for an element'
+        this.onActivity?.('blocked')
+        this.onChange?.()
+      }
+      return { ok: false, error: message }
+    }
+  }
+
+  async evaluate(js: string): Promise<ActionResult> {
+    if (!(await this.park('eval'))) {
+      return { ok: false, blocked: true, error: 'the human has control of this page' }
+    }
+    try {
+      const value = (await this.page.evaluate(js)) as unknown
+      return this.ok({ value })
+    } catch (err) {
+      return { ok: false, error: (err as Error).message }
+    }
+  }
+
+  private ok(body: Record<string, unknown>): ActionResult {
+    const note = this.takeHandback()
+    return { ok: true, ...body, ...(note ? { note } : {}) }
   }
 
   /**
@@ -520,6 +631,10 @@ export class AttachedBrowser {
     if (this.settle) clearTimeout(this.settle)
     this.settle = null
     this.onFrame = null
+    // Anything parked is woken and refused. A detach that left an agent
+    // awaiting a page that no longer exists would hang its tool call until the
+    // gate timed out, minutes later, with no explanation.
+    this.gate.abandonAll()
     try {
       await this.cdp?.send('Page.stopScreencast').catch(() => {})
       await this.page.close()

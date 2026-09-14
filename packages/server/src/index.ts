@@ -4,8 +4,9 @@ import { createServer as createSecureServer } from 'node:https'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { WebSocketServer } from 'ws'
-import type { Capabilities } from '@tring/shared/protocol'
+import { DEFAULT_PORT, type Capabilities } from '@tring/shared/protocol'
 import { parseArgs, UsageError, type Args } from './args.ts'
+import { runMcp } from './mcp.ts'
 import { capabilityFor, installChromium, isChromiumInstalled } from './browser.ts'
 import { ProjectManager } from './project-manager.ts'
 import { createHandler } from './http.ts'
@@ -46,7 +47,32 @@ function loadTls(certFile: string, keyFile: string): { cert: Buffer; key: Buffer
   return { cert: read(certFile, 'certificate'), key: read(keyFile, 'key') }
 }
 
+/**
+ * `tring mcp` — the browser tools of §4.8, spoken over stdio.
+ *
+ * A subcommand rather than a flag because it is not a daemon: it runs as a
+ * child of the agent, inherits the environment §4.1 injected into that
+ * session's shell, and proxies each tool to the daemon over HTTP. Everything it
+ * needs is already in the environment, so an agent config is one line with
+ * nothing to paste.
+ */
+function runMcpSubcommand(): boolean {
+  if (process.argv[2] !== 'mcp') return false
+  const sessionId = process.env['TRING_SESSION_ID']
+  if (!sessionId) {
+    console.error('tring mcp must run inside a tring session ($TRING_SESSION_ID is unset).')
+    process.exit(1)
+  }
+  runMcp({
+    url: process.env['TRING_URL'] ?? `http://127.0.0.1:${DEFAULT_PORT}`,
+    token: process.env['TRING_TOKEN'] ?? null,
+    sessionId,
+  })
+  return true
+}
+
 async function main(): Promise<void> {
+  if (runMcpSubcommand()) return
   const args = parseArgs(process.argv.slice(2))
 
   let auth: Auth

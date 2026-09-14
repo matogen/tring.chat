@@ -76,9 +76,20 @@ never run — no Chromium is installed. The pure geometry and the sanitiser are 
 everything typechecks and builds, but no frame has been painted and no click has reached a
 page. This is the accumulated risk to clear before stage 6 calls anything finished.
 
-**5. tools** — `browser-tools.ts`: the MCP endpoint, `TRING_SESSION_ID` scoping, the tool
-table of §4.8, blocking-not-erroring while the human drives, and the accessibility-snapshot
-resync on release. `browser_eval` behind its own per-project flag.
+**5. tools** *(done)* — `mcp.ts`: the tool table of §4.8, blocking-not-erroring while the
+human drives, and the handback note on the next result. `browser_eval` behind its own
+per-project flag. Actions land on `/api/browser/:sessionId/:action`, so the wheel and the
+allowlist cannot be bypassed by talking to the daemon directly.
+
+One more spec correction, amended in §4.8: **stdio, not an HTTP MCP endpoint.** An HTTP
+server sees a socket, not a process, so it cannot read the caller's `TRING_SESSION_ID` —
+it would have to take a session id as a parameter, and a tool that takes a session id is a
+tool one agent can point at another agent's page. `tring mcp` runs as a child of the agent
+and inherits what §4.1 already injects.
+
+`ActionGate` was extracted from `AttachedBrowser` into `shared/browser-control.ts` so the
+park-and-resume wiring is testable without a page. It is the piece that hangs an agent
+forever if it is wrong.
 
 **6. surface the choice** — the segmented control in `openNewSessionDialog` and
 `openSessionDialog`, `b` in the picker, the three-state settings control with the install

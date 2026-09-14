@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { BrowserControl } from '../src/browser-control.ts'
+import { ActionGate, BrowserControl } from '../src/browser-control.ts'
 
 const c = () => new BrowserControl(0)
 
@@ -88,5 +88,75 @@ describe('BrowserControl', () => {
     b.request('a1')
     expect(b.holder).toBe('human')
     expect(b.parked).toBe(1)
+  })
+})
+
+/**
+ * The piece that hangs an agent forever if it is wrong: a resume that misses
+ * its waiter is a tool call that never returns.
+ */
+describe('ActionGate', () => {
+  const gate = (timeoutMs = 50) => {
+    const control = new BrowserControl(0)
+    return { control, g: new ActionGate(control, timeoutMs) }
+  }
+
+  it('lets an action straight through while the agent drives', async () => {
+    const { g } = gate()
+    await expect(g.wait('a1')).resolves.toBe(true)
+    expect(g.waiting).toBe(0)
+  })
+
+  it('parks while the human drives, and resolves on handback', async () => {
+    const { control, g } = gate(5000)
+    control.grab(100)
+    const pending = g.wait('a1')
+    // Let the promise park before releasing, or the test proves nothing.
+    await new Promise((r) => setTimeout(r, 5))
+    expect(g.waiting).toBe(1)
+
+    g.release()
+    await expect(pending).resolves.toBe(true)
+    expect(g.waiting).toBe(0)
+  })
+
+  it('resumes several parked actions on one handback', async () => {
+    const { control, g } = gate(5000)
+    control.grab(0)
+    const a = g.wait('a1')
+    const b = g.wait('a2')
+    await new Promise((r) => setTimeout(r, 5))
+    expect(g.release()).toEqual(['a1', 'a2'])
+    await expect(Promise.all([a, b])).resolves.toEqual([true, true])
+  })
+
+  /** Not an error: "still waiting" is an answer the agent can act on. */
+  it('gives up after the bound rather than hanging', async () => {
+    const { control, g } = gate(20)
+    control.grab(0)
+    await expect(g.wait('a1')).resolves.toBe(false)
+    expect(g.waiting).toBe(0)
+    // And is no longer queued, so a later handback does not resume a dead call.
+    expect(g.release()).toEqual([])
+  })
+
+  it('read-only actions never park', async () => {
+    const { control, g } = gate(5000)
+    control.grab(0)
+    await expect(g.wait('snapshot', { readOnly: true })).resolves.toBe(true)
+  })
+
+  /**
+   * A detach must wake everything it was holding. Otherwise an agent waits on a
+   * page that no longer exists until the bound expires, with no explanation.
+   */
+  it('wakes and refuses everything when the page goes away', async () => {
+    const { control, g } = gate(5000)
+    control.grab(0)
+    const pending = g.wait('a1')
+    await new Promise((r) => setTimeout(r, 5))
+    g.abandonAll()
+    await expect(pending).resolves.toBe(false)
+    expect(g.waiting).toBe(0)
   })
 })

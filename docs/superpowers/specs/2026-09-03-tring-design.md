@@ -183,7 +183,7 @@ tring.chat/
     src/snapshot.ts            headless buffer → compact ScreenSnapshot
     src/browser.ts             Playwright lifecycle: shared browser, per-session context, screencast (§4.7)
     src/browser-control.ts     the wheel: who drives, grab/release, agent gating (§4.7)
-    src/browser-tools.ts       MCP endpoint; tools scoped to the caller's own context (§4.8)
+    src/mcp.ts                 `tring mcp`: stdio MCP shim, scoped by $TRING_SESSION_ID (§4.8)
     src/ws.ts                  WebSocket hub: state fan-out, focused output stream, snapshots
     src/http.ts                serves the web build; REST endpoints for hooks
     src/open-window.ts         launches the chromeless browser window (§6)
@@ -492,10 +492,12 @@ of them is mid-action. So the wheel is explicit, single-valued and always render
   rather than erroring. An error makes an agent retry-loop against a wall, burning tokens
   and filling its context with failures; a block makes it wait, which is what a person in
   the same position would do.
-- On release the agent is handed a fresh accessibility snapshot and "the human interacted;
-  you are at `<url>`". It is **not** handed a keystroke log — that would put the password
-  the human just typed by hand straight back into the transcript, undoing the one property
-  (§0) this design exists to provide.
+- On release the agent's **next tool result** carries a note saying control was handed back
+  and the page may have moved, alongside a current snapshot. Attached to the next result
+  rather than pushed, because MCP gives a server no way to interrupt an agent mid-turn, and
+  the moment that matters is the moment it next acts. It is **not** a keystroke log — that
+  would put the password the human just typed by hand straight back into the transcript,
+  undoing the one property (§0) this design exists to provide.
 
 **Navigation is allowlisted per project.** `browser.allow` is a list of host patterns
 defaulting to `["localhost:*", "127.0.0.1:*"]`; a navigation elsewhere is held and surfaced
@@ -532,28 +534,54 @@ around navigation entirely with one `fetch`.
 
 ### 4.8 Browser tools
 
-How an agent drives its page. An MCP endpoint at `/mcp`, authenticated with the same token
-as everything else (§4.5), which an in-session agent already has as `$TRING_TOKEN` — so
-configuring it requires nothing pasted into a settings file.
+How an agent drives its page.
 
-**Tools are scoped to the caller's own page.** The MCP session resolves
-`TRING_SESSION_ID` from the calling process's environment and looks up that session's
-attached page; there is no tool taking a session or browser id, so an agent cannot address
-a page that is not its own. This is what makes "the agent in slot 7 drives the browser in
-slot 7" true by construction rather than by convention.
+**`tring mcp`, over stdio — not an HTTP endpoint on the daemon.** The tools must be scoped
+to the caller's own page, and the only thing identifying the caller is `TRING_SESSION_ID`
+in its environment. An HTTP server sees a socket, not a process, so it cannot read that: it
+would have to accept a session id as a parameter, and *a tool that takes a session id is a
+tool one agent can point at another agent's page*. Running as a child of the agent instead,
+the shim inherits the environment §4.1 already injects. Configuration is one line with
+nothing to paste:
+
+```
+claude mcp add tring-browser -- tring mcp
+```
+
+The shim is thin. Each tool becomes one authenticated call to the daemon over the HTTP API
+below, which is where the control wheel and the navigation policy actually live — so the
+rules cannot be bypassed by talking to the daemon directly instead.
+
+**The daemon's half is `/api/browser/:sessionId/:action`** (§4.5), addressed by session id
+for the same reason. It is reachable by any client holding the token, which is deliberate:
+that is how a script drives a page, and every such call goes through the same wheel.
 
 | Tool | Notes |
 |---|---|
-| `browser_navigate{url}` | Subject to the allowlist; a held navigation returns "waiting for the human to allow this" |
-| `browser_snapshot{}` | The accessibility tree, not pixels. This is what a model steers with; screenshots are for the human |
-| `browser_click{ref}` / `browser_type{ref, text}` / `browser_select{ref, value}` | `ref` comes from the last snapshot |
-| `browser_wait{for, timeout}` | A timeout sets `blockedOn` and rings, rather than merely failing |
-| `browser_eval{js}` | Off unless `browser.eval` is enabled per project — it routes around the allowlist trivially (`fetch`) |
+| `browser_snapshot` | `page.ariaSnapshot({mode: 'ai'})` — the accessibility tree with `[ref=eN]` handles |
+| `browser_click{ref}` / `browser_type{ref,text}` / `browser_select{ref,value}` | `ref` resolves through Playwright's `aria-ref=` selector, so an agent addresses what it just read rather than guessing a CSS path |
+| `browser_navigate{url}` | Subject to the allowlist; a held navigation reaches the human on the tile |
+| `browser_wait{for,timeout}` | A timeout sets `blockedOn` and rings, rather than merely failing |
+| `browser_eval{js}` | Off unless `browser.eval` is enabled per project |
 
-Every tool returns "the human has control, waiting" and blocks while the wheel is held
-(§4.7). `browser_snapshot` is the exception and always answers: reading the page cannot
-collide with a human typing into it, and refusing it would leave an agent that has just
-been handed control unable to see what it was handed.
+The snapshot is the accessibility tree, not pixels: that is what a model steers with, and
+screenshots are for the human half of the split. `browser_eval` is separate from everything
+else because one `fetch()` from page script routes around the navigation allowlist
+completely (§4.7).
+
+**Every tool blocks rather than erroring while the human holds the wheel** (§4.7), and
+`browser_snapshot` is the exception that always answers — reading cannot collide with
+someone typing, and refusing it would leave an agent that has just been handed control
+unable to see what it was handed.
+
+The block is **bounded**, at two minutes, purely so an HTTP request cannot hang forever.
+Expiring is not a failure: it answers "the human has control of this page", which the agent
+can report and retry. Nothing about that bound is a policy — the human is never hurried,
+and there is no path by which waiting returns control on a timer.
+
+A refusal, a block and an expiry all come back as ordinary tool results with `isError`
+unset. Only a transport failure is a tool error. An agent that sees `isError` retries; an
+agent that sees text reads it, and "the human has control" is something to read.
 
 ## 5. Web
 

@@ -93,3 +93,69 @@ export class BrowserControl {
     if (i >= 0) this.queue.splice(i, 1)
   }
 }
+
+/**
+ * Turns "parked" into something an agent can await (spec §4.8).
+ *
+ * Separate from BrowserControl, and from the page, because this is the piece
+ * that hangs an agent forever if it is wrong: a resume that misses its waiter
+ * is a tool call that never returns. Timeout is injected so the wait is
+ * testable in milliseconds.
+ */
+export class ActionGate {
+  private readonly waiters = new Map<string, (granted: boolean) => void>()
+
+  constructor(
+    private readonly control: BrowserControl,
+    private readonly timeoutMs: number,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  get waiting(): number {
+    return this.waiters.size
+  }
+
+  /**
+   * Resolves true when the action may proceed, false when the wait expired.
+   *
+   * False is not an error: it means "the human still has this", which the agent
+   * can report and retry. The bound exists only so a request cannot hang
+   * forever, not to express a policy.
+   */
+  async wait(actionId: string, opts: { readOnly?: boolean } = {}): Promise<boolean> {
+    if (this.control.request(actionId, opts) === 'run') return true
+    return await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => {
+        this.control.abandon(actionId)
+        this.waiters.delete(actionId)
+        resolve(false)
+      }, this.timeoutMs)
+      // Never keep a process alive for a page nobody is waiting on.
+      timer.unref?.()
+      this.waiters.set(actionId, (granted) => {
+        clearTimeout(timer)
+        resolve(granted)
+      })
+    })
+  }
+
+  /** Hand the wheel back and wake everything the control released. */
+  release(): string[] {
+    const resumed = this.control.release(this.now())
+    for (const id of resumed) {
+      const waiter = this.waiters.get(id)
+      this.waiters.delete(id)
+      waiter?.(true)
+    }
+    return resumed
+  }
+
+  /** Wake everything without granting — the page is going away. */
+  abandonAll(): void {
+    for (const [id, waiter] of this.waiters) {
+      this.control.abandon(id)
+      waiter(false)
+    }
+    this.waiters.clear()
+  }
+}
