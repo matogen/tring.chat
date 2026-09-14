@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ActivityTracker, SUSTAINED_BYTES, SUSTAINED_MS } from '../src/status.ts'
+import { ActivityTracker, NOTABLE_BUSY_MS, SUSTAINED_BYTES, SUSTAINED_MS } from '../src/status.ts'
 
 const t = () => new ActivityTracker(0)
 
@@ -44,6 +44,39 @@ describe('ActivityTracker', () => {
     expect(a.status).toBe('busy')
     a.tick(3000)
     expect(a.status).toBe('done')
+  })
+
+  describe('settle — an inferred finish from outside the byte stream', () => {
+    it('ends a busy session that produced no output at all', () => {
+      const a = t()
+      a.commandStart(0)
+      // No output(), which is what a session working only in its browser looks
+      // like. tick() gates on the byte stream and would never fire here.
+      a.tick(60_000)
+      expect(a.status).toBe('busy')
+      a.settle(60_000)
+      expect(a.status).toBe('done')
+    })
+
+    it('is ignored while idle, like every other finish', () => {
+      const a = t()
+      a.settle(100)
+      expect(a.status).toBe('idle')
+    })
+
+    it('does not ring after short work — a page that loaded fast is not news', () => {
+      const a = t()
+      a.commandStart(0)
+      a.settle(500)
+      expect(a.notable).toBe(false)
+    })
+
+    it('rings after sustained work, by the same rule the idle path uses', () => {
+      const a = t()
+      a.commandStart(0)
+      a.settle(NOTABLE_BUSY_MS)
+      expect(a.notable).toBe(true)
+    })
   })
 
   for (const signal of ['commandEnd', 'bell', 'hook'] as const) {

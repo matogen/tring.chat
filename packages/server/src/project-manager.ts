@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { DEFAULT_ALLOW, type NavigationPolicy } from '@tring/shared/browser-policy'
 import type { ProjectInfo } from '@tring/shared/protocol'
+import { BrowserHost } from './browser.ts'
 import type { Session } from './session.ts'
 import { SessionManager, type SessionSpec } from './session-manager.ts'
 
@@ -12,6 +14,17 @@ export interface PersistedSession {
   cwd: string
   command: string | null
   color?: string | null
+  /** Reattached on restore, unlike `command` (spec §4.3). */
+  browser?: { url?: string | null } | null
+}
+
+/** Per-project browser settings (spec §4.7). Absent means never enabled. */
+export interface PersistedBrowser {
+  enabled: boolean
+  /** Host patterns. Absent falls back to DEFAULT_ALLOW. */
+  allow?: string[]
+  /** browser_eval routes around the allowlist trivially, so it is separate. */
+  eval?: boolean
 }
 
 export interface PersistedProject {
@@ -19,6 +32,7 @@ export interface PersistedProject {
   name: string
   root: string
   sessions: PersistedSession[]
+  browser?: PersistedBrowser
 }
 
 export interface PersistedState {
@@ -36,6 +50,10 @@ export interface ProjectManagerOptions {
   statePath?: string
   tickMs?: number
   shell?: string
+  /** The port the daemon listens on, so a page cannot navigate to it (§4.7). */
+  daemonPort?: number
+  /** The daemon's bind address when it is not loopback. */
+  daemonHost?: string | null
 }
 
 interface ProjectEntry {
@@ -46,7 +64,14 @@ interface ProjectEntry {
   manager: SessionManager | null
   /** Restored-but-not-yet-spawned sessions, held until first activation. */
   pending: PersistedSession[]
+  browser: PersistedBrowser
 }
+
+const defaultBrowserSettings = (): PersistedBrowser => ({
+  enabled: false,
+  allow: [...DEFAULT_ALLOW],
+  eval: false,
+})
 
 export function defaultStatePath(): string {
   const base = process.env['XDG_CONFIG_HOME'] ?? path.join(os.homedir(), '.config')
@@ -70,8 +95,46 @@ export class ProjectManager {
   onSessionData: ((s: Session, data: string) => void) | null = null
   onSessionStatus: ((s: Session) => void) | null = null
   onSessionExit: ((s: Session, code: number) => void) | null = null
+  onSessionBrowser: ((s: Session) => void) | null = null
+  onSessionFrame: ((s: Session, jpeg: Buffer) => void) | null = null
+  onSessionBrowserPrompt: ((s: Session, url: string) => void) | null = null
 
-  private constructor(private readonly opts: ProjectManagerOptions) {}
+  /**
+   * Built once and shared. Constructing it loads nothing: Playwright is only
+   * imported when a context is actually opened (spec §6).
+   */
+  private readonly browserHost: BrowserHost
+
+  private constructor(private readonly opts: ProjectManagerOptions) {
+    this.browserHost = new BrowserHost({
+      profileRoot: path.join(path.dirname(this.statePath), 'projects'),
+      policy: (projectId) => this.policyFor(projectId),
+    })
+  }
+
+  /**
+   * The navigation rules in force for a project, read fresh on every
+   * navigation so an allowlist edit applies without reattaching (spec §4.7).
+   */
+  policyFor(projectId: string): NavigationPolicy {
+    const e = this.entries.get(projectId)
+    return {
+      allow: e?.browser.allow ?? [...DEFAULT_ALLOW],
+      daemonPort: this.opts.daemonPort ?? 0,
+      daemonHost: this.opts.daemonHost ?? null,
+    }
+  }
+
+  browserSettings(projectId: string): PersistedBrowser {
+    return this.entries.get(projectId)?.browser ?? defaultBrowserSettings()
+  }
+
+  setBrowserSettings(projectId: string, next: Partial<PersistedBrowser>): void {
+    const e = this.entries.get(projectId)
+    if (!e) return
+    e.browser = { ...e.browser, ...next }
+    this.changed()
+  }
 
   static async open(opts: ProjectManagerOptions): Promise<ProjectManager> {
     const pm = new ProjectManager(opts)
@@ -102,7 +165,9 @@ export class ProjectManager {
 
   createProject(name: string, root: string): string {
     const id = randomUUID()
-    this.entries.set(id, { id, name, root, manager: null, pending: [] })
+    this.entries.set(id, {
+      id, name, root, manager: null, pending: [], browser: defaultBrowserSettings(),
+    })
     this.activate(id)
     return id
   }
@@ -180,6 +245,7 @@ export class ProjectManager {
     if (this.timer) clearInterval(this.timer)
     this.timer = null
     for (const e of this.entries.values()) e.manager?.disposeAll()
+    await this.browserHost.dispose()
     await this.writing
   }
 
@@ -193,6 +259,9 @@ export class ProjectManager {
       scrollback: this.opts.scrollback,
       idleMs: this.opts.idleMs,
       ...(this.opts.shell ? { shell: this.opts.shell } : {}),
+      // Withheld entirely while the project has browsers switched off, so the
+      // manager has nothing to attach with rather than a flag to remember.
+      browserHost: e.browser.enabled ? this.browserHost : null,
     })
     mgr.onSessionData = (s, d) => this.onSessionData?.(s, d)
     mgr.onSessionStatus = (s) => this.onSessionStatus?.(s)
@@ -201,6 +270,9 @@ export class ProjectManager {
       this.changed()
     }
     mgr.onStructureChange = () => this.changed()
+    mgr.onSessionBrowser = (s) => this.onSessionBrowser?.(s)
+    mgr.onSessionFrame = (s, jpeg) => this.onSessionFrame?.(s, jpeg)
+    mgr.onSessionBrowserPrompt = (s, url) => this.onSessionBrowserPrompt?.(s, url)
     return mgr
   }
 
@@ -224,6 +296,7 @@ export class ProjectManager {
         id: e.id,
         name: e.name,
         root: e.root,
+        browser: e.browser,
         sessions: e.manager
           ? e.manager.list().map((s) => ({
               slot: s.slot,
@@ -231,6 +304,7 @@ export class ProjectManager {
               cwd: s.cwd,
               command: s.command,
               color: s.color,
+              browser: s.browser ? { url: s.browser.info().url } : null,
             }))
           : e.pending,
       })),
@@ -264,6 +338,7 @@ export class ProjectManager {
         root: p.root,
         manager: null,
         pending: Array.isArray(p.sessions) ? p.sessions : [],
+        browser: { ...defaultBrowserSettings(), ...(p.browser ?? {}) },
       })
     }
     // Only the active project spawns eagerly; the rest wait for activation.

@@ -3,6 +3,7 @@ import { readdir, realpath, stat } from 'node:fs/promises'
 import os from 'node:os'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import path from 'node:path'
+import type { Capabilities } from '@tring/shared/protocol'
 import type { ProjectManager } from './project-manager.ts'
 import {
   bearerEquals, createOriginCheck, SECURITY_HEADERS, type OriginCheck,
@@ -31,6 +32,10 @@ export interface HttpOptions {
   sameOrigin?: OriginCheck
   /** Directories the browse endpoint may reach outside the home tree. */
   fsRoots?: readonly string[]
+  /** Browser-agent capability, re-read per request (spec §4.7). */
+  capabilities?: () => Capabilities
+  /** Fetches Chromium, reporting progress. Absent means the route 404s. */
+  installBrowser?: (onProgress: (received: number, total: number) => void) => Promise<void>
 }
 
 /** No response leaves without the header block — a 404 is framable too. */
@@ -68,6 +73,7 @@ export function createHandler(opts: HttpOptions) {
   const { pm, webRoot, token } = opts
   const sameOrigin = opts.sameOrigin ?? createOriginCheck()
   let usage: { at: number; report: Promise<UsageReport> } | null = null
+  let installing = false
 
   const homeDir = (): string => process.env['HOME'] ?? os.homedir()
 
@@ -188,6 +194,34 @@ export function createHandler(opts: HttpOptions) {
         usage = null
         return json(res, 500, { error: 'cannot read Claude Code transcripts' })
       }
+    }
+
+    if (url.pathname === '/api/capabilities' && req.method === 'GET') {
+      return json(res, 200, opts.capabilities?.() ?? { browser: 'unavailable' })
+    }
+
+    // Streams `{received, total}` lines while ~150MB arrives, so the settings
+    // dialog can show a bar rather than a spinner that lasts minutes.
+    if (url.pathname === '/api/browser/install' && req.method === 'POST') {
+      if (!opts.installBrowser) return json(res, 404, { error: 'not found' })
+      // A second click must not start a second download.
+      if (installing) return json(res, 409, { error: 'already installing' })
+      if (opts.capabilities?.().browser !== 'unavailable') {
+        return json(res, 409, { error: 'already installed' })
+      }
+      installing = true
+      head(res, 200, 'application/x-ndjson; charset=utf-8')
+      try {
+        await opts.installBrowser((received, total) => {
+          res.write(JSON.stringify({ received, total }) + '\n')
+        })
+        res.end(JSON.stringify({ done: true }) + '\n')
+      } catch (err) {
+        res.end(JSON.stringify({ error: (err as Error).message }) + '\n')
+      } finally {
+        installing = false
+      }
+      return
     }
 
     if (url.pathname === '/api/sessions' && req.method === 'GET') {

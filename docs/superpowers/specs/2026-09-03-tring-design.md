@@ -23,11 +23,17 @@ a binary choice — *Terminal* or *Browser Agent* — because that is what the u
 deciding; the model underneath stays honest.
 
 A slot holding a browser renders as a split: terminal on one side, live page on the
-other. The agent drives the page through tools scoped to *its own* context via
-`TRING_BROWSER_ID`, so the agent in slot 7 drives the browser in slot 7 — nothing to wire
+other. The agent drives the page through tools scoped to *its own* page via
+`TRING_SESSION_ID`, so the agent in slot 7 drives the browser in slot 7 — nothing to wire
 up and no way for two agents to contend for one page. Telling the agent what to do needs
 no new interface at all: it is Claude Code in the left pane and you type at it as you
 already do.
+
+**Scoped by session id, not a browser id**, and that follows from attachment rather than
+being a preference. A shell's environment is fixed when it spawns, and attaching happens
+long afterwards — often to a session that has been running for an hour — so a
+`TRING_BROWSER_ID` could never reach the process that needs it. `TRING_SESSION_ID` is
+already there, already unique, and already identifies the slot that owns the page.
 
 Two drivers share one page, so control is explicit and visible (§4.7). The human takes
 the wheel by touching the page and returns it with a button; the agent's tools **block
@@ -229,10 +235,11 @@ Dev: `vite`, `typescript`, `vitest`, `tsx`.
   addon. Used when a client focuses the session or reconnects.
 - `snapshot()` returns the visible rows as run-length cells `{text, fg, bg, bold}` for
   thumbnails.
-- A session may additionally own a browser context (§4.7). It is held as
-  `browser: BrowserSession | null` on the session, so the PTY half of this section is
-  unchanged whether one is attached or not, and `TRING_BROWSER_ID` joins the injected
-  environment while it is.
+- A session may additionally own a page (§4.7), held as `browser: AttachedBrowser | null`,
+  so the PTY half of this section is unchanged whether one is attached or not. **No new
+  environment variable**: a shell's environment is fixed at spawn and attachment happens
+  afterwards, so `TRING_SESSION_ID` — already injected, already unique — is what scopes an
+  agent's browser tools to its own page.
 
 ### 4.2 ActivityTracker (shared, pure)
 
@@ -259,6 +266,12 @@ any   --(PTY exit)-->  exited
 - The tracker runs for **every** session in every project, active or not. It reads the
   same byte stream the daemon is already consuming, so a background project costs one
   state machine per session and nothing else.
+- `settle(now)` is the one entry point that does not come from the byte stream: an
+  attached page that has stopped loading (§4.7). It needs to exist because `tick` gates on
+  PTY output, which a session working only in its browser never produces, while every
+  explicit signal (`commandEnd`, `bell`, `hook`) declares itself notable and a page load is
+  not news. It earns the right to ring by the same rule the idle path uses — sustained work
+  first — so `tick` is now written in terms of it.
 
 ### 4.3 ProjectManager and SessionManager
 
@@ -413,16 +426,35 @@ interface BrowserInfo {
 }
 ```
 
-**One browser process, one context per session.** Contexts are cheap and are the isolation
-boundary Playwright actually provides; processes are neither. The shared process launches on
-the first attach in the daemon's lifetime and closes when the last context detaches.
+**One persistent context per project, one page per session.** Playwright offers either
+isolated contexts (`newContext`, whose cookies die with them) or a persistent profile
+(`launchPersistentContext`, which is one context per directory) — not both, so per-session
+contexts and per-project persistence cannot coexist. Persistence is the half worth having:
+logging into a staging environment once and finding every agent in that repository already
+authenticated is the point of the feature, and isolating agents in the same project from
+each other would mean logging in once per agent, which is the opposite of it. Pages within
+the context are independent, so two agents still do not share a viewport.
 
-**Profiles are per project**, at `~/.config/tring/projects/<id>/browser/`, so a login
-survives a detach, a reattach and a daemon restart. Never the user's real Chrome profile:
-tring would be handing an agent every cookie on the machine, and "use my existing logins"
-is a decision that deserves its own explicit gesture rather than arriving as a side effect
-of attaching a browser. Importing a `storageState` is that gesture, and is out of scope for
-the first version.
+Projects stay isolated from one another, which is the boundary that actually matters —
+different repositories, different credentials. Each gets its own browser process, launched
+on first attach and closed when its last page goes.
+
+**Profiles live at `~/.config/tring/projects/<id>/browser/`**, so a login survives a
+detach, a reattach and a daemon restart. Never the user's real Chrome profile: tring would
+be handing an agent every cookie on the machine, and "use my existing logins" is a decision
+that deserves its own explicit gesture rather than arriving as a side effect of attaching a
+browser. Importing a `storageState` is that gesture, and is out of scope for the first
+version.
+
+**Whether Chromium is installed is answered from the filesystem, not from Playwright.**
+`chromium.executablePath()` would be the obvious source, but importing `playwright-core`
+costs ~400ms and this runs at every daemon start — a user who never enables the feature
+would pay it every time, which §6 forbids. So the browser cache directory is inspected
+directly. That couples tring to another package's on-disk layout, and the coupling is
+bounded on purpose: a false negative offers a download that the idempotent installer then
+completes in seconds, and a false positive fails at launch and says so. Neither breaks a
+daemon that is only serving terminals. (`executablePath()` alone would not have sufficed
+anyway — it answers with a path whether or not anything is there.)
 
 **Frames come from CDP screencast**, not a `page.screenshot()` loop:
 `Page.startScreencast{format: 'jpeg', quality, maxWidth, maxHeight}` pushes a frame only
@@ -438,7 +470,7 @@ throttles the producer instead of queueing memory.
 | Browser event | Tracker signal |
 |---|---|
 | navigation started, or an agent action begins | `busy` |
-| `load` plus network quiet, no agent action pending | `done` |
+| `load` plus network quiet, no agent action pending | `done`, via `settle` (§4.2) |
 | agent action times out on a selector, or a `dialog` opens | `done`, **notable**, `blockedOn` set |
 | page crash, context closed unexpectedly | `exited` |
 
@@ -482,17 +514,26 @@ Also refused: `file://` and every other non-http(s) scheme, and downloads
 §4.4 — coordinates inside the viewport, key events carrying no modifiers the pane did not
 send — because it arrives from the page and lands in CDP.
 
+**What the allowlist is and is not.** It governs *navigation*, in every frame including
+redirects and iframes, and only main-frame refusals are offered to the user — prompting for
+each third-party iframe would train someone to click allow. It does **not** govern
+subresource loads: an allowed page may fetch from a CDN, and an `img` or `fetch` to an
+arbitrary host still leaves. So it raises the cost of exfiltration without making it
+impossible, and calling it a seal would be a lie that someone later relies on. It is the
+reason `browser_eval` is off by default (§4.8): a page that can run arbitrary script routes
+around navigation entirely with one `fetch`.
+
 ### 4.8 Browser tools
 
 How an agent drives its page. An MCP endpoint at `/mcp`, authenticated with the same token
 as everything else (§4.5), which an in-session agent already has as `$TRING_TOKEN` — so
 configuring it requires nothing pasted into a settings file.
 
-**Tools are scoped to the caller's own context.** The MCP session resolves
-`TRING_BROWSER_ID` from the calling process's environment; there is no tool taking a
-browser id, so an agent cannot address a page that is not its own. This is what makes
-"the agent in slot 7 drives the browser in slot 7" true by construction rather than by
-convention.
+**Tools are scoped to the caller's own page.** The MCP session resolves
+`TRING_SESSION_ID` from the calling process's environment and looks up that session's
+attached page; there is no tool taking a session or browser id, so an agent cannot address
+a page that is not its own. This is what makes "the agent in slot 7 drives the browser in
+slot 7" true by construction rather than by convention.
 
 | Tool | Notes |
 |---|---|

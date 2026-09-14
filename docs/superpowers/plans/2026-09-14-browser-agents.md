@@ -22,21 +22,28 @@ that has never heard of a browser.
 
 ## Stages
 
-**1. shared** — `protocol.ts`: `BrowserInfo`, `browser` on `SessionInfo`, the six new client
+**1. shared** *(done)* — `protocol.ts`: `BrowserInfo`, `browser` on `SessionInfo`, the six new client
 messages, `frame`/`browser` server messages, `capabilities` on `state`, and the channel tag
 in `encodeOutput`/`decodeOutput`. `browser-policy.ts`: the allowlist matcher and the
 daemon-origin refusal, pure. `browser-control.ts`: the wheel state machine, pure and
 clock-injected like `ActivityTracker`. Vitest on both pure modules — this is where the
 `?token=` test and the grab/release/resume tests live, and neither needs Playwright.
 
-**2. server, headless** — `browser.ts`: lazy Playwright resolution, capability detection,
-shared process, per-session context, per-project profile dir, CDP screencast with frame
-ack. `session.ts` gains `browser: BrowserSession | null` and `TRING_BROWSER_ID`.
+**2. server, headless** *(done)* — `browser.ts`: lazy Playwright resolution, filesystem
+capability detection, per-project persistent context, one page per session, CDP screencast
+with frame ack. `session.ts` gains `browser: AttachedBrowser | null`.
 `session-manager.ts` gains attach/detach. `project-manager.ts` persists `browser` on both
 project and session and reattaches on respawn. `ws.ts` routes the new messages and gates
-frames. `http.ts` serves `/api/capabilities` and the install stream. Verifiable with curl
-and no UI: attach to a session, confirm frames arrive on the socket, confirm the PTY is
-untouched.
+frames. `http.ts` serves `/api/capabilities` and the install stream.
+
+Three things the implementation changed in the spec, all amended there:
+- **One context per project, one page per session** — not one context per session.
+  Playwright cannot give per-session contexts *and* a persistent per-project profile, and
+  persistence is the half worth having (§4.7).
+- **No `TRING_BROWSER_ID`** — a shell's environment is fixed at spawn and attachment
+  happens afterwards, so scoping uses `TRING_SESSION_ID`, which is already there (§4.8).
+- **Capability detection reads the filesystem**, because importing `playwright-core` costs
+  ~400ms at every daemon start (§6). A test pins the cost.
 
 **3. web, view only** — `browser-pane.ts` painting frames into a split focus cell, the
 header strip, the draggable divider with a per-session ratio, and the two-half thumbnail in
@@ -48,7 +55,7 @@ work from the input work.
 give-back button, the amber border while the human holds the wheel. The §9.15 login
 walkthrough becomes runnable here.
 
-**5. tools** — `browser-tools.ts`: the MCP endpoint, `TRING_BROWSER_ID` scoping, the tool
+**5. tools** — `browser-tools.ts`: the MCP endpoint, `TRING_SESSION_ID` scoping, the tool
 table of §4.8, blocking-not-erroring while the human drives, and the accessibility-snapshot
 resync on release. `browser_eval` behind its own per-project flag.
 

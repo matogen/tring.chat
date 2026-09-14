@@ -1,6 +1,7 @@
 import type { WebSocket, WebSocketServer } from 'ws'
 import {
-  encodeOutput, type ClientMessage, type ServerMessage, type UpdateInfo,
+  CHANNEL_FRAME, encodeBinary, encodeOutput,
+  type Capabilities, type ClientMessage, type ServerMessage, type UpdateInfo,
 } from '@tring/shared/protocol'
 import type { ProjectManager } from './project-manager.ts'
 import { secretEquals } from './security.ts'
@@ -11,6 +12,19 @@ export interface HubOptions {
   token?: string | null
   /** Snapshot cadence; spec caps thumbnails at 4 per second. */
   snapshotMs?: number
+  /**
+   * Read per state message, so an install flips the UI without a restart.
+   * Takes the client's project, since the enabled half of the answer is a
+   * per-project setting (spec §4.7).
+   */
+  capabilities?: (projectId: string | null) => Capabilities
+}
+
+/** What one client wants to see of one session's page (spec §4.7). */
+interface BrowserView {
+  width: number
+  height: number
+  focused: boolean
 }
 
 interface Client {
@@ -19,6 +33,8 @@ interface Client {
   /** Each socket views its own project, so two tabs can sit in different ones. */
   projectId: string | null
   focusedId: string | null
+  /** Per session id, so a thumbnail and a focused pane can coexist. */
+  views: Map<string, BrowserView>
 }
 
 export class Hub {
@@ -36,6 +52,21 @@ export class Hub {
       for (const c of this.clients) {
         if (c.authed && c.focusedId === s.id) c.ws.send(frame, { binary: true })
       }
+    }
+    // Screencast frames obey the snapshot rule of §4.4: a browser in a
+    // background project keeps running and keeps reporting status, but costs
+    // no pixels.
+    pm.onSessionFrame = (s, jpeg) => {
+      const frame = encodeBinary(s.id, CHANNEL_FRAME, jpeg)
+      for (const c of this.clients) {
+        if (c.authed && c.projectId === s.projectId) c.ws.send(frame, { binary: true })
+      }
+    }
+    pm.onSessionBrowser = (s) => {
+      this.broadcast({ type: 'browser', id: s.id, browser: s.browser?.info() ?? null })
+    }
+    pm.onSessionBrowserPrompt = (s, url) => {
+      this.broadcast({ type: 'browserPrompt', id: s.id, url })
     }
 
     // One loop for the whole hub rather than one per socket: takeSnapshot()
@@ -56,14 +87,29 @@ export class Hub {
     wss.on('connection', (ws) => this.accept(ws))
   }
 
+  /**
+   * Re-push state to everyone. For changes the ProjectManager never sees — a
+   * Chromium download finishing flips a capability without touching a project.
+   */
+  refreshState(): void {
+    this.broadcastState()
+  }
+
   dispose(): void {
     clearInterval(this.timer)
   }
 
   private accept(ws: WebSocket): void {
-    const client: Client = { ws, authed: false, projectId: null, focusedId: null }
+    const client: Client = {
+      ws, authed: false, projectId: null, focusedId: null, views: new Map(),
+    }
     this.clients.add(client)
-    ws.on('close', () => this.clients.delete(client))
+    ws.on('close', () => {
+      this.clients.delete(client)
+      // The pages this client was watching may now have no viewer, or a
+      // smaller one; a closed tab must not hold a page at focus resolution.
+      for (const id of client.views.keys()) void this.refreshView(id)
+    })
     ws.on('message', (raw, isBinary) => {
       if (isBinary) return
       let msg: ClientMessage
@@ -130,10 +176,49 @@ export class Hub {
           cwd: msg.cwd,
           command: msg.command ?? null,
           name: msg.name ?? null,
+          ...(msg.browser ? { browser: { url: msg.url ?? null } } : {}),
         })
         break
+      case 'attachBrowser':
+        // Awaited nowhere: launching a browser takes a second or two and the
+        // socket must stay responsive. The `browser` broadcast reports the
+        // result when it arrives.
+        void pm.findManager(msg.id)?.attachBrowser(msg.id, msg.url)
+        break
+      case 'detachBrowser':
+        pm.findManager(msg.id)?.detachBrowser(msg.id)
+        break
+      case 'browserInput':
+        void pm.findSession(msg.id)?.browser?.input(msg.event)
+        break
+      case 'browserGrab':
+        pm.findSession(msg.id)?.browser?.grab()
+        break
+      case 'browserRelease':
+        pm.findSession(msg.id)?.browser?.release()
+        break
+      case 'browserNavigate':
+        void pm.findSession(msg.id)?.browser?.navigate(msg.to)
+        break
+      case 'browserView': {
+        c.views.set(msg.id, {
+          width: msg.width,
+          height: msg.height,
+          focused: c.focusedId === msg.id,
+        })
+        void this.refreshView(msg.id)
+        break
+      }
       case 'focus': {
+        const previous = c.focusedId
         c.focusedId = msg.id
+        // Focus decides a page's resolution, so both the session being left
+        // and the one being entered have to be reconsidered.
+        for (const [id, view] of c.views) {
+          view.focused = id === msg.id
+        }
+        if (previous && previous !== msg.id) void this.refreshView(previous)
+        if (msg.id) void this.refreshView(msg.id)
         if (!msg.id) break
         const s = pm.findSession(msg.id)
         if (!s) break
@@ -220,12 +305,41 @@ export class Hub {
     })
   }
 
+  /**
+   * One page, one screencast, so its size is the best any viewer wants rather
+   * than something each of them sets.
+   *
+   * A focused pane outranks every thumbnail; among equals the largest wins, so
+   * two tabs watching the same tile do not fight. A page nobody is watching
+   * keeps its last size — stopping the screencast outright would blank the
+   * tile of a client that reconnects a moment later.
+   */
+  private async refreshView(sessionId: string): Promise<void> {
+    const browser = this.opts.pm.findSession(sessionId)?.browser
+    if (!browser) return
+
+    let best: BrowserView | null = null
+    for (const c of this.clients) {
+      if (!c.authed) continue
+      const view = c.views.get(sessionId)
+      if (!view) continue
+      if (!best) { best = view; continue }
+      if (view.focused && !best.focused) { best = view; continue }
+      if (view.focused === best.focused && view.width > best.width) best = view
+    }
+    if (!best) return
+    await browser.setViewport(best.width, best.height, best.focused)
+  }
+
   private sendState(c: Client): void {
     this.send(c, {
       type: 'state',
       projects: this.opts.pm.list(),
       activeProjectId: c.projectId ?? this.opts.pm.activeProjectId,
       update: this.update,
+      ...(this.opts.capabilities
+        ? { capabilities: this.opts.capabilities(c.projectId) }
+        : {}),
     })
   }
 

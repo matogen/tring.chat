@@ -115,7 +115,22 @@ export class ActivityTracker {
     if (this.status !== 'busy') return
     if (this.lastOutput === null) return
     if (now - this.lastOutput < this.idleMs) return
-    // Inferred, not declared: trust it only after sustained work.
+    this.settle(now)
+  }
+
+  /**
+   * An inferred finish arriving from somewhere other than the byte stream — an
+   * attached page that has stopped loading (spec §4.7).
+   *
+   * Needed as its own entry point because `tick` gates on PTY output, which a
+   * session working only in its browser never produces, and because every
+   * explicit signal (`commandEnd`, `bell`, `hook`) declares itself notable.
+   * This is neither: it is a guess, and it earns the right to interrupt someone
+   * by the same rule the idle path uses — sustained work first. A page that
+   * loaded in 200ms is not news; one that took half a minute might be.
+   */
+  settle(now: number): void {
+    if (this.status !== 'busy') return
     this.notable =
       this.busyStartedAt !== null && now - this.busyStartedAt >= NOTABLE_BUSY_MS
     this.transition('done', now)

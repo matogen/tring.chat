@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { BrowserHost } from './browser.ts'
 import { Session } from './session.ts'
 
 export interface SessionSpec {
@@ -9,6 +10,14 @@ export interface SessionSpec {
   color?: string | null
   /** False when restoring from disk; see Session's `autorun`. */
   autorun?: boolean
+  /**
+   * Attach a browser on creation, reopening this url (spec §4.7).
+   *
+   * Unlike `command` this *is* replayed on restore: a re-run command executes
+   * work, where a reopened page restores a view, and the profile is on disk
+   * either way.
+   */
+  browser?: { url?: string | null } | null
 }
 
 export interface SessionManagerOptions {
@@ -20,6 +29,8 @@ export interface SessionManagerOptions {
   scrollback: number
   idleMs: number
   shell?: string
+  /** Null when browser agents are unavailable or switched off (spec §4.7). */
+  browserHost?: BrowserHost | null
 }
 
 export const SLOT_COUNT = 16
@@ -35,6 +46,9 @@ export class SessionManager {
   onSessionStatus: ((s: Session) => void) | null = null
   onSessionExit: ((s: Session, code: number) => void) | null = null
   onStructureChange: (() => void) | null = null
+  onSessionBrowser: ((s: Session) => void) | null = null
+  onSessionFrame: ((s: Session, jpeg: Buffer) => void) | null = null
+  onSessionBrowserPrompt: ((s: Session, url: string) => void) | null = null
 
   constructor(private readonly opts: SessionManagerOptions) {}
 
@@ -69,11 +83,43 @@ export class SessionManager {
     session.onExit = (code) => this.onSessionExit?.(session, code)
     // A moved shell changes what a restart would restore, so persist it.
     session.onCwdChange = () => this.onStructureChange?.()
+    session.onBrowserChange = () => {
+      this.onSessionBrowser?.(session)
+      this.onStructureChange?.()
+    }
+    session.onBrowserFrame = (jpeg) => this.onSessionFrame?.(session, jpeg)
+    session.onBrowserPrompt = (url) => this.onSessionBrowserPrompt?.(session, url)
 
     this.bySlot.set(slot, session)
     this.byId.set(session.id, session)
     this.onStructureChange?.()
+    // After the session is registered, so the change it fires finds it.
+    if (spec.browser) void this.attachBrowser(session.id, spec.browser.url ?? undefined)
     return session
+  }
+
+  /**
+   * Give a running session a page (spec §4.7).
+   *
+   * Nothing here touches the PTY. A user toggling Terminal to Browser Agent on
+   * a working tile keeps their shell, their process and their scrollback, which
+   * is the claim the whole design rests on.
+   */
+  async attachBrowser(id: string, url?: string): Promise<void> {
+    const session = this.byId.get(id)
+    const host = this.opts.browserHost
+    if (!session || !host || session.browser) return
+    const browser = await host.attach(this.opts.projectId, session.id, url)
+    // The session may have been killed while the browser was opening.
+    if (!this.byId.has(id)) {
+      await browser.dispose()
+      return
+    }
+    session.attachBrowser(browser)
+  }
+
+  detachBrowser(id: string): void {
+    this.byId.get(id)?.detachBrowser()
   }
 
   get(id: string): Session | undefined {
@@ -123,6 +169,7 @@ export class SessionManager {
   respawn(id: string): Session | undefined {
     const old = this.byId.get(id)
     if (!old) return undefined
+    const browser = old.browser
     const spec: SessionSpec = {
       slot: old.slot,
       cwd: old.cwd,
@@ -130,6 +177,7 @@ export class SessionManager {
       name: old.name,
       color: old.color,
       autorun: true,
+      ...(browser ? { browser: { url: browser.info().url } } : {}),
     }
     this.kill(id)
     return this.create(spec)

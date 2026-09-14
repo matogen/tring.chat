@@ -4,7 +4,9 @@ import { createServer as createSecureServer } from 'node:https'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { WebSocketServer } from 'ws'
+import type { Capabilities } from '@tring/shared/protocol'
 import { parseArgs, UsageError, type Args } from './args.ts'
+import { capabilityFor, installChromium, isChromiumInstalled } from './browser.ts'
 import { ProjectManager } from './project-manager.ts'
 import { createHandler } from './http.ts'
 import {
@@ -97,7 +99,20 @@ async function main(): Promise<void> {
     scrollback: args.scrollback,
     idleMs: args.idleMs,
     ...(args.shell ? { shell: args.shell } : {}),
+    // So an attached page cannot navigate to the daemon that owns it (§4.7).
+    daemonPort: args.port,
+    daemonHost: isLoopbackBind(args.host) ? null : args.host,
   })
+
+  // Checked once at startup and re-checked after an install, rather than per
+  // request: it is a stat on a path that only changes when someone downloads a
+  // browser. Nothing here loads Playwright unless it is actually present.
+  let chromiumInstalled = await isChromiumInstalled()
+  const capabilities = (projectId: string | null): Capabilities => {
+    const id = projectId ?? pm.activeProjectId
+    const enabled = id ? pm.browserSettings(id).enabled : false
+    return { browser: capabilityFor(chromiumInstalled, enabled) }
+  }
 
   // One rule for both doors. The WebSocket is the door that matters: the
   // same-origin policy does not gate it, so without this any page the user has
@@ -108,6 +123,14 @@ async function main(): Promise<void> {
   // fresh closure per request would throw that away on every call.
   const handle = createHandler({
     pm, webRoot, token, sameOrigin, fsRoots: args.fsRoot,
+    capabilities: () => capabilities(null),
+    installBrowser: async (onProgress) => {
+      await installChromium(onProgress)
+      // The capability is cached, so the newly downloaded browser has to be
+      // noticed here or the settings dialog keeps offering the download.
+      chromiumInstalled = await isChromiumInstalled()
+      hub.refreshState()
+    },
   })
   const listener: RequestListener = (req, res) => {
     void handle(req, res).catch(() => {
@@ -119,7 +142,7 @@ async function main(): Promise<void> {
   // Rejected at the handshake, before Hub ever sees a socket: an origin that
   // is refused here never gets to send a `hello` at all.
   const wss = new WebSocketServer({ server, verifyClient: upgradeGuard(sameOrigin) })
-  const hub = new Hub({ pm, token })
+  const hub = new Hub({ pm, token, capabilities })
   hub.attach(wss)
 
   // The one link that carries the secret. The client stores it and scrubs it

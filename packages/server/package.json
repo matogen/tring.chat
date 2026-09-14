@@ -46,7 +46,10 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
-    "esbuild": "^0.24.0",
-    "@tring/shared": "*"
+    "@tring/shared": "*",
+    "esbuild": "^0.24.0"
+  },
+  "optionalDependencies": {
+    "playwright-core": "^1.63.0"
   }
 }

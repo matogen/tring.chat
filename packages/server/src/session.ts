@@ -6,6 +6,7 @@ import type { SerializeAddon as SerializeAddonT } from '@xterm/addon-serialize'
 import { ActivityTracker, DEFAULT_IDLE_MS } from '@tring/shared/status'
 import { DEFAULT_SCROLLBACK, type ScreenSnapshot, type SessionInfo } from '@tring/shared/protocol'
 import { snapshot } from './snapshot.ts'
+import type { AttachedBrowser } from './browser.ts'
 import { commandArgs, defaultShell, interactiveArgs, shQuote, usesPosixCd } from './shell.ts'
 
 // Both xterm packages are CJS bundles that assign their exports in a way
@@ -65,9 +66,20 @@ export class Session {
 
   readonly tracker: ActivityTracker
 
+  /**
+   * The attached page, or null (spec §4.7). Attaching and detaching never
+   * touch the PTY below — that is the whole reason the choice can be offered
+   * on a tile that is already working.
+   */
+  browser: AttachedBrowser | null = null
+
   onData: ((data: string) => void) | null = null
   onStatusChange: (() => void) | null = null
   onExit: ((code: number) => void) | null = null
+  /** Fires on url, title, load state or control changes of an attached page. */
+  onBrowserChange: (() => void) | null = null
+  onBrowserFrame: ((jpeg: Buffer) => void) | null = null
+  onBrowserPrompt: ((url: string) => void) | null = null
 
   private readonly pty: IPty
   private readonly term: TerminalT
@@ -225,6 +237,41 @@ export class Session {
     return shot
   }
 
+  /**
+   * Adopt a page (spec §4.7).
+   *
+   * The browser's activity feeds the same ActivityTracker the PTY does, so a
+   * slot reports one status however it is working. Navigation is `busy` and
+   * settling is `done`; both are inferred, so neither rings. Being parked on a
+   * dialog or a selector goes through `hook()`, which is where the explicit
+   * signals live — it means exactly one thing, the way a Stop hook does.
+   */
+  attachBrowser(browser: AttachedBrowser): void {
+    this.detachBrowser()
+    this.browser = browser
+    browser.onChange = () => this.onBrowserChange?.()
+    browser.onFrame = (jpeg) => this.onBrowserFrame?.(jpeg)
+    browser.onPrompt = (url) => this.onBrowserPrompt?.(url)
+    browser.onActivity = (kind) => {
+      if (kind === 'start') this.signal((t, now) => t.commandStart(now))
+      else if (kind === 'end') this.signal((t, now) => t.settle(now))
+      else this.signal((t, now) => t.hook(now))
+    }
+    this.onBrowserChange?.()
+  }
+
+  detachBrowser(): void {
+    const browser = this.browser
+    if (!browser) return
+    this.browser = null
+    browser.onChange = null
+    browser.onFrame = null
+    browser.onPrompt = null
+    browser.onActivity = null
+    void browser.dispose()
+    this.onBrowserChange?.()
+  }
+
   ack(): void {
     this.signal((t, now) => t.ack(now))
   }
@@ -289,6 +336,7 @@ export class Session {
     this.disposed = true
     if (this.enforceTimer) clearTimeout(this.enforceTimer)
     this.enforceTimer = null
+    this.detachBrowser()
     this.kill()
     this.term.dispose()
   }
@@ -306,10 +354,7 @@ export class Session {
       status: this.tracker.status,
       since: this.tracker.since,
       exitCode: this.tracker.exitCode,
-      // Always null until a browser can be attached (spec §4.7). The field is
-      // on the wire first so the client renders one shape from the start,
-      // rather than learning a second one when attachment lands.
-      browser: null,
+      browser: this.browser?.info() ?? null,
     }
   }
 
