@@ -3,6 +3,7 @@ import {
   encodeOutput, type ClientMessage, type ServerMessage, type UpdateInfo,
 } from '@tring/shared/protocol'
 import type { ProjectManager } from './project-manager.ts'
+import { secretEquals } from './security.ts'
 import type { Session } from './session.ts'
 
 export interface HubOptions {
@@ -83,7 +84,10 @@ export class Hub {
     const pm = this.opts.pm
 
     if (msg.type === 'hello') {
-      if (this.opts.token && msg.token !== this.opts.token) {
+      // Compared in constant time: this one is reachable from off the machine
+      // whenever the daemon is bound past loopback, which is the whole reason
+      // a token exists.
+      if (this.opts.token && !secretEquals(this.opts.token, msg.token)) {
         this.send(c, { type: 'error', message: 'unauthorized' })
         c.ws.close()
         return

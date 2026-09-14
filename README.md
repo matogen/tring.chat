@@ -98,7 +98,8 @@ npm i -g ./packages/server          # install this checkout as `tring`
 ```
 
 Flags: `--port` (7331), `--host` (127.0.0.1), `--token`, `--scrollback` (5000),
-`--idle-ms` (3000), `--shell`, `--no-open`, `--no-update-check`, `--version`.
+`--idle-ms` (3000), `--shell`, `--fs-root`, `--allow-origin`, `--no-open`,
+`--no-update-check`, `--version`.
 
 ## On a phone
 
@@ -116,6 +117,33 @@ tring --host 0.0.0.0 --token some-long-secret
 
 then open `http://<your-machine>:7331/?token=some-long-secret` on the phone. A private
 network such as Tailscale is the safer way to do this than opening the port on a LAN.
+
+The token is remembered on that first visit and then taken back off the address bar, but
+a secret that has travelled in a URL is only as private as the URL: it has already been
+through your history, any proxy log on the way, and whatever chat app you sent the link
+in. Treat the link as the secret, and rotate with a new `--token` rather than assuming an
+old link has expired.
+
+## Who can reach the daemon
+
+The daemon spawns shells, so it only answers requests from the page it serves itself.
+That check matters more than the bind address: the same-origin policy does not cover
+WebSockets, so without it any website you happened to have open could open a socket to
+`ws://127.0.0.1:7331` and type into your terminals. Binding to loopback keeps other
+machines out, not other websites.
+
+- A browser page from another origin is refused at the handshake. So is a domain rebound
+  to 127.0.0.1, while the daemon is on loopback.
+- Non-browser clients send no `Origin` and are unaffected — the Claude Code hooks, curl
+  and `/api/sessions` scripts keep working exactly as before.
+- `--allow-origin <origin>` adds one, for a front end you serve yourself. `npm run dev`
+  sets it for the Vite server on :5173.
+- `--token` is still what gates access once you bind past loopback, and is now compared
+  in constant time.
+- The directory picker (`/api/fs`) browses your home directory and the roots of projects
+  you have already created. `--fs-root <path>` adds another — useful if your projects
+  live somewhere like `D:\work`.
+
 ## Install it as an app
 
 tring is a progressive web app. Once it is open in a browser, install it and it gets its

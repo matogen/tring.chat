@@ -7,6 +7,7 @@ import { DEFAULT_HOST, DEFAULT_PORT, DEFAULT_SCROLLBACK } from '@tring/shared/pr
 import { DEFAULT_IDLE_MS } from '@tring/shared/status'
 import { ProjectManager } from './project-manager.ts'
 import { createHandler } from './http.ts'
+import { createOriginCheck, SECURITY_HEADERS, upgradeGuard } from './security.ts'
 import { Hub } from './ws.ts'
 import { openWindow, describeFallback } from './open-window.ts'
 import { checkForUpdate, currentVersion } from './update-check.ts'
@@ -20,7 +21,13 @@ interface Args {
   open: boolean
   shell: string | null
   updateCheck: boolean
+  allowOrigin: string[]
+  fsRoot: string[]
 }
+
+/** Repeatable flags also accept one comma-separated value, as env vars must. */
+const listOf = (value: string | undefined): string[] =>
+  (value ?? '').split(',').map((s) => s.trim()).filter(Boolean)
 
 function parseArgs(argv: string[]): Args {
   const args: Args = {
@@ -32,6 +39,8 @@ function parseArgs(argv: string[]): Args {
     open: !process.env['TRING_NO_OPEN'],
     shell: process.env['TRING_SHELL'] ?? null,
     updateCheck: !process.env['TRING_NO_UPDATE_CHECK'],
+    allowOrigin: listOf(process.env['TRING_ALLOW_ORIGIN']),
+    fsRoot: listOf(process.env['TRING_FS_ROOT']),
   }
   for (let i = 0; i < argv.length; i++) {
     const [flag, inline] = argv[i]!.split('=', 2)
@@ -43,6 +52,8 @@ function parseArgs(argv: string[]): Args {
       case '--scrollback': args.scrollback = Number(value); break
       case '--idle-ms': args.idleMs = Number(value); break
       case '--shell': args.shell = String(value); break
+      case '--allow-origin': args.allowOrigin.push(...listOf(String(value))); break
+      case '--fs-root': args.fsRoot.push(...listOf(String(value))); break
       case '--no-open': args.open = false; i--; break
       case '--no-update-check': args.updateCheck = false; i--; break
       case '--version': console.log(currentVersion()); process.exit(0)
@@ -56,6 +67,12 @@ function parseArgs(argv: string[]): Args {
   --idle-ms <n>     quiet period before a session is done, default ${DEFAULT_IDLE_MS}
   --shell <path>    shell to spawn; default $SHELL, or powershell.exe on
                     Windows. Use --shell wsl.exe for WSL shells from Windows
+  --fs-root <path>  extra directory the project picker may browse; repeatable.
+                    Home and existing project roots are always browsable
+  --allow-origin <o> extra browser origin allowed to reach the daemon;
+                    repeatable. Only the page the daemon serves is allowed by
+                    default, which is what stops any website you visit from
+                    opening a socket to it
   --no-open         do not launch a browser window
   --no-update-check do not ask npm whether a newer tring exists
   --version         print the version and exit`)
@@ -83,16 +100,25 @@ async function main(): Promise<void> {
     ...(args.shell ? { shell: args.shell } : {}),
   })
 
+  // One rule for both doors. The WebSocket is the door that matters: the
+  // same-origin policy does not gate it, so without this any page the user has
+  // open can open a socket here and drive a shell (§ security).
+  const sameOrigin = createOriginCheck({ host: args.host, allow: args.allowOrigin })
+
   // Built once, not per request: the handler holds the usage-scan cache, and a
   // fresh closure per request would throw that away on every call.
-  const handle = createHandler({ pm, webRoot, token: args.token })
+  const handle = createHandler({
+    pm, webRoot, token: args.token, sameOrigin, fsRoots: args.fsRoot,
+  })
   const server = createServer((req, res) => {
     void handle(req, res).catch(() => {
-      if (!res.headersSent) res.writeHead(500).end('internal error')
+      if (!res.headersSent) res.writeHead(500, SECURITY_HEADERS).end('internal error')
     })
   })
 
-  const wss = new WebSocketServer({ server })
+  // Rejected at the handshake, before Hub ever sees a socket: an origin that
+  // is refused here never gets to send a `hello` at all.
+  const wss = new WebSocketServer({ server, verifyClient: upgradeGuard(sameOrigin) })
   const hub = new Hub({ pm, token: args.token })
   hub.attach(wss)
 

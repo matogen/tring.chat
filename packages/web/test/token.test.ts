@@ -31,6 +31,20 @@ describe('resolveToken', () => {
     expect(st.dump()['tring.token']).toBe('new')
   })
 
+  it('takes the token back off the address bar once it is remembered', () => {
+    // A secret in a URL lives on in history and in every Referer sent from
+    // the page, long after storage has made the URL copy redundant.
+    let scrubbed = false
+    expect(resolveToken('?token=s3cret', storage(), () => { scrubbed = true })).toBe('s3cret')
+    expect(scrubbed).toBe(true)
+  })
+
+  it('does not touch the URL when the token came from storage', () => {
+    let scrubbed = false
+    resolveToken('', storage({ 'tring.token': 'kept' }), () => { scrubbed = true })
+    expect(scrubbed).toBe(false)
+  })
+
   it('survives storage that throws, as private windows do', () => {
     const broken = { getItem: () => { throw new Error('blocked') }, setItem: () => { throw new Error('blocked') } }
     expect(resolveToken('?token=t', broken)).toBe('t')

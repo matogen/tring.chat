@@ -6,7 +6,11 @@ import path from 'node:path'
 import { WebSocket, WebSocketServer } from 'ws'
 import { decodeOutput, type ServerMessage } from '@tring/shared/protocol'
 import { ProjectManager } from '../src/project-manager.ts'
+import { createOriginCheck, upgradeGuard } from '../src/security.ts'
 import { Hub } from '../src/ws.ts'
+
+/** The daemon puts this on the upgrade; the rig has to as well to be honest. */
+const sameOrigin = createOriginCheck()
 
 interface Rig {
   pm: ProjectManager
@@ -33,7 +37,7 @@ async function rig(opts: { token?: string } = {}): Promise<Rig> {
   })
   const server = createServer()
   const hub = new Hub({ pm, snapshotMs: 60, token: opts.token ?? null })
-  hub.attach(new WebSocketServer({ server }))
+  hub.attach(new WebSocketServer({ server, verifyClient: upgradeGuard(sameOrigin) }))
   await new Promise<void>((res) => server.listen(0, '127.0.0.1', res))
   const port = (server.address() as { port: number }).port
   const r = { pm, server, hub, dir, port }
@@ -168,6 +172,33 @@ describe('WebSocket hub', () => {
 
     ws.send(JSON.stringify({ type: 'hello', token: 'wrong' }))
     await waitFor(() => msgs.some((m) => m.type === 'error' && m.message === 'unauthorized'))
+    ws.close()
+  })
+
+  it('refuses the handshake from a page on another site, before any hello', async () => {
+    // This is the critical finding: with no token configured — the default —
+    // a socket from any website reached `create` and `input`, which is a shell.
+    const r = await rig()
+    const ws = new WebSocket(`ws://127.0.0.1:${r.port}`, { origin: 'https://evil.example' })
+    const failed = await new Promise<string>((res) => {
+      ws.on('unexpected-response', (_req, incoming) => res(`status ${incoming.statusCode}`))
+      ws.on('error', (err) => res(err.message))
+      ws.on('open', () => res('opened'))
+    })
+    expect(failed).not.toBe('opened')
+    expect(r.pm.list()).toHaveLength(0)
+    ws.close()
+  })
+
+  it('still accepts the page the daemon serves', async () => {
+    const r = await rig()
+    const ws = new WebSocket(`ws://127.0.0.1:${r.port}`, {
+      origin: `http://127.0.0.1:${r.port}`,
+    })
+    await new Promise<void>((res, rej) => {
+      ws.on('open', () => res())
+      ws.on('error', rej)
+    })
     ws.close()
   })
 
