@@ -51,39 +51,82 @@ const text = (res: ServerResponse, code: number, body: string): void => {
   res.end(body)
 }
 
-const readBody = (req: IncomingMessage): Promise<string> =>
-  new Promise((resolve) => {
-    let data = ''
-    req.on('data', (c) => {
-      data += c
-      if (data.length > 1e6) req.destroy() // hooks post nothing large
-    })
-    req.on('end', () => resolve(data))
-  })
+/** How long a body we have stopped reading may go on arriving before we hang up. */
+const DRAIN_GRACE_MS = 2000
 
 /**
- * The body as bytes, with a ceiling.
+ * Answers a body that overran its ceiling, and hangs up once it is delivered.
  *
- * Content-Length is checked by the caller first, so an honest client gets a
- * 413 it can show the user. This is the backstop for one that lies: the
- * socket goes, and nothing is buffered past the limit either way.
+ * Destroying the request the moment the limit is passed is what the obvious
+ * version does, and it loses the 413: the socket goes with it, and the client
+ * — `curl -T -`, which has no length to declare and so is the honest caller
+ * that ends up here — sees a connection reset with no reason attached. So the
+ * rest of the body is allowed to arrive and is dropped on the floor, which
+ * costs nothing now that the reader has stopped buffering, and the connection
+ * closes cleanly at the end of it. The grace is for a sender that never ends.
+ */
+const tooLarge = (req: IncomingMessage, res: ServerResponse, message: string): void => {
+  res.writeHead(413, {
+    ...SECURITY_HEADERS,
+    'content-type': 'application/json; charset=utf-8',
+    connection: 'close',
+  })
+  res.end(JSON.stringify({ error: message }))
+  const cut = setTimeout(() => req.destroy(), DRAIN_GRACE_MS)
+  cut.unref()
+  req.on('end', () => clearTimeout(cut))
+  req.on('close', () => clearTimeout(cut))
+  req.resume()
+}
+
+/** Hooks post nothing large, so a status body over this is not a status body. */
+const MAX_BODY_BYTES = 1e6
+
+/**
+ * The body as bytes, with a ceiling. Null means it never arrived whole.
+ *
+ * Content-Length is checked by the caller first where there is one, so a
+ * client that declares its size is turned away before a byte is read. This is
+ * the backstop for one that does not, or that lies: reading stops at the
+ * limit and nothing is buffered past it either way.
+ *
+ * Every way a request can finish lands on the same `settle`, which is the
+ * whole point of it. `end` does not fire on a request the client abandoned,
+ * nor on one we hang up on ourselves at the limit — so a promise that waits
+ * only for `end` waits for ever. The handler never returns, no response is
+ * ever written, and the bytes read so far stay pinned for the life of the
+ * daemon: a page closed mid-drop was a megabyte the process never got back.
  */
 const readBytes = (req: IncomingMessage, limit: number): Promise<Buffer | null> =>
   new Promise((resolve) => {
-    const chunks: Buffer[] = []
+    let chunks: Buffer[] | null = []
     let size = 0
+    const settle = (body: Buffer | null): void => {
+      if (chunks === null) return // already answered; later events are noise
+      chunks = null
+      resolve(body)
+    }
     req.on('data', (c: Buffer) => {
+      if (chunks === null) return
       size += c.length
       if (size > limit) {
-        resolve(null)
-        req.destroy()
+        // Answered here, but not hung up on here — see tooLarge. Everything
+        // that still arrives falls through the guard above and is discarded.
+        settle(null)
         return
       }
       chunks.push(c)
     })
-    req.on('end', () => resolve(Buffer.concat(chunks)))
-    req.on('error', () => resolve(null))
+    req.on('end', () => settle(chunks ? Buffer.concat(chunks) : null))
+    req.on('error', () => settle(null))
+    req.on('close', () => settle(null))
   })
+
+/** The same, as text. Null for a body that was too large or cut short. */
+const readBody = async (req: IncomingMessage): Promise<string | null> => {
+  const bytes = await readBytes(req, MAX_BODY_BYTES)
+  return bytes === null ? null : bytes.toString('utf8')
+}
 
 /**
  * A scan is ~0.5s and `claude -p /usage` about 1.4s, so the first visit to the
@@ -167,9 +210,11 @@ export function createHandler(opts: HttpOptions) {
     if (status && req.method === 'POST') {
       const s = pm.findSession(decodeURIComponent(status[1]!))
       if (!s) return json(res, 404, { error: 'no such session' })
+      const raw = await readBody(req)
+      if (raw === null) return tooLarge(req, res, 'body too large')
       let body: { status?: string }
       try {
-        body = JSON.parse((await readBody(req)) || '{}') as { status?: string }
+        body = JSON.parse(raw || '{}') as { status?: string }
       } catch {
         return json(res, 400, { error: 'malformed body' })
       }
@@ -232,8 +277,13 @@ export function createHandler(opts: HttpOptions) {
       if (declared > MAX_UPLOAD_BYTES) {
         return json(res, 413, { error: `images are limited to ${MAX_UPLOAD_BYTES >> 20}MB` })
       }
+      // Null is a body that overran the limit or was cut short — a lying
+      // Content-Length lands here rather than on the 413 above.
       const bytes = await readBytes(req, MAX_UPLOAD_BYTES)
-      if (!bytes || bytes.length === 0) return json(res, 400, { error: 'empty upload' })
+      if (bytes === null) {
+        return tooLarge(req, res, `images are limited to ${MAX_UPLOAD_BYTES >> 20}MB`)
+      }
+      if (bytes.length === 0) return json(res, 400, { error: 'empty upload' })
 
       try {
         return json(res, 200, { path: await store.save(bytes) })

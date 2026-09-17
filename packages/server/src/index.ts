@@ -162,8 +162,12 @@ async function main(): Promise<void> {
         })
     }
     if (args.open) {
-      const opened = openWindow(authUrl)
-      if (!opened) console.log(`no browser found — ${describeFallback(authUrl)}`)
+      // Awaited internally on WSL, where the window has to wait for the port
+      // to be mirrored onto the Windows loopback (see open-window.ts). Nothing
+      // downstream depends on it, so the daemon is serving either way.
+      void openWindow(authUrl).then((opened) => {
+        if (!opened) console.log(`no browser found — ${describeFallback(authUrl)}`)
+      })
     } else if (token) {
       console.log(`open ${authUrl}`)
     }

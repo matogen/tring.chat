@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { createServer, type Server } from 'node:http'
+import { createServer, request, type Server } from 'node:http'
 import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -36,6 +36,28 @@ async function rig(token?: string, fsRoots?: string[]): Promise<Rig> {
   rigs.push(r)
   return r
 }
+
+/**
+ * A POST of `bytes` bytes with no Content-Length, so the body is chunked.
+ *
+ * `fetch` insists on a length for a Buffer, which is the one case the reader's
+ * ceiling is *not* the thing being tested — a declared length is turned away
+ * before a byte is read. Rejects if no response arrives, which is what a
+ * reader that never settles looks like from out here.
+ */
+const chunkedPost = (base: string, route: string, bytes: number): Promise<number> =>
+  new Promise((resolve, reject) => {
+    const { hostname, port } = new URL(base)
+    const req = request({ hostname, port, path: route, method: 'POST' }, (res) => {
+      res.resume()
+      resolve(res.statusCode ?? 0)
+    })
+    req.on('error', reject)
+    req.setTimeout(5000, () => { req.destroy(new Error('no response — the reader hung')) })
+    const chunk = Buffer.alloc(64 * 1024, 0x61)
+    for (let sent = 0; sent < bytes; sent += chunk.length) req.write(chunk)
+    req.end()
+  })
 
 const waitFor = async (fn: () => boolean, ms = 6000) => {
   const end = Date.now() + ms
@@ -165,6 +187,14 @@ describe('HTTP API', () => {
     })
     expect(ok.status).toBe(200)
     expect(s.tracker.status).toBe('busy')
+  })
+
+  it('answers an oversized status body instead of hanging on it for ever', async () => {
+    const r = await rig()
+    const p = r.pm.createProject('demo', r.dir)
+    const session = r.pm.create(p, {})!
+    const res = await chunkedPost(r.base, `/api/sessions/${session.id}/status`, 1.5e6)
+    expect(res).toBe(413)
   })
 
   it('404s an unknown session rather than silently accepting the hook', async () => {
@@ -360,6 +390,16 @@ describe('dropped images', () => {
     expect(res.status).toBe(413)
   })
 
+  it('answers an oversized body that hid behind chunked encoding', async () => {
+    // No Content-Length to check, so this lands on the reader's own backstop.
+    // It used to hang there for ever: the request is destroyed at the limit,
+    // `end` never fires, and the promise waiting on it never settles — no
+    // response, and the bytes already read pinned for the life of the daemon.
+    const r = await rig()
+    const res = await chunkedPost(r.base, '/api/upload', MAX_UPLOAD_BYTES + 4096)
+    expect(res).toBe(413)
+  })
+
   it('refuses an empty body rather than writing a zero-byte file', async () => {
     const r = await rig()
     expect((await post(r.base, Buffer.alloc(0))).status).toBe(400)
@@ -382,7 +422,7 @@ describe('window launcher', () => {
     const prev = process.env['TRING_NO_OPEN']
     process.env['TRING_NO_OPEN'] = '1'
     try {
-      expect(openWindow('http://127.0.0.1:7331')).toBe(false)
+      expect(await openWindow('http://127.0.0.1:7331')).toBe(false)
     } finally {
       if (prev === undefined) delete process.env['TRING_NO_OPEN']
       else process.env['TRING_NO_OPEN'] = prev

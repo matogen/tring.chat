@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { chmodSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -57,6 +57,25 @@ describe.skipIf(process.platform === 'win32')('fixSpawnHelper', () => {
     const root = await fakeNodePty(0o644)
     expect(fixSpawnHelper(root)).toHaveLength(1)
     expect(fixSpawnHelper(root)).toEqual([])
+  })
+
+  it('refuses a helper that is a symlink, which chmod would follow out of the package', async () => {
+    // This pass is also the postinstall hook, so `npm i -g` can be running it
+    // as root. A symlink here would put the execute bit on whatever it points
+    // at, anywhere on the filesystem.
+    const root = await fakeNodePty(0o644, ['darwin-arm64'])
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'tring-victim-'))
+    dirs.push(dir)
+    const victim = path.join(dir, 'not-ours')
+    writeFileSync(victim, 'plain data\n')
+    chmodSync(victim, 0o644)
+
+    const helper = path.join(root, 'prebuilds', 'darwin-arm64', 'spawn-helper')
+    rmSync(helper)
+    symlinkSync(victim, helper)
+
+    expect(fixSpawnHelper(root)).toEqual([])
+    expect(mode(victim)).toBe(0o644)
   })
 
   it('does nothing when node-pty cannot be found rather than throwing at startup', () => {

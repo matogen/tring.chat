@@ -17,7 +17,9 @@
  * with the bit set and the dependency is bumped to it.
  */
 
-import { chmodSync, readdirSync, statSync, type Dirent } from 'node:fs'
+import {
+  closeSync, constants, fchmodSync, fstatSync, openSync, readdirSync, type Dirent,
+} from 'node:fs'
 import { createRequire } from 'node:module'
 import path from 'node:path'
 
@@ -53,7 +55,18 @@ export function spawnHelperPaths(root: string): string[] {
   return found
 }
 
-/** Returns the files it had to repair — empty on every healthy install. */
+/**
+ * Returns the files it had to repair — empty on every healthy install.
+ *
+ * Every helper is opened once, `O_NOFOLLOW`, and inspected and chmod'ed
+ * through that one descriptor. The path is never resolved twice and a symlink
+ * is never followed, because neither is safe here: this same function is the
+ * package's postinstall hook, so on `npm i -g` it can be running as root, and
+ * `chmod` follows a link. A `spawn-helper` that was a symlink would put the
+ * execute bit on whatever it pointed at, anywhere on the filesystem, and a
+ * name checked and then re-opened could be swapped for one in between. Only a
+ * regular file inside node-pty is ours to repair.
+ */
 export function fixSpawnHelper(root: string | null = nodePtyRoot()): string[] {
   // Windows forks through conpty and winpty. There is no helper binary there,
   // and no execute bit for one to be missing.
@@ -61,15 +74,22 @@ export function fixSpawnHelper(root: string | null = nodePtyRoot()): string[] {
 
   const fixed: string[] = []
   for (const file of spawnHelperPaths(root)) {
+    let fd: number | null = null
     try {
-      const mode = statSync(file).mode & 0o777
+      fd = openSync(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+      const info = fstatSync(fd)
+      if (!info.isFile()) continue
+      const mode = info.mode & 0o777
       if (mode & EXEC) continue
-      chmodSync(file, mode | EXEC)
+      fchmodSync(fd, mode | EXEC)
       fixed.push(file)
     } catch {
-      // Not built for this platform, or an install this user cannot write to.
-      // Saying so here would be noise on every healthy machine, and on a
-      // broken one node-pty's own spawn failure is the clearer message.
+      // Not built for this platform, an install this user cannot write to, or
+      // a symlink where a helper should be (ELOOP). Saying so here would be
+      // noise on every healthy machine, and on a broken one node-pty's own
+      // spawn failure is the clearer message.
+    } finally {
+      if (fd !== null) closeSync(fd)
     }
   }
   return fixed
