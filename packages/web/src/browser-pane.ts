@@ -154,11 +154,20 @@ export class BrowserPane {
     this.onInput?.(event)
   }
 
-  /** The size the daemon should screencast at, in CSS pixels. */
+  /**
+   * The size the daemon should screencast at, in **device** pixels.
+   *
+   * CSS pixels were the obvious answer and cost the pane half its detail on
+   * every retina screen: `draw()` sizes the canvas backing store in device
+   * pixels, so a frame requested in CSS pixels arrives at half the resolution it
+   * is about to be drawn at and gets scaled up to fit. Asking in the units the
+   * canvas is actually made of removes the upscale.
+   */
   size(): { width: number; height: number } {
+    const dpr = window.devicePixelRatio || 1
     return {
-      width: Math.max(1, Math.round(this.canvas.clientWidth)),
-      height: Math.max(1, Math.round(this.canvas.clientHeight)),
+      width: Math.max(1, Math.round(this.canvas.clientWidth * dpr)),
+      height: Math.max(1, Math.round(this.canvas.clientHeight * dpr)),
     }
   }
 

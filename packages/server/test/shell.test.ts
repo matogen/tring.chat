@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { commandArgs, defaultShell, interactiveArgs } from '../src/shell.ts'
+import { commandArgs, defaultShell, interactiveArgs, envRef } from '../src/shell.ts'
 
 describe('shell resolution', () => {
   it('passes commands the way each shell expects', () => {
@@ -37,5 +37,37 @@ describe('shell resolution', () => {
 
   it('falls back to $SHELL on this platform rather than a hardcoded path', () => {
     expect(defaultShell()).toBe(process.env['SHELL'] ?? '/bin/bash')
+  })
+})
+
+/**
+ * The Browser Agent default command references $TRING_MCP_CONFIG, and the two
+ * shells this project ships as Windows defaults do not understand `$VAR`. The
+ * failure is silent — the wrong spelling expands to an empty string, so the
+ * agent starts with no tools and nothing says why — which is exactly the shape
+ * of bug that reaches a user instead of a test.
+ */
+describe('envRef', () => {
+  it('uses POSIX form for bash and friends', () => {
+    expect(envRef('/bin/bash', 'TRING_MCP_CONFIG')).toBe('"$TRING_MCP_CONFIG"')
+    expect(envRef('/usr/bin/zsh', 'TRING_MCP_CONFIG')).toBe('"$TRING_MCP_CONFIG"')
+  })
+
+  it('uses $env: for PowerShell, which is the Windows default', () => {
+    expect(envRef('powershell.exe', 'TRING_MCP_CONFIG')).toBe('$env:TRING_MCP_CONFIG')
+    expect(envRef('pwsh.exe', 'TRING_MCP_CONFIG')).toBe('$env:TRING_MCP_CONFIG')
+  })
+
+  it('uses %VAR% for cmd', () => {
+    expect(envRef('cmd.exe', 'TRING_MCP_CONFIG')).toBe('%TRING_MCP_CONFIG%')
+  })
+
+  /** `--shell wsl.exe` runs bash, so it is POSIX despite the .exe. */
+  it('treats wsl.exe as POSIX, because it is bash underneath', () => {
+    expect(envRef('wsl.exe', 'TRING_MCP_CONFIG')).toBe('"$TRING_MCP_CONFIG"')
+  })
+
+  it('reads a shell name the same way whatever the host separator', () => {
+    expect(envRef('C:\\Windows\\System32\\cmd.exe', 'X')).toBe('%X%')
   })
 })

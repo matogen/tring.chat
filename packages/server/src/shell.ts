@@ -25,6 +25,27 @@ export function defaultShell(): string {
   return process.env['SHELL'] ?? '/bin/bash'
 }
 
+/**
+ * How `shell` spells a reference to an environment variable.
+ *
+ * `$VAR` is POSIX, and neither of the two shells this project ships as Windows
+ * defaults understands it: PowerShell wants `$env:VAR` and cmd wants `%VAR%`.
+ * A command built with the wrong one does not fail loudly — it passes an empty
+ * string, so an agent starts with no tools and nothing says why.
+ */
+export function envRef(shell: string, name: string): string {
+  switch (base(shell)) {
+    case 'powershell':
+    case 'pwsh':
+      return `$env:${name}`
+    case 'cmd':
+      return `%${name}%`
+    // wsl.exe runs bash, so it is POSIX like the default.
+    default:
+      return `"$${name}"`
+  }
+}
+
 /** Args that make `shell` run `command`. */
 export function commandArgs(shell: string, command: string): string[] {
   switch (base(shell)) {

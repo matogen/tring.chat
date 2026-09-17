@@ -823,3 +823,13 @@ body {
   background: var(--emerald);
   transition: width .2s linear;
 }
+
+/* A command the user is meant to copy out of a dialog. */
+.cmd-inline {
+  font: 11px/1.5 var(--mono);
+  color: var(--mint);
+  background: var(--panel-2);
+  padding: 1px 5px;
+  border-radius: 3px;
+  word-break: break-all;
+}

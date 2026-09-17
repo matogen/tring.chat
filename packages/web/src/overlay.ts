@@ -302,7 +302,11 @@ export function openProjectDialog(
 }
 
 export function openNewSessionDialog(
-  defaults: { cwd: string; slot: number; browserEnabled?: boolean },
+  defaults: {
+    cwd: string; slot: number; browserEnabled?: boolean
+    /** Built by the daemon, which knows its shell (spec §4.8). */
+    browserAgentCommand?: string
+  },
   onSubmit: (v: {
     cwd: string; command: string | null; name: string | null
     browser: boolean; url: string | null
@@ -334,6 +338,14 @@ export function openNewSessionDialog(
   const choice = browserChoice(Boolean(defaults.browserEnabled), false, (v) => {
     browser = v
     urlField.hidden = !v
+    // Filled in, not forced: it lands in the Command field where it can be read
+    // and edited, so a different agent is a matter of typing over it (§2).
+    // Without it a Browser Agent tile is a plain shell beside a page nothing is
+    // driving, which is the one thing the choice promises not to be.
+    const suggested = defaults.browserAgentCommand
+    if (!suggested) return
+    if (v && command.value.trim() === '') command.value = suggested
+    else if (!v && command.value.trim() === suggested) command.value = ''
   })
   if (choice) form.append(choice)
 
@@ -398,7 +410,7 @@ export const TILE_COLORS = [
 export function openSessionDialog(
   session: SessionInfo,
   onSubmit: (v: { name: string; color: string | null; browser: boolean }) => void,
-  opts: { browserEnabled?: boolean } = {},
+  opts: { browserEnabled?: boolean; browserAgentCommand?: string } = {},
 ): void {
   const panel = el('div', 'panel')
   panel.append(el('h2', undefined, `Slot ${session.slot}`))
@@ -415,6 +427,19 @@ export function openSessionDialog(
     form.append(choice)
     form.append(el('p', 'hint',
       'Attaching keeps the shell running — nothing is restarted and no scrollback is lost.'))
+    // An agent already at a prompt when the page appeared cannot be handed
+    // tools mid-run — it chose its MCP servers when it started. Restarting it
+    // is all that is needed, because the session's PATH already makes plain
+    // `claude` the one with browser tools (§4.8), but that is invisible from
+    // here, so say it. Better than attaching a page nothing is driving and
+    // leaving the user to wonder why.
+    if (opts.browserAgentCommand) {
+      const how = el('p', 'hint')
+      how.append(document.createTextNode('To drive it from this session, run '))
+      how.append(el('code', 'cmd-inline', opts.browserAgentCommand))
+      how.append(document.createTextNode(' in the terminal half.'))
+      form.append(how)
+    }
   }
 
   const name = el('input') as HTMLInputElement

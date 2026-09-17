@@ -40,6 +40,8 @@ let update: UpdateInfo | null = null
 let viewMode: 'ring' | 'usage' = 'ring'
 /** Whether tiles offer a Terminal / Browser Agent choice at all (spec §5.7). */
 let capability: BrowserCapability = 'unavailable'
+/** What a Browser Agent tile should run; the daemon builds it (spec §4.8). */
+let agentCommand: string | null = null
 let usageTimer: ReturnType<typeof setInterval> | null = null
 /** The phone view: no ring, a switcher bar instead (spec §5.11). */
 const mobile = window.matchMedia(MOBILE_QUERY)
@@ -129,6 +131,7 @@ function handleMessage(msg: ServerMessage): void {
       projects = msg.projects
       update = msg.update ?? update
       capability = msg.capabilities?.browser ?? capability
+      agentCommand = msg.capabilities?.browserAgentCommand ?? agentCommand
       const alive = new Set(projects.flatMap((p) => p.sessions).map((s) => s.id))
       for (const id of lastShots.keys()) if (!alive.has(id)) lastShots.delete(id)
       viewedId = msg.activeProjectId ?? projects[0]?.id ?? null
@@ -685,7 +688,10 @@ function promptNewSession(slot: number): void {
   const project = viewed()
   if (!project) return
   ui.openNewSessionDialog(
-    { cwd: project.root, slot, browserEnabled: capability === 'on' },
+    {
+      cwd: project.root, slot, browserEnabled: capability === 'on',
+      ...(agentCommand ? { browserAgentCommand: agentCommand } : {}),
+    },
     (v) => {
       if (mobile.matches) focusOnArrival = slot
       ws.send({
@@ -716,7 +722,10 @@ function sessionMenu(id: string): void {
       if (v.color !== s.color) ws.send({ type: 'color', id, color: v.color })
       if (v.browser !== Boolean(s.browser)) toggleBrowser(id, v.browser)
     },
-    { browserEnabled: capability === 'on' },
+    {
+      browserEnabled: capability === 'on',
+      ...(agentCommand ? { browserAgentCommand: agentCommand } : {}),
+    },
   )
 }
 

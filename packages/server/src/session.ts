@@ -6,6 +6,7 @@ import type { SerializeAddon as SerializeAddonT } from '@xterm/addon-serialize'
 import { ActivityTracker, DEFAULT_IDLE_MS } from '@tring/shared/status'
 import { DEFAULT_SCROLLBACK, type ScreenSnapshot, type SessionInfo } from '@tring/shared/protocol'
 import { snapshot } from './snapshot.ts'
+import { prependToPath } from './agent-shim.ts'
 import type { AttachedBrowser } from './browser.ts'
 import { commandArgs, defaultShell, interactiveArgs, shQuote, usesPosixCd } from './shell.ts'
 
@@ -34,6 +35,19 @@ export interface SessionOptions {
   url: string
   /** The daemon's bearer token, exported as $TRING_TOKEN. Null when disabled. */
   token?: string | null
+  /** Exported as $TRING_MCP_CONFIG so an agent can be launched with the
+   *  browser tools already wired up (spec §4.8). */
+  mcpConfigPath?: string | null
+  /**
+   * Put first on the session's PATH so plain `claude` gets browser tools
+   * (spec §4.8). Null when the platform has no shim.
+   */
+  shimPath?: string | null
+  /**
+   * The page this tile owns, recorded before it can possibly be open (§4.3).
+   * Set when restoring, so a save during the launch cannot erase it.
+   */
+  browser?: { url?: string | null } | null
   scrollback?: number
   idleMs?: number
   /** Overrides the platform default; see shell.ts. */
@@ -92,6 +106,8 @@ export class Session {
   private lastCwdPoll = 0
   private enforceTimer: NodeJS.Timeout | null = null
   private hasInput = false
+  /** The page this tile is meant to own; see `browserRecord`. */
+  private wantsBrowser: { url: string | null } | null = null
 
   /** Fires when the shell moves, so the new location gets persisted. */
   onCwdChange: (() => void) | null = null
@@ -114,6 +130,7 @@ export class Session {
     this.name = opts.name ?? null
     this.color = opts.color ?? null
     this.tracker = new ActivityTracker(Date.now(), opts.idleMs ?? DEFAULT_IDLE_MS)
+    this.wantsBrowser = opts.browser ? { url: opts.browser.url ?? null } : null
 
     const shell = opts.shell ?? defaultShell()
     const env: Record<string, string> = {}
@@ -128,6 +145,14 @@ export class Session {
     // environment the daemon happened to start in.
     if (opts.token) env['TRING_TOKEN'] = opts.token
     else delete env['TRING_TOKEN']
+    // Set for every session, browser or not: the environment is fixed at spawn
+    // and a page may be attached at any time afterwards (spec §4.8).
+    if (opts.mcpConfigPath) env['TRING_MCP_CONFIG'] = opts.mcpConfigPath
+    else delete env['TRING_MCP_CONFIG']
+    // The variable above is inert on its own — Claude Code takes MCP servers on
+    // the command line and from nowhere else. This is what puts it there, by
+    // owning the name `claude` for the length of the session (spec §4.8).
+    if (opts.shimPath) prependToPath(env, opts.shimPath)
 
     const autorun = opts.autorun ?? true
     const args = this.command && autorun
@@ -246,9 +271,26 @@ export class Session {
    * dialog or a selector goes through `hook()`, which is where the explicit
    * signals live — it means exactly one thing, the way a Stop hook does.
    */
+  /**
+   * What a restart should reattach, which is not the same question as what this
+   * session has open right now.
+   *
+   * A page is attached asynchronously — on restore it is a Chromium launch away,
+   * and on a first attach it can take seconds. Reporting only the live page made
+   * the window between "this tile is a browser tile" and "the page exists" a
+   * window in which any save wrote `null` over the record that was about to be
+   * used. Restoring a tile therefore erased the thing being restored, and did it
+   * reliably enough to look like tring simply never remembered.
+   */
+  get browserRecord(): { url: string | null } | null {
+    if (this.browser) return { url: this.browser.info().url }
+    return this.wantsBrowser
+  }
+
   attachBrowser(browser: AttachedBrowser): void {
-    this.detachBrowser()
+    this.teardownBrowser()
     this.browser = browser
+    this.wantsBrowser = { url: browser.info().url }
     browser.onChange = () => this.onBrowserChange?.()
     browser.onFrame = (jpeg) => this.onBrowserFrame?.(jpeg)
     browser.onPrompt = (url) => this.onBrowserPrompt?.(url)
@@ -260,9 +302,25 @@ export class Session {
     this.onBrowserChange?.()
   }
 
+  /**
+   * The user closed the page. The intent goes with it, so the tile comes back a
+   * terminal rather than reopening a page someone deliberately shut.
+   */
   detachBrowser(): void {
+    if (!this.browser && !this.wantsBrowser) return
+    this.wantsBrowser = null
+    if (!this.teardownBrowser()) this.onBrowserChange?.()
+  }
+
+  /**
+   * Drop the live page without touching what this tile is meant to own. Used
+   * where the page is going away for reasons that are not the user's decision —
+   * being replaced, or the daemon shutting down, which must not be mistaken for
+   * "this tile no longer wants a browser".
+   */
+  private teardownBrowser(): boolean {
     const browser = this.browser
-    if (!browser) return
+    if (!browser) return false
     this.browser = null
     browser.onChange = null
     browser.onFrame = null
@@ -270,6 +328,7 @@ export class Session {
     browser.onActivity = null
     void browser.dispose()
     this.onBrowserChange?.()
+    return true
   }
 
   ack(): void {
@@ -336,7 +395,8 @@ export class Session {
     this.disposed = true
     if (this.enforceTimer) clearTimeout(this.enforceTimer)
     this.enforceTimer = null
-    this.detachBrowser()
+    // Not detachBrowser: shutting down is not the user closing the page.
+    this.teardownBrowser()
     this.kill()
     this.term.dispose()
   }

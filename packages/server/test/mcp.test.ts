@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { createTools, handleRpc, type McpOptions } from '../src/mcp.ts'
+import { spawn } from 'node:child_process'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+import { createTools, handleRpc, writeMcpConfig, type McpOptions } from '../src/mcp.ts'
 
 interface Call { url: string; method: string; body: unknown; headers: Record<string, string> }
 
@@ -197,4 +202,60 @@ describe('what counts as a tool failure', () => {
     }, tools) as { result: { isError?: boolean } }
     expect(out.result.isError).toBe(true)
   })
+})
+
+/**
+ * The config is a command line, and the only thing worth asserting about a
+ * command line is that it runs. Every cheaper check passed while the real one
+ * exited on ERR_UNKNOWN_FILE_EXTENSION: `npm start` is `tsx src/index.ts`, so
+ * the daemon's execPath is a node that cannot read its own argv[1], and a config
+ * naming the two without the loader between them describes a server that dies
+ * before it speaks. The agent's only symptom was reaching for a desktop browser.
+ */
+describe('writeMcpConfig', () => {
+  const here = path.dirname(fileURLToPath(import.meta.url))
+  const repo = path.resolve(here, '../../..')
+  const entry = {
+    execPath: process.execPath,
+    // How `tsx src/index.ts` reaches node, which is how the daemon is started
+    // in a checkout. An installed build has none of this and is unaffected.
+    execArgv: [
+      '--require', path.join(repo, 'node_modules/tsx/dist/preflight.cjs'),
+      '--import', pathToFileURL(path.join(repo, 'node_modules/tsx/dist/loader.mjs')).href,
+    ],
+    script: path.join(repo, 'packages/server/src/index.ts'),
+  }
+
+  it('writes a server that starts and answers initialize', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'tring-mcp-'))
+    try {
+      const file = await writeMcpConfig(dir, entry)
+      const written = JSON.parse(await readFile(file, 'utf8')) as {
+        mcpServers: { 'tring-browser': { command: string; args: string[] } }
+      }
+      const server = written.mcpServers['tring-browser']
+
+      const reply = await new Promise<string>((resolve, reject) => {
+        const child = spawn(server.command, server.args, {
+          env: { ...process.env, TRING_SESSION_ID: 's-1', TRING_URL: 'http://127.0.0.1:7331' },
+          stdio: ['pipe', 'pipe', 'pipe'],
+        })
+        let out = ''
+        let err = ''
+        child.stdout.on('data', (d: Buffer) => {
+          out += d.toString()
+          if (out.includes('\n')) { child.kill(); resolve(out) }
+        })
+        child.stderr.on('data', (d: Buffer) => { err += d.toString() })
+        child.on('exit', () => reject(new Error(`server exited without replying: ${err || out}`)))
+        child.stdin.write('{"jsonrpc":"2.0","id":1,"method":"initialize"}\n')
+      })
+
+      expect(JSON.parse(reply.split('\n')[0]!)).toMatchObject({
+        id: 1, result: { serverInfo: { name: 'tring-browser' } },
+      })
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  }, 20000)
 })

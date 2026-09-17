@@ -377,14 +377,30 @@ stops on the form, the tile turns green and rings, and you type the password wit
 hands. Those keystrokes go straight into the page: they are not in the agent's transcript,
 not in its context, and not in any log tring keeps. Hand back, and it carries on.
 
-**Giving an agent the tools.** From inside a tring session:
+**The agent is wired up for you.** Run `claude` in any tile and it has the browser tools.
+Not a special command, not a flag to remember, and not only in tiles you created as Browser
+Agents: attach a page to a Terminal you started an hour ago, run `claude`, and it drives
+that page.
 
-```
-claude mcp add tring-browser -- tring mcp
-```
+That works because every tring session's PATH starts with a `claude` that adds the tools
+and hands off to your real one. It is tring's own directory, it exists only inside a
+session, and it stays out of the way — `claude mcp`, a `--mcp-config` of your own, or a
+session tring never launched all run exactly as typed. Nothing is written into your
+repository, and nothing about claude outside tring changes.
 
-There is nothing to paste. It picks up the session from the environment, so the agent in
-slot 7 can drive the browser in slot 7 and no other.
+A tile you open as a Browser Agent goes one step further and starts in auto mode, because
+driving a page is tool calls and nothing else — otherwise it would stop on the first one to
+ask permission for what you just asked for. It is `auto`, not `bypassPermissions`: the
+destructive cases still stop, and you can still take the wheel. That is a default in a
+field you can edit, not a rule.
+
+The one thing none of this can do is reach backwards. An agent already sitting at a prompt
+when you attached the page chose its tools when it started, so give it a `/exit` and run
+`claude` again.
+
+The tools are scoped by `$TRING_SESSION_ID`, so the agent in slot 7 drives the browser in
+slot 7 and no other. Nothing takes a session id, so there is no way to point one agent at
+another's page.
 
 **Chromium is not bundled.** It is ~150MB and downloads once, when you first switch the
 feature on — never at install time.

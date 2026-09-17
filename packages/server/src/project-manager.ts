@@ -54,6 +54,10 @@ export interface ProjectManagerOptions {
   daemonPort?: number
   /** The daemon's bind address when it is not loopback. */
   daemonHost?: string | null
+  /** Exported to each session as $TRING_MCP_CONFIG (spec §4.8). */
+  mcpConfigPath?: string | null
+  /** Put first on each session's PATH, so plain `claude` has tools (§4.8). */
+  shimPath?: string | null
 }
 
 interface ProjectEntry {
@@ -265,6 +269,8 @@ export class ProjectManager {
       root: e.root,
       url: this.opts.url,
       token: this.opts.token ?? null,
+      mcpConfigPath: this.opts.mcpConfigPath ?? null,
+      shimPath: this.opts.shimPath ?? null,
       scrollback: this.opts.scrollback,
       idleMs: this.opts.idleMs,
       ...(this.opts.shell ? { shell: this.opts.shell } : {}),
@@ -314,7 +320,7 @@ export class ProjectManager {
               cwd: s.cwd,
               command: s.command,
               color: s.color,
-              browser: s.browser ? { url: s.browser.info().url } : null,
+              browser: s.browserRecord,
             }))
           : e.pending,
       })),

@@ -14,7 +14,67 @@
  * the daemon, which is where the control wheel and the navigation policy live.
  */
 
+import { mkdir, writeFile } from 'node:fs/promises'
+import path from 'node:path'
 import { createInterface } from 'node:readline'
+
+/**
+ * How the daemon process was started, which is what the config has to describe.
+ * Injected by the test that starts the server for real; the daemon passes
+ * nothing and gets its own.
+ */
+export interface DaemonEntry {
+  execPath: string
+  execArgv: string[]
+  script: string
+}
+
+/**
+ * Write the MCP config a session's agent is launched with, and return its path.
+ *
+ * One file for the whole daemon, not one per session: the server definition is
+ * identical everywhere because the scoping comes from `TRING_SESSION_ID` in the
+ * agent's own environment, not from anything written here (§4.8).
+ *
+ * Written at startup rather than when a browser is attached. A session's
+ * environment is fixed when its shell spawns, and attachment happens afterwards
+ * — so the path has to already be exported for a browser attached later to be
+ * reachable at all. Until one is, the tools answer "this session has no browser
+ * attached", which is the truth and is actionable.
+ *
+ * Absolute `process.execPath` and script path rather than the name `tring`,
+ * because a checkout run with `npm start` has no `tring` on its PATH and the
+ * agent would get a server that cannot start.
+ *
+ * `process.execArgv` comes along for the same reason, and it is the difference
+ * between this working in a checkout and not. `npm start` is `tsx src/index.ts`,
+ * so the daemon's own `argv[1]` is TypeScript and its `execPath` is a node that
+ * cannot read TypeScript — the two halves only run as a pair. Without the
+ * loader flags the server exits on `ERR_UNKNOWN_FILE_EXTENSION` before it says
+ * anything, the agent starts with no browser tools, and the only symptom is an
+ * agent reaching for `explorer.exe` to open a URL. Reproducing how this process
+ * was started is the general form: an installed build has no `execArgv` and is
+ * unaffected.
+ */
+export async function writeMcpConfig(dir: string, entry?: DaemonEntry): Promise<string> {
+  const { execPath, execArgv, script } = entry ?? {
+    execPath: process.execPath,
+    execArgv: process.execArgv,
+    script: process.argv[1] ?? '',
+  }
+  const file = path.join(dir, 'mcp.json')
+  const config = {
+    mcpServers: {
+      'tring-browser': {
+        command: execPath,
+        args: [...execArgv, script, 'mcp'],
+      },
+    },
+  }
+  await mkdir(dir, { recursive: true })
+  await writeFile(file, JSON.stringify(config, null, 2), 'utf8')
+  return file
+}
 
 interface Tool {
   name: string

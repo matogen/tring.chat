@@ -324,6 +324,14 @@ The cwd defaults to the project root.
   the alternative is a logged-in session the user has to go and re-open by hand, having
   already told us they wanted it. It obeys the allowlist like any other navigation, so a
   URL that is no longer permitted opens blank rather than prompting at startup.
+- **What is persisted is the tile's page, not its live `AttachedBrowser`.** A session records
+  what it is *meant* to own from the moment it is created, and reports the live page's URL
+  only once there is one. Reporting the live page alone is the obvious version and it erases
+  exactly the state it is restoring: attaching is a Chromium launch away, and every save in
+  that window writes `null` over the record being restored from. The tile came back a plain
+  terminal, reliably enough to read as tring never having remembered. For the same reason,
+  shutting the daemon down tears the page down without clearing the intent — only a user
+  closing the page does that, because only that is a decision about the tile.
 - Scrollback is not restored. See §8.
 
 ### 4.4 WebSocket protocol
@@ -465,6 +473,22 @@ only, so a browser in a background project costs a live context and no pixels. E
 is acknowledged (`Page.screencastFrameAck`) before the next is requested, so a slow client
 throttles the producer instead of queueing memory.
 
+**How sharp the page looks is set by `VIEWPORT` and by nothing else.** This is worth stating
+plainly because the two obvious levers are both inert, and both were tried. A screencast
+frame comes back at exactly the CSS viewport size: `maxWidth`/`maxHeight` only ever scale a
+frame *down*, never up, and `deviceScaleFactor` — whether set through Playwright or through
+`Emulation.setDeviceMetricsOverride` directly — changes what the page believes about itself
+without changing the frame by a pixel or a byte. So a pane with more device pixels than the
+viewport has nothing to put in them, and the only way to give it more is to render more.
+Hence 1920×1200 rather than 1280×800: the same 16:10, so the letterbox and the input mapping
+are untouched, and still a *fixed* size, so the reason above survives. The focused pane asks
+in **device** pixels, because its canvas backing store is sized in device pixels and a
+request in CSS pixels arrives at half the resolution it is about to be drawn at; requests are
+clamped to the viewport, since beyond that they are not wrong, just meaningless in a way that
+reads like a resolution knob. Quality rises with resolution because JPEG spends its error
+budget on hard edges, which on a web page means every letter. Thumbnails are unchanged: they
+are glanced at, and there are up to sixteen of them.
+
 **Status** feeds the same `ActivityTracker` (§4.2), which needs no new states:
 
 | Browser event | Tracker signal |
@@ -559,6 +583,67 @@ claude mcp add tring-browser -- tring mcp
 The shim is thin. Each tool becomes one authenticated call to the daemon over the HTTP API
 below, which is where the control wheel and the navigation policy actually live — so the
 rules cannot be bypassed by talking to the daemon directly instead.
+
+**The config names the daemon's whole command line, `process.execArgv` included**, not just
+its executable and its script. In a checkout `npm start` is `tsx src/index.ts`: the daemon's
+`execPath` is a node that cannot read its own `argv[1]`, and the two halves only run as a
+pair. Naming them without the loader between them describes a server that exits on
+`ERR_UNKNOWN_FILE_EXTENSION` before it says anything — the agent then starts with no browser
+tools, is told nothing, and the only symptom anyone sees is an agent reaching for the
+desktop browser to open a URL. Reproducing how this process was started is the general form;
+an installed build has no `execArgv` and never noticed. Because the only honest test of a
+command line is that it runs, the test writes the config and **starts what it names**.
+
+**The wiring is not left to the user.** Registering the server by hand was the first
+design, and it made *Browser Agent* a lie: the tile attached a page and started a plain
+shell, so an agent launched in it had no tools and no way to know why. Instead:
+
+- The daemon writes one MCP config at startup and exports its path to **every** session as
+  `$TRING_MCP_CONFIG`. Every session, not only the ones with a page, because a shell's
+  environment is fixed at spawn and attachment happens afterwards — a session that was not
+  given the path could never be given it.
+- **A `claude` shim goes first on every session's PATH**, and it is what actually turns
+  that variable into tools. Exporting a path is inert: Claude Code fixes its MCP servers at
+  launch and reads no environment variable for them, so something has to put
+  `--mcp-config` on the command line. It takes a server from three places, and two are
+  other people's property — the project's `.mcp.json` writes tring into repositories it
+  does not own, and the global `~/.claude.json` loads this server into every claude on the
+  machine and outlives the uninstall. That leaves the flag, and the only way to add a flag
+  to a command the user types is to own the name they type. So typing `claude` in any
+  tile — including the fifteen that were already running when the page was attached — gets
+  the browser tools, and nothing outside a tring session changes.
+- **The shim defers in every case it is not sure about.** No `$TRING_MCP_CONFIG`, a
+  subcommand like `claude mcp`, or a `--mcp-config` the user passed themselves, and it runs
+  claude exactly as typed. It is on the PATH of every session whether a page is attached or
+  not: an agent missing a tool can be told to try again, a `claude` that will not start has
+  taken the terminal away.
+- **It is built out of shell builtins only, and recognises its own directory by a marker
+  file.** Both follow from the same failure: every way this script can go wrong ends with
+  it finding itself on the PATH and exec'ing itself. An external command — even `dirname` —
+  can be missing from a PATH the user has pruned, and a PATH entry that reaches the shim
+  directory through a symlink, a trailing slash or a relative path defeats comparing
+  strings. A file only that directory contains is true under every spelling.
+- Choosing *Browser Agent* fills the dialog's Command field with
+  `claude --permission-mode auto`. A **default in an editable field**, so §2's
+  "tool-agnostic — Claude Code gets optional extras, never a dependency" survives: someone
+  running a different agent types over it.
+- **Auto mode, because driving a page is tool calls and nothing else.** In manual mode the
+  agent stops on the first one, and the tile sits needing a human for the thing the human
+  just asked for — the failure §4.7 spends its whole design avoiding, arriving immediately
+  and for no reason. `auto` and not `bypassPermissions`: the classifier still stops the
+  destructive cases, and the human still has the wheel (§5.13). It rides on the default
+  command rather than on the shim, because the shim owns the name `claude` in every tile
+  and a Terminal is not a place to quietly change what that name does.
+- **Windows gets a `claude.cmd` with the real path already resolved**, because correctness
+  follows the shell: a PowerShell profile does not reshape PATH the way a `.zshrc` routinely
+  does, and batch cannot walk a PATH containing quoted entries without being quietly wrong.
+  Where no claude is installed to resolve, no shim is written and the dialog falls back to
+  spelling `--mcp-config %TRING_MCP_CONFIG%` out — **the daemon builds that string, not the
+  client**, because only the daemon knows which shell it spawns and the wrong spelling of a
+  variable reference does not fail loudly, it expands to empty.
+- An agent **already at a prompt** when the page appeared still cannot be handed tools
+  mid-run, since it chose its servers when it started. Restarting it is now the whole fix,
+  but that is invisible from the tile, so the session dialog says so.
 
 **The daemon's half is `/api/browser/:sessionId/:action`** (§4.5), addressed by session id
 for the same reason. It is reachable by any client holding the token, which is deliberate:

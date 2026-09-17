@@ -1,5 +1,9 @@
 import { describe, it, expect, afterEach } from 'vitest'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { Session } from '../src/session.ts'
+import { writeAgentShim } from '../src/agent-shim.ts'
 
 const live: Session[] = []
 afterEach(() => { for (const s of live.splice(0)) s.dispose() })
@@ -71,6 +75,27 @@ describe('Session', () => {
     } finally {
       if (before === undefined) delete process.env['TRING_TOKEN']
       else process.env['TRING_TOKEN'] = before
+    }
+  })
+
+  // The end of the chain the rest of §4.8 exists for: whatever the user's rc
+  // files do to PATH, the `claude` they type has to be the one with tools.
+  it('makes plain `claude` resolve to the shim inside the session', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'tring-session-shim-'))
+    try {
+      const shimPath = await writeAgentShim(dir)
+      const s = new Session({
+        id: 's1', projectId: 'p1', projectName: 'demo', slot: 1,
+        cwd: process.cwd(), command: null,
+        url: 'http://127.0.0.1:7331', token: null, idleMs: 200, scrollback: 100,
+        shimPath,
+      })
+      live.push(s)
+      s.write('echo "[$(command -v claude)]"\n')
+      await waitFor(() => s.serialize().includes(`[${shimPath}/claude]`))
+      expect(s.serialize()).toContain(`[${shimPath}/claude]`)
+    } finally {
+      await rm(dir, { recursive: true, force: true })
     }
   })
 

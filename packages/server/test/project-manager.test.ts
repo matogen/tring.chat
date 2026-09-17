@@ -2,6 +2,9 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { BrowserControl } from '@tring/shared/browser-control'
+import type { BrowserInfo } from '@tring/shared/protocol'
+import type { AttachedBrowser } from '../src/browser.ts'
 import { ProjectManager, type PersistedState } from '../src/project-manager.ts'
 
 const open = async (statePath: string, root: string) =>
@@ -147,5 +150,89 @@ describe('ProjectManager', () => {
     pm.deleteProject(a)
     expect(pm.activeProjectId).toBeNull()
     expect(pm.list()).toEqual([])
+  })
+})
+
+/**
+ * Attachment without Playwright — the same shape the daemon talks to, so every
+ * path through persistence is exercised without downloading a browser.
+ */
+class StubBrowser {
+  readonly control = new BrowserControl(0)
+  onFrame: ((jpeg: Buffer) => void) | null = null
+  onChange: (() => void) | null = null
+  onPrompt: ((url: string) => void) | null = null
+  onActivity: ((kind: unknown) => void) | null = null
+  onClosed: (() => void) | null = null
+  url = 'https://example.test/watch'
+  info(): BrowserInfo {
+    return {
+      url: this.url, title: 'stub', control: this.control.holder,
+      loading: false, blockedOn: null, viewport: { width: 1920, height: 1200 },
+    }
+  }
+  async dispose(): Promise<void> {}
+}
+const asBrowser = (s: StubBrowser): AttachedBrowser => s as unknown as AttachedBrowser
+
+describe('a page is part of what a tile is', () => {
+  /**
+   * Reopening tring has to bring back the tiles as they were left, and a tile
+   * with a page attached is not the same tile as a bare terminal. `command` is
+   * deliberately not re-run on restore; a page is, because reopening it
+   * restores a view rather than executing work (spec §4.3).
+   */
+  it('writes the attached page into the state file', async () => {
+    const { dir, statePath, pm } = await fixture()
+    const id = pm.createProject('api', dir)
+    const session = pm.create(id, { name: 'agent', cwd: dir })!
+    session.attachBrowser(asBrowser(new StubBrowser()))
+    await pm.save()
+
+    const state = JSON.parse(await readFile(statePath, 'utf8')) as PersistedState
+    expect(state.projects[0]?.sessions[0]?.browser).toEqual({ url: 'https://example.test/watch' })
+  })
+
+  // The other half: a tile whose page was closed must not come back with one.
+  it('forgets the page once it is detached', async () => {
+    const { dir, statePath, pm } = await fixture()
+    const id = pm.createProject('api', dir)
+    const session = pm.create(id, { name: 'agent', cwd: dir })!
+    session.attachBrowser(asBrowser(new StubBrowser()))
+    session.detachBrowser()
+    await pm.save()
+
+    const state = JSON.parse(await readFile(statePath, 'utf8')) as PersistedState
+    expect(state.projects[0]?.sessions[0]?.browser).toBeNull()
+  })
+
+  // Attaching is a change to the tile, so it must reach the state file on its
+  // own — not only when some later edit happens to write it out.
+  it('persists on attach without waiting for another change', async () => {
+    const { dir, statePath, pm } = await fixture()
+    const id = pm.createProject('api', dir)
+    const session = pm.create(id, { name: 'agent', cwd: dir })!
+    await settle()
+    session.attachBrowser(asBrowser(new StubBrowser()))
+    await settle()
+
+    const state = JSON.parse(await readFile(statePath, 'utf8')) as PersistedState
+    expect(state.projects[0]?.sessions[0]?.browser).toEqual({ url: 'https://example.test/watch' })
+  })
+
+  it('carries the page through a restart into the restored session spec', async () => {
+    const { dir, statePath, pm } = await fixture()
+    const id = pm.createProject('api', dir)
+    const session = pm.create(id, { name: 'agent', cwd: dir })!
+    session.attachBrowser(asBrowser(new StubBrowser()))
+    await pm.save()
+    await pm.dispose()
+    live.splice(live.indexOf(pm), 1)
+
+    const reopened = await open(statePath, dir)
+    live.push(reopened)
+    await reopened.save()
+    const state = JSON.parse(await readFile(statePath, 'utf8')) as PersistedState
+    expect(state.projects[0]?.sessions[0]?.browser).toEqual({ url: 'https://example.test/watch' })
   })
 })

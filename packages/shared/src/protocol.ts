@@ -21,6 +21,42 @@ export interface ScreenSnapshot {
   rows: SnapshotCell[][]
 }
 
+/**
+ * What a Browser Agent tile runs by default (spec §4.8).
+ *
+ * A default, not a hardcode: it lands in the dialog's Command field where it can
+ * be read and edited, so §2's "tool-agnostic — Claude Code gets optional extras,
+ * never a dependency" still holds. Someone running a different agent types over
+ * it. Without it, a Browser Agent tile is a plain shell beside a page nothing is
+ * driving, which is the one thing the choice promises not to be.
+ *
+ * Pass null where a session's PATH carries the shim (§4.8), which is the normal
+ * case: the flag is already added by the time claude starts, and a command with
+ * it spelled out would be a second, worse way to get the same tools — one that
+ * goes stale, and one a user copies into a shell where it does not work. The
+ * spelled-out form is the fallback for a platform with no shim, where
+ * `$TRING_MCP_CONFIG` on the command line is the only route left.
+ */
+export function browserAgentCommand(mcpConfigRef: string | null): string {
+  const base = mcpConfigRef ? `claude --mcp-config ${mcpConfigRef}` : 'claude'
+  return `${base} --permission-mode auto`
+}
+
+/**
+ * Why the default starts in auto mode.
+ *
+ * A Browser Agent tile is chosen by someone who wants a page driven, and every
+ * step of driving it is a tool call. In manual mode the agent stops on the first
+ * one and the tile sits there needing a human for the thing the human just asked
+ * for — the failure §4.7 spends its whole design avoiding, arriving immediately
+ * and for no reason. Auto rather than `bypassPermissions`: the classifier still
+ * stops the destructive cases, and the human still has the wheel (§5.13).
+ *
+ * It is on the *default command*, not on the shim, because the shim owns the
+ * name `claude` everywhere in tring. A Terminal tile is not a place to quietly
+ * change what typing `claude` does — this is a field in a dialog the user opened.
+ */
+
 /** Who may act on a session's page right now (spec §4.7). */
 export type BrowserControlHolder = 'agent' | 'human'
 
@@ -86,6 +122,11 @@ export type BrowserCapability = 'unavailable' | 'off' | 'on'
 
 export interface Capabilities {
   browser: BrowserCapability
+  /**
+   * The command a Browser Agent tile offers, built by the daemon because only
+   * it knows which shell it spawns and therefore how to spell `$VAR`.
+   */
+  browserAgentCommand?: string
 }
 
 export interface ProjectInfo {

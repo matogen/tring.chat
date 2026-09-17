@@ -4,15 +4,17 @@ import { createServer as createSecureServer } from 'node:https'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { WebSocketServer } from 'ws'
-import { DEFAULT_PORT, type Capabilities } from '@tring/shared/protocol'
+import { browserAgentCommand, DEFAULT_PORT, type Capabilities } from '@tring/shared/protocol'
 import { parseArgs, UsageError, type Args } from './args.ts'
-import { runMcp } from './mcp.ts'
+import { runMcp, writeMcpConfig } from './mcp.ts'
+import { writeAgentShim } from './agent-shim.ts'
 import { capabilityFor, installChromium, isChromiumInstalled } from './browser.ts'
-import { ProjectManager } from './project-manager.ts'
+import { defaultStatePath, ProjectManager } from './project-manager.ts'
 import { createHandler } from './http.ts'
 import {
   bindNeedsToken, createOriginCheck, isLoopbackBind, SECURITY_HEADERS, upgradeGuard,
 } from './security.ts'
+import { defaultShell, envRef } from './shell.ts'
 import { defaultTokenPath, loadOrCreateToken } from './token.ts'
 import { Hub } from './ws.ts'
 import { openWindow, describeFallback } from './open-window.ts'
@@ -117,6 +119,21 @@ async function main(): Promise<void> {
     path.resolve(here, '../../web/dist'),
   ].find((p) => existsSync(p)) ?? path.resolve(here, 'web')
 
+  // Written before any session spawns, because a shell's environment is fixed
+  // at spawn and $TRING_MCP_CONFIG has to be in it (spec §4.8).
+  const mcpConfigPath = await writeMcpConfig(path.dirname(defaultStatePath()))
+    // A config that cannot be written costs the agent its tools, not the user
+    // their terminals.
+    .catch(() => null)
+
+  // Written next to it and for the same reason, one step further along: the
+  // config only becomes tools when something puts it on claude's command line,
+  // and this is what does (§4.8). Rewritten at every start so an upgraded tring
+  // cannot leave an old script owning the name `claude`.
+  const shimPath = mcpConfigPath
+    ? await writeAgentShim(path.dirname(defaultStatePath())).catch(() => null)
+    : null
+
   const pm = await ProjectManager.open({
     url,
     // Reaches each session as $TRING_TOKEN, so the documented Stop hook can
@@ -128,16 +145,24 @@ async function main(): Promise<void> {
     // So an attached page cannot navigate to the daemon that owns it (§4.7).
     daemonPort: args.port,
     daemonHost: isLoopbackBind(args.host) ? null : args.host,
+    mcpConfigPath,
+    shimPath,
   })
 
   // Checked once at startup and re-checked after an install, rather than per
   // request: it is a stat on a path that only changes when someone downloads a
   // browser. Nothing here loads Playwright unless it is actually present.
   let chromiumInstalled = await isChromiumInstalled()
+  const agentCommand = browserAgentCommand(
+    shimPath ? null : envRef(args.shell ?? defaultShell(), 'TRING_MCP_CONFIG'),
+  )
   const capabilities = (projectId: string | null): Capabilities => {
     const id = projectId ?? pm.activeProjectId
     const enabled = id ? pm.browserSettings(id).enabled : false
-    return { browser: capabilityFor(chromiumInstalled, enabled) }
+    return {
+      browser: capabilityFor(chromiumInstalled, enabled),
+      ...(mcpConfigPath ? { browserAgentCommand: agentCommand } : {}),
+    }
   }
 
   // One rule for both doors. The WebSocket is the door that matters: the

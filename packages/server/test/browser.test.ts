@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:http'
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { AttachedBrowser, capabilityFor, isChromiumInstalled } from '../src/browser.ts'
+import { AttachedBrowser, capabilityFor, clampToSurface, isChromiumInstalled } from '../src/browser.ts'
 import { createHandler } from '../src/http.ts'
 import { ProjectManager } from '../src/project-manager.ts'
 
@@ -273,5 +273,27 @@ describe('a refused navigation does not disturb the page', () => {
     await expect(b.navigate('back')).resolves.toBe(true)
     await expect(b.navigate('reload')).resolves.toBe(true)
     expect(calls).toEqual(['back', 'reload'])
+  })
+})
+
+/**
+ * A screencast frame is produced at the CSS viewport size and `maxWidth` only
+ * ever scales one down — measured, because `deviceScaleFactor` looks like it
+ * should change that and does not, in Playwright or in raw CDP.
+ */
+describe('clampToSurface', () => {
+  // A retina pane asks in device pixels and gets them, up to what exists.
+  it('gives a pane the pixels it asks for while they exist', () => {
+    expect(clampToSurface(1760, 1920)).toBe(1760)
+  })
+
+  it('stops at the viewport, which is all a frame ever contains', () => {
+    expect(clampToSurface(4000, 1920)).toBe(1920)
+    expect(clampToSurface(1920, 1920)).toBe(1920)
+  })
+
+  it('never asks for a zero-pixel screencast', () => {
+    expect(clampToSurface(0, 1920)).toBe(1)
+    expect(clampToSurface(-5, 1920)).toBe(1)
   })
 })

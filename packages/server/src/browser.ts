@@ -24,8 +24,13 @@ import type {
 const THUMB_WIDTH = 320
 const THUMB_HEIGHT = 200
 const THUMB_QUALITY = 40
-/** A focused pane is being looked at, so it gets a better picture. */
-const FOCUS_QUALITY = 60
+/**
+ * A focused pane is being looked at, so it gets a better picture.
+ *
+ * Raised with the resolution rather than instead of it: JPEG spends its error
+ * budget on hard edges, which at this size means every letter on the page.
+ */
+const FOCUS_QUALITY = 80
 
 /** The page is given a moment to settle before a navigation counts as finished. */
 const SETTLE_MS = 400
@@ -37,8 +42,20 @@ const SETTLE_MS = 400
  * an agent that is mid-action, and make a selector that resolved a moment ago
  * resolve differently. The pane letterboxes instead, and maps input back
  * through the scale.
+ *
+ * **It is also the only thing that sets how sharp the page looks**, which is not
+ * obvious and is worth writing down because the plausible levers do nothing. A
+ * screencast frame comes back at exactly the CSS viewport size: `maxWidth` only
+ * ever scales a frame *down*, and `deviceScaleFactor` — set through Playwright or
+ * through `Emulation.setDeviceMetricsOverride` directly — changes what the page
+ * believes about itself without changing the frame by a single pixel or a single
+ * byte. Measured, both of them, because both look like the answer. So a pane with
+ * more device pixels than this has nothing to show in them, and the only way to
+ * give it more is to render more: 1920×1200 rather than 1280×800, same 16:10 so
+ * the letterbox and the input mapping are unchanged, and still a *fixed* size, so
+ * the reason above survives intact.
  */
-const VIEWPORT = { width: 1280, height: 800 }
+const VIEWPORT = { width: 1920, height: 1200 }
 
 /**
  * How long a parked agent action waits before reporting back.
@@ -48,6 +65,17 @@ const VIEWPORT = { width: 1280, height: 800 }
  * and retry, rather than an error it would retry-loop against (spec §4.8).
  */
 const GATE_MS = 120_000
+
+/**
+ * A screencast dimension, in device pixels, bounded by what exists to send.
+ *
+ * Frames are produced at the CSS viewport size and `maxWidth` never scales one
+ * up, so asking for more than the viewport is not wrong, just meaningless — and
+ * meaningless in a way that reads as a resolution knob to the next person.
+ */
+export function clampToSurface(asked: number, cssExtent: number): number {
+  return Math.min(cssExtent, Math.max(1, Math.round(asked)))
+}
 
 /** What a tool call returns. `blocked` is a wait, not a failure. */
 export type ActionResult =
@@ -538,8 +566,11 @@ export class AttachedBrowser {
    * something each of them chooses.
    */
   async setViewport(width: number, height: number, focused: boolean): Promise<void> {
-    const w = Math.max(1, Math.round(width))
-    const h = Math.max(1, Math.round(height))
+    // Clamped to what the page is actually rasterised at. A viewer on a large
+    // or heavily scaled display would otherwise ask for more pixels than exist,
+    // and be charged bandwidth for an upscale it could have done itself.
+    const w = clampToSurface(width, VIEWPORT.width)
+    const h = clampToSurface(height, VIEWPORT.height)
     if (w === this.width && h === this.height && focused === this.focused) return
     this.width = w
     this.height = h

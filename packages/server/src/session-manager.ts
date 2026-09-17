@@ -31,6 +31,10 @@ export interface SessionManagerOptions {
   shell?: string
   /** Null when browser agents are unavailable or switched off (spec §4.7). */
   browserHost?: BrowserHost | null
+  /** Exported to each session as $TRING_MCP_CONFIG (spec §4.8). */
+  mcpConfigPath?: string | null
+  /** Put first on each session's PATH, so plain `claude` has tools (§4.8). */
+  shimPath?: string | null
 }
 
 export const SLOT_COUNT = 16
@@ -109,6 +113,11 @@ export class SessionManager {
       color: HEX.test(spec.color ?? '') ? spec.color! : null,
       url: this.opts.url,
       token: this.opts.token ?? null,
+      mcpConfigPath: this.opts.mcpConfigPath ?? null,
+      shimPath: this.opts.shimPath ?? null,
+      // Recorded on the session before the attach below is even attempted, so
+      // a save in the gap cannot decide this tile never had a page (§4.3).
+      browser: spec.browser ?? null,
       scrollback: this.opts.scrollback,
       idleMs: this.opts.idleMs,
       ...(this.opts.shell ? { shell: this.opts.shell } : {}),
