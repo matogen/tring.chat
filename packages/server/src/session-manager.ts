@@ -30,6 +30,8 @@ const HEX = /^#[0-9a-f]{6}$/i
 export class SessionManager {
   private readonly bySlot = new Map<number, Session>()
   private readonly byId = new Map<string, Session>()
+  /** Set while a compound change runs, so listeners are told once, at the end. */
+  private quiet = false
 
   onSessionData: ((s: Session, data: string) => void) | null = null
   onSessionStatus: ((s: Session) => void) | null = null
@@ -68,11 +70,11 @@ export class SessionManager {
     session.onStatusChange = () => this.onSessionStatus?.(session)
     session.onExit = (code) => this.onSessionExit?.(session, code)
     // A moved shell changes what a restart would restore, so persist it.
-    session.onCwdChange = () => this.onStructureChange?.()
+    session.onCwdChange = () => this.structureChanged()
 
     this.bySlot.set(slot, session)
     this.byId.set(session.id, session)
-    this.onStructureChange?.()
+    this.structureChanged()
     return session
   }
 
@@ -92,7 +94,7 @@ export class SessionManager {
     const s = this.byId.get(id)
     if (!s) return
     s.name = name
-    this.onStructureChange?.()
+    this.structureChanged()
   }
 
   /**
@@ -104,7 +106,7 @@ export class SessionManager {
     const s = this.byId.get(id)
     if (!s) return
     s.color = color !== null && HEX.test(color) ? color : null
-    this.onStructureChange?.()
+    this.structureChanged()
   }
 
   kill(id: string): void {
@@ -113,7 +115,7 @@ export class SessionManager {
     s.dispose()
     this.bySlot.delete(s.slot)
     this.byId.delete(id)
-    this.onStructureChange?.()
+    this.structureChanged()
   }
 
   /**
@@ -131,7 +133,16 @@ export class SessionManager {
       color: old.color,
       autorun: true,
     }
-    this.kill(id)
+    // One change, not two. The new PTY gets a new id, so a client watching
+    // this slot has to follow it there — and a client that is first told the
+    // slot is empty concludes the session is gone and blanks its terminal
+    // instead, a moment before the replacement arrives.
+    this.quiet = true
+    try {
+      this.kill(id)
+    } finally {
+      this.quiet = false
+    }
     return this.create(spec)
   }
 
@@ -143,6 +154,10 @@ export class SessionManager {
     for (const s of this.bySlot.values()) s.dispose()
     this.bySlot.clear()
     this.byId.clear()
+  }
+
+  private structureChanged(): void {
+    if (!this.quiet) this.onStructureChange?.()
   }
 
   private firstEmptySlot(): number | null {

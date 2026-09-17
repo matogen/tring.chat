@@ -31,12 +31,14 @@
   },
   "files": [
     "dist",
+    "scripts",
     "README.md"
   ],
   "scripts": {
     "dev": "TRING_NO_OPEN=1 TRING_ALLOW_ORIGIN=http://localhost:5173,http://127.0.0.1:5173 tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "build": "node build.mjs",
+    "postinstall": "node scripts/postinstall.mjs",
     "prepublishOnly": "node build.mjs"
   },
   "dependencies": {

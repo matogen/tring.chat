@@ -3,6 +3,7 @@ import { createRequire } from 'node:module'
 import { spawn, type IPty } from 'node-pty'
 import type { Terminal as TerminalT } from '@xterm/headless'
 import type { SerializeAddon as SerializeAddonT } from '@xterm/addon-serialize'
+import { inputKind } from '@tring/shared/input'
 import { ActivityTracker, DEFAULT_IDLE_MS } from '@tring/shared/status'
 import { DEFAULT_SCROLLBACK, type ScreenSnapshot, type SessionInfo } from '@tring/shared/protocol'
 import { snapshot } from './snapshot.ts'
@@ -189,7 +190,7 @@ export class Session {
   write(data: string): void {
     if (this.disposed) return
     this.hasInput = true
-    this.signal((t, now) => t.input(now))
+    this.signal((t, now) => t.input(now, inputKind(data)))
     this.pty.write(data)
   }
 

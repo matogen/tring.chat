@@ -130,6 +130,72 @@ describe('WebSocket hub', () => {
     ws.close()
   })
 
+  /**
+   * The daemon files the focus against the *socket*, so a reconnect loses it
+   * while the client still believes it is watching. Nothing errors: input is
+   * still delivered, the thumbnail still paints, and only the centre terminal
+   * goes silent — which reads as "enter does not work" rather than as a
+   * dropped connection. This pins down both halves: that the new socket really
+   * is deaf, and that re-sending `focus` on open is what cures it.
+   */
+  it('sends no output to a reconnected socket until it re-asserts its focus', async () => {
+    const r = await rig()
+    const projectId = r.pm.createProject('demo', r.dir)
+    const session = r.pm.create(projectId, {})!
+
+    const first = await connect(r.port)
+    await waitFor(() => pick(first.got, 'state').length > 0)
+    first.ws.send(JSON.stringify({ type: 'activateProject', projectId }))
+    first.ws.send(JSON.stringify({ type: 'focus', id: session.id, cols: 80, rows: 24 }))
+    await waitFor(() => pick(first.got, 'screen').some((m) => m.id === session.id))
+    first.ws.send(JSON.stringify({ type: 'input', id: session.id, data: 'echo before-drop\n' }))
+    await waitFor(() => first.got.output.includes('before-drop'))
+    first.ws.close()
+
+    // The same tab, a moment later, still believing it is focused.
+    const again = await connect(r.port)
+    await waitFor(() => pick(again.got, 'state').length > 0)
+    again.ws.send(JSON.stringify({ type: 'input', id: session.id, data: 'echo after-drop\n' }))
+    // The keystrokes land: the session's own buffer has the echo.
+    await waitFor(() => session.serialize().includes('after-drop'))
+    // The client hears nothing about it.
+    expect(again.got.output).toBe('')
+
+    again.ws.send(JSON.stringify({ type: 'focus', id: session.id, cols: 80, rows: 24 }))
+    await waitFor(() => pick(again.got, 'screen').some((m) => m.id === session.id))
+    again.ws.send(JSON.stringify({ type: 'input', id: session.id, data: 'echo reattached\n' }))
+    await waitFor(() => again.got.output.includes('reattached'))
+
+    again.ws.close()
+  })
+
+  it('never shows a respawned slot empty, so a focused client can follow it', async () => {
+    const r = await rig()
+    const projectId = r.pm.createProject('demo', r.dir)
+    const before = r.pm.create(projectId, { slot: 4 })!
+
+    const { ws, got } = await connect(r.port)
+    await waitFor(() => pick(got, 'state').length > 0)
+    ws.send(JSON.stringify({ type: 'activateProject', projectId }))
+    await waitFor(() => pick(got, 'state').length > 1)
+    const seen = pick(got, 'state').length
+
+    ws.send(JSON.stringify({ type: 'respawn', id: before.id }))
+    await waitFor(() => pick(got, 'state').length > seen)
+    await new Promise((res) => setTimeout(res, 300))
+
+    // Every state this client was sent has slot 4 occupied. A single one
+    // showing it empty is enough for a focused client to blank its terminal.
+    for (const state of pick(got, 'state').slice(seen)) {
+      const sessions = state.projects.find((p) => p.id === projectId)?.sessions ?? []
+      expect(sessions.map((s) => s.slot)).toContain(4)
+    }
+    const after = r.pm.managerFor(projectId)!.at(4)!
+    expect(after.id).not.toBe(before.id)
+
+    ws.close()
+  })
+
   it('streams snapshots only for the viewed project, but status for every project', async () => {
     const r = await rig()
     const background = r.pm.createProject('background', r.dir)

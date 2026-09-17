@@ -1,12 +1,15 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { createServer, type Server } from 'node:http'
-import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises'
+import { createServer, request, type Server } from 'node:http'
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { ProjectManager } from '../src/project-manager.ts'
 import { createHandler } from '../src/http.ts'
+import { MAX_UPLOAD_BYTES, UploadStore } from '../src/uploads.ts'
 
-interface Rig { pm: ProjectManager; server: Server; base: string; dir: string }
+interface Rig {
+  pm: ProjectManager; server: Server; base: string; dir: string; uploads: UploadStore
+}
 const rigs: Rig[] = []
 afterEach(async () => {
   for (const r of rigs.splice(0)) {
@@ -21,17 +24,40 @@ async function rig(token?: string, fsRoots?: string[]): Promise<Rig> {
     url: 'http://127.0.0.1:0', scrollback: 50, idleMs: 150,
     statePath: path.join(dir, 'projects.json'), tickMs: 40,
   })
+  const uploads = new UploadStore(path.join(dir, 'uploads'))
   const handler = createHandler({
-    pm, webRoot: path.join(dir, 'dist'), token: token ?? null,
+    pm, webRoot: path.join(dir, 'dist'), token: token ?? null, uploads,
     ...(fsRoots ? { fsRoots } : {}),
   })
   const server = createServer((req, res) => void handler(req, res))
   await new Promise<void>((res) => server.listen(0, '127.0.0.1', res))
   const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
-  const r = { pm, server, base, dir }
+  const r = { pm, server, base, dir, uploads }
   rigs.push(r)
   return r
 }
+
+/**
+ * A POST of `bytes` bytes with no Content-Length, so the body is chunked.
+ *
+ * `fetch` insists on a length for a Buffer, which is the one case the reader's
+ * ceiling is *not* the thing being tested — a declared length is turned away
+ * before a byte is read. Rejects if no response arrives, which is what a
+ * reader that never settles looks like from out here.
+ */
+const chunkedPost = (base: string, route: string, bytes: number): Promise<number> =>
+  new Promise((resolve, reject) => {
+    const { hostname, port } = new URL(base)
+    const req = request({ hostname, port, path: route, method: 'POST' }, (res) => {
+      res.resume()
+      resolve(res.statusCode ?? 0)
+    })
+    req.on('error', reject)
+    req.setTimeout(5000, () => { req.destroy(new Error('no response — the reader hung')) })
+    const chunk = Buffer.alloc(64 * 1024, 0x61)
+    for (let sent = 0; sent < bytes; sent += chunk.length) req.write(chunk)
+    req.end()
+  })
 
 const waitFor = async (fn: () => boolean, ms = 6000) => {
   const end = Date.now() + ms
@@ -161,6 +187,14 @@ describe('HTTP API', () => {
     })
     expect(ok.status).toBe(200)
     expect(s.tracker.status).toBe('busy')
+  })
+
+  it('answers an oversized status body instead of hanging on it for ever', async () => {
+    const r = await rig()
+    const p = r.pm.createProject('demo', r.dir)
+    const session = r.pm.create(p, {})!
+    const res = await chunkedPost(r.base, `/api/sessions/${session.id}/status`, 1.5e6)
+    expect(res).toBe(413)
   })
 
   it('404s an unknown session rather than silently accepting the hook', async () => {
@@ -314,13 +348,81 @@ describe('origin and headers', () => {
   })
 })
 
+describe('dropped images', () => {
+  const png = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64),
+  ])
+  const post = (base: string, body: BodyInit, headers: HeadersInit = {}) =>
+    fetch(`${base}/api/upload`, { method: 'POST', body, headers })
+
+  it('writes the image and answers with a path the shell can open', async () => {
+    const r = await rig()
+    const res = await post(r.base, png, { 'content-type': 'image/png' })
+    expect(res.status).toBe(200)
+
+    const { path: file } = await res.json() as { path: string }
+    expect(await readFile(file)).toEqual(png)
+    expect(path.isAbsolute(file)).toBe(true)
+  })
+
+  it('goes through the same token as every other route', async () => {
+    const r = await rig('secret')
+    expect((await post(r.base, png)).status).toBe(401)
+    const ok = await post(r.base, png, { authorization: 'Bearer secret' })
+    expect(ok.status).toBe(200)
+  })
+
+  it('refuses a file that is not an image, whatever it says it is', async () => {
+    const r = await rig()
+    // The interesting case: a caller with the token dressing a script up as a
+    // PNG. The name is ours and the bytes are sniffed, so neither lands.
+    const res = await post(r.base, Buffer.from('#!/bin/sh\necho pwned\n'), {
+      'content-type': 'image/png',
+    })
+    expect(res.status).toBe(415)
+  })
+
+  it('turns away an upload too big to be a screenshot', async () => {
+    const r = await rig()
+    const res = await post(r.base, Buffer.alloc(MAX_UPLOAD_BYTES + 1), {
+      'content-type': 'image/png',
+    })
+    expect(res.status).toBe(413)
+  })
+
+  it('answers an oversized body that hid behind chunked encoding', async () => {
+    // No Content-Length to check, so this lands on the reader's own backstop.
+    // It used to hang there for ever: the request is destroyed at the limit,
+    // `end` never fires, and the promise waiting on it never settles — no
+    // response, and the bytes already read pinned for the life of the daemon.
+    const r = await rig()
+    const res = await chunkedPost(r.base, '/api/upload', MAX_UPLOAD_BYTES + 4096)
+    expect(res).toBe(413)
+  })
+
+  it('refuses an empty body rather than writing a zero-byte file', async () => {
+    const r = await rig()
+    expect((await post(r.base, Buffer.alloc(0))).status).toBe(400)
+  })
+
+  it('is not a GET, and not a way to read anything back', async () => {
+    const r = await rig()
+    const res = await post(r.base, png)
+    const { path: file } = await res.json() as { path: string }
+    // The daemon serves the bundle and the API; the uploads directory is
+    // neither, so the path it just handed out is not a URL that answers.
+    expect((await fetch(`${r.base}/api/upload`)).status).toBe(404)
+    expect((await fetch(`${r.base}${file}`)).ok).toBe(false)
+  })
+})
+
 describe('window launcher', () => {
   it('stays out of the way when TRING_NO_OPEN is set, so dev reloads do not spawn windows', async () => {
     const { openWindow } = await import('../src/open-window.ts')
     const prev = process.env['TRING_NO_OPEN']
     process.env['TRING_NO_OPEN'] = '1'
     try {
-      expect(openWindow('http://127.0.0.1:7331')).toBe(false)
+      expect(await openWindow('http://127.0.0.1:7331')).toBe(false)
     } finally {
       if (prev === undefined) delete process.env['TRING_NO_OPEN']
       else process.env['TRING_NO_OPEN'] = prev

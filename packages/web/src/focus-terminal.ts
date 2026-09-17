@@ -56,6 +56,17 @@ export class FocusTerminal {
     this.term.write(data)
   }
 
+  /**
+   * Text the user did not type — a dropped image's path.
+   *
+   * `paste` rather than a write: it wraps the text for an app that asked for
+   * bracketed paste, which is how Claude Code tells a path arriving whole from
+   * someone typing one character at a time.
+   */
+  paste(text: string): void {
+    this.term.paste(text)
+  }
+
   clear(): void {
     this.term.write(RESET)
   }

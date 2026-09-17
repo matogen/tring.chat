@@ -50,6 +50,21 @@ sudo dnf install -y gcc-c++ make python3         # Fedora/RHEL
 Without those, `npm i -g tring-chat` fails while building node-pty. It takes a few seconds
 once they are present.
 
+**macOS needs no compiler, but node-pty's prebuilds carry one defect.** It
+publishes `prebuilds/darwin-*/spawn-helper` without the execute bit
+([node-pty#850](https://github.com/microsoft/node-pty/issues/850)), and every
+PTY on macOS is forked through that binary — so an untreated install answers
+the first tile with `posix_spawnp failed` and starts no shell. tring puts the
+bit back, at install time and again before the first spawn, so this should
+never be visible. If you installed with `--ignore-scripts` into a prefix you
+do not own, the one-liner is:
+
+```
+sudo chmod +x "$(npm root -g)/tring-chat/node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper"
+```
+
+All of this goes away when node-pty publishes a stable release carrying the fix.
+
 `tring` starts the daemon and opens a chromeless browser window — no address bar, no
 tab strip, its own taskbar entry. In that window the browser stops reserving
 `Ctrl+1`–`Ctrl+8` for tab switching, so slots 11–16 get their natural keys.
@@ -391,6 +406,25 @@ Two things are deliberate:
   in the right directory, with its old command on the tile as a one-click re-run.
   Auto-executing whatever was there last time is how four dev servers end up fighting
   over a port.
+
+## Dropping images on a terminal
+
+Drag a screenshot onto the centre terminal and its path is typed into the prompt,
+the way dropping a file on any other terminal types one. Claude Code reads the
+path from there.
+
+It cannot work the way a native terminal's does. A browser hands a dropped file
+over as bytes and withholds its location by design, and that location would be
+the wrong machine's anyway whenever you have the deck open on a phone or a laptop
+across the room. So the bytes go to the daemon, which writes them down on the
+machine the shell is actually running on and answers with the path it chose.
+
+- PNG, JPEG, GIF and WebP, up to 10MB. The type is read from the file's first
+  bytes, not from what the browser called it.
+- The daemon names every file itself, under `~/.config/tring/uploads`. Nothing
+  a client sends reaches a filesystem path.
+- The last 20 are kept. The directory is emptied when the daemon stops.
+- The upload goes through the same token as the rest of the API.
 
 ## Claude Code
 

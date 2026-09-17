@@ -25,6 +25,27 @@ export async function api<T>(path: string): Promise<T> {
   return body
 }
 
+/**
+ * Sends a dropped image to the daemon and gets back the path it wrote it to.
+ *
+ * The path is on the daemon's machine, which is the one the shell behind the
+ * terminal can actually open — the browser's own path for the file does not
+ * exist, and would be the wrong machine's if it did.
+ */
+export async function uploadImage(file: Blob): Promise<string> {
+  const res = await fetch(`${DAEMON}/api/upload`, {
+    method: 'POST',
+    headers: {
+      ...(TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}),
+      'content-type': file.type || 'application/octet-stream',
+    },
+    body: file,
+  })
+  const body = (await res.json().catch(() => ({}))) as { path?: string; error?: string }
+  if (!res.ok || !body.path) throw new Error(body.error ?? `upload failed (${res.status})`)
+  return body.path
+}
+
 export interface Handlers {
   onMessage: (msg: ServerMessage) => void
   onOutput: (id: string, data: Uint8Array) => void
