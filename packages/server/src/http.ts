@@ -8,6 +8,7 @@ import {
   bearerEquals, createOriginCheck, SECURITY_HEADERS, type OriginCheck,
 } from './security.ts'
 import { collectUsage, defaultTranscriptDir, type UsageReport } from './usage.ts'
+import { MAX_UPLOAD_BYTES, NotAnImage, type UploadStore } from './uploads.ts'
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -31,6 +32,8 @@ export interface HttpOptions {
   sameOrigin?: OriginCheck
   /** Directories the browse endpoint may reach outside the home tree. */
   fsRoots?: readonly string[]
+  /** Where images dropped on a terminal are written. Null disables the route. */
+  uploads?: UploadStore | null
 }
 
 /** No response leaves without the header block — a 404 is framable too. */
@@ -56,6 +59,30 @@ const readBody = (req: IncomingMessage): Promise<string> =>
       if (data.length > 1e6) req.destroy() // hooks post nothing large
     })
     req.on('end', () => resolve(data))
+  })
+
+/**
+ * The body as bytes, with a ceiling.
+ *
+ * Content-Length is checked by the caller first, so an honest client gets a
+ * 413 it can show the user. This is the backstop for one that lies: the
+ * socket goes, and nothing is buffered past the limit either way.
+ */
+const readBytes = (req: IncomingMessage, limit: number): Promise<Buffer | null> =>
+  new Promise((resolve) => {
+    const chunks: Buffer[] = []
+    let size = 0
+    req.on('data', (c: Buffer) => {
+      size += c.length
+      if (size > limit) {
+        resolve(null)
+        req.destroy()
+        return
+      }
+      chunks.push(c)
+    })
+    req.on('end', () => resolve(Buffer.concat(chunks)))
+    req.on('error', () => resolve(null))
   })
 
 /**
@@ -187,6 +214,32 @@ export function createHandler(opts: HttpOptions) {
       } catch {
         usage = null
         return json(res, 500, { error: 'cannot read Claude Code transcripts' })
+      }
+    }
+
+    /**
+     * An image dropped on a terminal (spec §5.4).
+     *
+     * The response is a path on *this* machine, which is the only kind the
+     * shell behind the terminal can open — the browser may well be on another
+     * one. What the client does with it is type it into the prompt.
+     */
+    if (url.pathname === '/api/upload' && req.method === 'POST') {
+      const store = opts.uploads
+      if (!store) return json(res, 503, { error: 'uploads are not configured' })
+
+      const declared = Number(req.headers['content-length'] ?? '0')
+      if (declared > MAX_UPLOAD_BYTES) {
+        return json(res, 413, { error: `images are limited to ${MAX_UPLOAD_BYTES >> 20}MB` })
+      }
+      const bytes = await readBytes(req, MAX_UPLOAD_BYTES)
+      if (!bytes || bytes.length === 0) return json(res, 400, { error: 'empty upload' })
+
+      try {
+        return json(res, 200, { path: await store.save(bytes) })
+      } catch (err) {
+        if (err instanceof NotAnImage) return json(res, 415, { error: err.message })
+        return json(res, 500, { error: 'cannot write the dropped image' })
       }
     }
 

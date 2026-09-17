@@ -6,6 +6,7 @@
   "main": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./input": "./src/input.ts",
     "./status": "./src/status.ts",
     "./keymap": "./src/keymap.ts",
     "./protocol": "./src/protocol.ts"

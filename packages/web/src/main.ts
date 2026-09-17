@@ -10,8 +10,10 @@ import type {
   ProjectInfo, ScreenSnapshot, ServerMessage, SessionInfo, UpdateInfo,
 } from '@tring/shared/protocol'
 import { actionForEvent, isPrefix, legendForSlot, slotForEvent } from '@tring/shared/keymap'
-import { WsClient } from './ws-client.ts'
+import { uploadImage, WsClient } from './ws-client.ts'
 import { FocusTerminal } from './focus-terminal.ts'
+import { followFocus } from './focus-target.ts'
+import { attachImageDrop, refuseStrayDrops } from './drop.ts'
 import { Thumbnail } from './thumbnail.ts'
 import {
   applyRing, placeInGrid, RING_SIZES, ringSize, setRingSize, type RingSize,
@@ -30,6 +32,8 @@ const usageEl = document.getElementById('usage') as HTMLElement
 let projects: ProjectInfo[] = []
 let viewedId: string | null = null
 let focusedId: string | null = null
+/** The focused session's slot, which outlives its id across a respawn. */
+let focusedSlot: number | null = null
 let prevFocusedId: string | null = null
 let ringSig = ''
 let askedForFirstProject = false
@@ -60,7 +64,7 @@ focusCell.className = 'focus-cell'
 const focusTerm = new FocusTerminal(focusCell)
 
 const ws = new WsClient({
-  onOpen: () => hideToast(),
+  onOpen: () => { hideToast(); reattach() },
   onClose: () => showToast('daemon disconnected — reconnecting'),
   onOutput: (id, data) => { if (id === focusedId) focusTerm.write(data) },
   onMessage: handleMessage,
@@ -69,6 +73,16 @@ const ws = new WsClient({
 focusTerm.onInput = (data) => {
   if (focusedId) ws.send({ type: 'input', id: focusedId, data })
 }
+
+// Drag an image onto the terminal and its path is typed into the prompt, the
+// way dropping a file on any other terminal types one (see drop.ts).
+refuseStrayDrops(window)
+attachImageDrop(focusCell, {
+  upload: uploadImage,
+  ready: () => focusedId !== null,
+  insert: (text) => { focusTerm.paste(text); focusTerm.focus() },
+  onError: showToast,
+})
 // The prefix never reaches the PTY, and nothing reaches it while an overlay
 // is up (spec §5.4).
 focusTerm.shouldSendKey = (e) => !ui.isOpen() && !isPrefix(e)
@@ -106,6 +120,7 @@ function handleMessage(msg: ServerMessage): void {
       for (const id of lastShots.keys()) if (!alive.has(id)) lastShots.delete(id)
       viewedId = msg.activeProjectId ?? projects[0]?.id ?? null
       render()
+      reconcileFocus()
       restoreProjectFocus()
       focusArrival()
       if (usage.wasActive()) showUsage()
@@ -192,6 +207,13 @@ function renderRing(): void {
     const tile = document.createElement('div')
     tile.className = 'tile'
     tile.tabIndex = 0
+    // A tile is focusable so it can be tabbed to, but pressing a mouse on one
+    // must not move the keyboard there — it does nothing with it, and the
+    // terminal goes deaf. Cancelling the default on mousedown keeps the
+    // keyboard where it belongs without the round trip through blur and back,
+    // and covers the action button nested inside, whose own click is stopped
+    // from bubbling and so never reaches the guard below.
+    tile.onmousedown = (e) => e.preventDefault()
     placeInGrid(tile, slot, size)
 
     if (!s) {
@@ -351,20 +373,66 @@ function fitTerminal(): void {
 
 function focusSession(id: string | null): void {
   showRing()
+  attachSession(id)
+  // Also when the session did not change. Whatever got us here — a click on a
+  // tile, a key in the picker — left the keyboard somewhere else, and
+  // attachSession returns early rather than re-aiming at what it already has.
+  if (focusedId) focusTerm.focus()
+}
+
+/**
+ * Point the centre terminal at a session and tell the daemon so.
+ *
+ * Separate from focusSession because the two paths that re-aim the focus on
+ * their own — a respawn, a reconnect — must not also drag the window back to
+ * the ring from wherever the user had put it.
+ */
+function attachSession(id: string | null): void {
   if (id && id === focusedId) return
+  // Never aim at a session that is not in the state we hold — `prevFocusedId`
+  // can outlive one. The daemon would take the focus, send nothing back, and
+  // the centre terminal would sit frozen with nothing on screen saying why.
+  const s = id ? sessionById(id) : undefined
   if (focusedId) prevFocusedId = focusedId
-  focusedId = id
-  if (!id) {
+  focusedId = s?.id ?? null
+  focusedSlot = s?.slot ?? null
+  if (!s) {
     focusTerm.clear()
     paintStatuses()
     return
   }
-  const s = sessionById(id)
-  if (s) lastFocused.set(s.projectId, id)
+  lastFocused.set(s.projectId, s.id)
   const { cols, rows } = focusTerm.fitNow()
-  ws.send({ type: 'focus', id, cols, rows })
+  ws.send({ type: 'focus', id: s.id, cols, rows })
   focusTerm.focus()
   paintStatuses()
+}
+
+/**
+ * Re-asserts the focus on a socket that has just opened.
+ *
+ * The daemon records what each *socket* is watching, so a reconnect — a laptop
+ * waking, a daemon restart, a background tab the browser dropped — leaves it
+ * with no record of this one, and output for the focused session stops being
+ * sent. Keystrokes still arrive at the PTY, and the thumbnail still updates,
+ * so the only symptom is a centre terminal that answers nothing: pressing
+ * enter on a question Claude is asking looks like a key that does not work.
+ *
+ * Re-sending `focus` also asks for a replay, which is what we want regardless
+ * after a gap in which output was missed.
+ */
+function reattach(): void {
+  if (!focusedId) return
+  const { cols, rows } = focusTerm.fitNow()
+  ws.send({ type: 'focus', id: focusedId, cols, rows })
+}
+
+/** Follows the focus into whatever now holds its slot (see focus-target.ts). */
+function reconcileFocus(): void {
+  if (focusedId === null || focusedSlot === null) return
+  const next = followFocus({ id: focusedId, slot: focusedSlot }, sessions())
+  if (next && next.id === focusedId) return
+  attachSession(next?.id ?? null)
 }
 
 function focusSlot(slot: number): void {
@@ -439,6 +507,7 @@ function activateProject(id: string): void {
   if (id === viewedId) return
   viewedId = id
   focusedId = null
+  focusedSlot = null
   focusTerm.clear()
   // The project's sessions arrive with the next `state`, so the session to
   // return to can only be chosen once they do.
@@ -542,6 +611,25 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault()
     openPicker()
   }
+})
+
+/**
+ * The keyboard belongs to the terminal.
+ *
+ * Everything else on the ring is a click target that keeps the DOM focus it
+ * takes — a project tab, the settings button, a tile — and the browser then
+ * delivers keystrokes there instead of to the terminal. Nothing looks wrong
+ * while it is happening: the tile still carries its viewing border, the
+ * session is still running, output still arrives. Only the keys do nothing,
+ * so answering a question Claude asked is impossible until you happen to
+ * click the terminal itself.
+ *
+ * A panel is the exception — its fields are the one place the keyboard is
+ * meant to go instead — and so is the usage view, which has no terminal.
+ */
+document.addEventListener('click', () => {
+  if (ui.isOpen() || viewMode !== 'ring' || !focusedId) return
+  focusTerm.focus()
 })
 
 /** Ctrl+Space on desktop, a tap on the switcher on a phone: the same picker. */

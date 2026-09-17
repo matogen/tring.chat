@@ -7,6 +7,8 @@
  * reads the byte stream the daemon is already consuming.
  */
 
+import type { InputKind } from './input.ts'
+
 export type SessionStatus = 'idle' | 'busy' | 'done' | 'exited'
 
 /** Output must continue this long to count as sustained. */
@@ -16,6 +18,19 @@ export const SUSTAINED_BYTES = 2048
 /** A burst is broken by a gap longer than this. */
 export const BURST_GAP_MS = SUSTAINED_MS
 export const DEFAULT_IDLE_MS = 3000
+
+/**
+ * How long output keeps being read as the repaint a navigation key asked for.
+ *
+ * A full-screen app redraws whenever you move around inside it, and one redraw
+ * of a coloured Claude Code screen clears SUSTAINED_BYTES on its own, in a
+ * single chunk. As bytes that is indistinguishable from an agent starting
+ * work, so scrolling turned the tile amber and then, seconds later, green.
+ *
+ * Only navigation opens this window (see input.ts): a command you actually ran
+ * still goes busy on the output it produces, immediately, as it always did.
+ */
+export const ECHO_MS = 300
 
 /**
  * How long a session must have been working before falling quiet is treated as
@@ -46,6 +61,7 @@ export class ActivityTracker {
   private burstStart: number | null = null
   private burstBytes = 0
   private lastOutput: number | null = null
+  private lastNavigation: number | null = null
 
   constructor(now: number, idleMs: number = DEFAULT_IDLE_MS) {
     this.since = now
@@ -66,6 +82,14 @@ export class ActivityTracker {
     // busy stays busy; done stays green until acknowledged (spec §4.2).
     if (this.status !== 'idle') return
 
+    // Output right behind a navigation key is the repaint it asked for, not
+    // the session working (see ECHO_MS). Dropped from the burst rather than
+    // merely ending it, because one repaint is over the threshold by itself.
+    if (this.lastNavigation !== null && now - this.lastNavigation <= ECHO_MS) {
+      this.resetBurst()
+      return
+    }
+
     if (this.burstStart === null) this.burstStart = now
     this.burstBytes += bytes
     if (now - this.burstStart >= SUSTAINED_MS || this.burstBytes >= SUSTAINED_BYTES) {
@@ -73,10 +97,17 @@ export class ActivityTracker {
     }
   }
 
-  /** User typed into this session. Only the focused session receives input. */
-  input(now: number): void {
+  /**
+   * The user drove this session: a keystroke, a paste, a mouse report from a
+   * wheel. Only the focused session receives input.
+   */
+  input(now: number, kind: InputKind = 'command'): void {
     // Keeps echo from accumulating toward the sustained-output threshold.
     this.resetBurst()
+    // Navigation cannot have started anything, so what the app prints next is
+    // it redrawing itself. A command can, so it closes the window again —
+    // scrolling and then pressing enter must still report the work.
+    this.lastNavigation = kind === 'navigation' ? now : null
     if (this.status === 'done') this.transition('idle', now)
   }
 

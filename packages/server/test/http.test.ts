@@ -1,12 +1,15 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { createServer, type Server } from 'node:http'
-import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { ProjectManager } from '../src/project-manager.ts'
 import { createHandler } from '../src/http.ts'
+import { MAX_UPLOAD_BYTES, UploadStore } from '../src/uploads.ts'
 
-interface Rig { pm: ProjectManager; server: Server; base: string; dir: string }
+interface Rig {
+  pm: ProjectManager; server: Server; base: string; dir: string; uploads: UploadStore
+}
 const rigs: Rig[] = []
 afterEach(async () => {
   for (const r of rigs.splice(0)) {
@@ -21,14 +24,15 @@ async function rig(token?: string, fsRoots?: string[]): Promise<Rig> {
     url: 'http://127.0.0.1:0', scrollback: 50, idleMs: 150,
     statePath: path.join(dir, 'projects.json'), tickMs: 40,
   })
+  const uploads = new UploadStore(path.join(dir, 'uploads'))
   const handler = createHandler({
-    pm, webRoot: path.join(dir, 'dist'), token: token ?? null,
+    pm, webRoot: path.join(dir, 'dist'), token: token ?? null, uploads,
     ...(fsRoots ? { fsRoots } : {}),
   })
   const server = createServer((req, res) => void handler(req, res))
   await new Promise<void>((res) => server.listen(0, '127.0.0.1', res))
   const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
-  const r = { pm, server, base, dir }
+  const r = { pm, server, base, dir, uploads }
   rigs.push(r)
   return r
 }
@@ -311,6 +315,64 @@ describe('origin and headers', () => {
     expect((await fetch(`${r.base}/api/sessions`, {
       headers: { authorization: 'Bearer secret' },
     })).status).toBe(200)
+  })
+})
+
+describe('dropped images', () => {
+  const png = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64),
+  ])
+  const post = (base: string, body: BodyInit, headers: HeadersInit = {}) =>
+    fetch(`${base}/api/upload`, { method: 'POST', body, headers })
+
+  it('writes the image and answers with a path the shell can open', async () => {
+    const r = await rig()
+    const res = await post(r.base, png, { 'content-type': 'image/png' })
+    expect(res.status).toBe(200)
+
+    const { path: file } = await res.json() as { path: string }
+    expect(await readFile(file)).toEqual(png)
+    expect(path.isAbsolute(file)).toBe(true)
+  })
+
+  it('goes through the same token as every other route', async () => {
+    const r = await rig('secret')
+    expect((await post(r.base, png)).status).toBe(401)
+    const ok = await post(r.base, png, { authorization: 'Bearer secret' })
+    expect(ok.status).toBe(200)
+  })
+
+  it('refuses a file that is not an image, whatever it says it is', async () => {
+    const r = await rig()
+    // The interesting case: a caller with the token dressing a script up as a
+    // PNG. The name is ours and the bytes are sniffed, so neither lands.
+    const res = await post(r.base, Buffer.from('#!/bin/sh\necho pwned\n'), {
+      'content-type': 'image/png',
+    })
+    expect(res.status).toBe(415)
+  })
+
+  it('turns away an upload too big to be a screenshot', async () => {
+    const r = await rig()
+    const res = await post(r.base, Buffer.alloc(MAX_UPLOAD_BYTES + 1), {
+      'content-type': 'image/png',
+    })
+    expect(res.status).toBe(413)
+  })
+
+  it('refuses an empty body rather than writing a zero-byte file', async () => {
+    const r = await rig()
+    expect((await post(r.base, Buffer.alloc(0))).status).toBe(400)
+  })
+
+  it('is not a GET, and not a way to read anything back', async () => {
+    const r = await rig()
+    const res = await post(r.base, png)
+    const { path: file } = await res.json() as { path: string }
+    // The daemon serves the bundle and the API; the uploads directory is
+    // neither, so the path it just handed out is not a URL that answers.
+    expect((await fetch(`${r.base}/api/upload`)).status).toBe(404)
+    expect((await fetch(`${r.base}${file}`)).ok).toBe(false)
   })
 })
 

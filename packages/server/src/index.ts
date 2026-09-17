@@ -13,6 +13,8 @@ import {
 import { defaultTokenPath, loadOrCreateToken } from './token.ts'
 import { Hub } from './ws.ts'
 import { openWindow, describeFallback } from './open-window.ts'
+import { fixSpawnHelper } from './spawn-helper.ts'
+import { UploadStore } from './uploads.ts'
 import { checkForUpdate, currentVersion } from './update-check.ts'
 
 interface Auth {
@@ -89,6 +91,11 @@ async function main(): Promise<void> {
     path.resolve(here, '../../web/dist'),
   ].find((p) => existsSync(p)) ?? path.resolve(here, 'web')
 
+  // Before anything can try to fork a PTY through it. An install that skipped
+  // scripts never ran the postinstall pass, and on macOS that is the whole
+  // difference between a tile and `posix_spawnp failed` (see spawn-helper.ts).
+  for (const file of fixSpawnHelper()) console.log(`made ${file} executable`)
+
   const pm = await ProjectManager.open({
     url,
     // Reaches each session as $TRING_TOKEN, so the documented Stop hook can
@@ -104,10 +111,14 @@ async function main(): Promise<void> {
   // open can open a socket here and drive a shell (§ security).
   const sameOrigin = createOriginCheck({ host: args.host, allow: args.allowOrigin })
 
+  // Scratch space for images dropped on a terminal, beside the state file so
+  // it inherits the same private directory. Emptied on shutdown.
+  const uploads = new UploadStore(path.join(path.dirname(pm.statePath), 'uploads'))
+
   // Built once, not per request: the handler holds the usage-scan cache, and a
   // fresh closure per request would throw that away on every call.
   const handle = createHandler({
-    pm, webRoot, token, sameOrigin, fsRoots: args.fsRoot,
+    pm, webRoot, token, sameOrigin, fsRoots: args.fsRoot, uploads,
   })
   const listener: RequestListener = (req, res) => {
     void handle(req, res).catch(() => {
@@ -160,6 +171,7 @@ async function main(): Promise<void> {
 
   const shutdown = async (): Promise<void> => {
     hub.dispose()
+    await uploads.dispose()
     await pm.dispose()
     server.close(() => process.exit(0))
     setTimeout(() => process.exit(0), 1000).unref()
