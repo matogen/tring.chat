@@ -201,7 +201,32 @@ export class Session {
 
   /** Full buffer including scrollback, for replay on focus or reconnect. */
   serialize(): string {
-    return this.serializer.serialize({ scrollback: this.term.options.scrollback ?? 0 })
+    return this.serializer.serialize({ scrollback: this.term.options.scrollback ?? 0 }) + this.mouseEncodingMode()
+  }
+
+  /**
+   * The serialize addon restores the mouse *tracking* mode (`?1002h`, `?1003h`)
+   * but not the report *encoding* the program asked for alongside it (`?1006h`
+   * for SGR, which is what everything modern uses). A browser that attaches
+   * from that replay therefore tracks the mouse in the legacy X10 encoding,
+   * and xterm hands those reports out on its binary channel, which never
+   * reaches the PTY — so wheel and click did nothing in Claude Code or vim,
+   * on desktop as much as on a phone. The encoding is not public API on the
+   * headless terminal, so it is read off the core defensively: an unknown
+   * shape simply appends nothing, which is the old behaviour.
+   */
+  private mouseEncodingMode(): string {
+    // The encoding outlives the tracking it was chosen for; only tracking
+    // makes it matter, so a program that turned the mouse off leaves nothing.
+    if (this.term.modes.mouseTrackingMode === 'none') return ''
+    const core = (this.term as unknown as { _core?: { coreMouseService?: { activeEncoding?: string } } })._core
+    switch (core?.coreMouseService?.activeEncoding) {
+      case 'SGR': return '\x1b[?1006h'
+      case 'SGR_PIXELS': return '\x1b[?1016h'
+      case 'URXVT': return '\x1b[?1015h'
+      case 'UTF8': return '\x1b[?1005h'
+      default: return ''
+    }
   }
 
   /** Returns null when the visible buffer has not changed since last time. */

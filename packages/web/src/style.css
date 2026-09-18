@@ -117,6 +117,9 @@ body {
   padding: 4px;
 }
 .focus-cell .xterm { height: 100%; }
+/* A swipe over the terminal is the terminal's, never the page's: nothing
+   here should pan, zoom, or pull-to-refresh under it. */
+.focus-cell { touch-action: none; overscroll-behavior: none; }
 
 .tile {
   position: relative;
