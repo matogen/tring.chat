@@ -26,6 +26,26 @@ await build({
 })
 await chmod('dist/tring.js', 0o755)
 
+// The same spawn-helper repair the daemon runs at startup, as a script the
+// postinstall hook can run at install time — where it is still whoever owns
+// the install, and can therefore fix a global one owned by root. One source,
+// two entry points, rather than two copies drifting apart.
+await build({
+  stdin: {
+    contents: [
+      "import { fixSpawnHelper } from './src/spawn-helper.ts'",
+      'for (const file of fixSpawnHelper()) console.log(`tring: made ${file} executable`)',
+    ].join('\n'),
+    resolveDir: '.',
+    loader: 'ts',
+  },
+  bundle: true,
+  platform: 'node',
+  format: 'esm',
+  target: 'node20',
+  outfile: 'dist/fix-spawn-helper.mjs',
+})
+
 // Ship the web bundle inside the server package so an installed copy is
 // self-contained and does not reach back into the monorepo.
 await cp('../web/dist', 'dist/web', { recursive: true })

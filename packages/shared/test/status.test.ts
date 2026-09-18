@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ActivityTracker, SUSTAINED_BYTES, SUSTAINED_MS } from '../src/status.ts'
+import { ActivityTracker, ECHO_MS, SUSTAINED_BYTES, SUSTAINED_MS } from '../src/status.ts'
 
 const t = () => new ActivityTracker(0)
 
@@ -99,6 +99,56 @@ describe('ActivityTracker', () => {
     expect(a.status).toBe('idle')
   })
 
+  it('a repaint provoked by scrolling is not the session working', () => {
+    const a = t()
+    // A wheel notch reaches a full-screen app as a mouse report, and it
+    // redraws — well past SUSTAINED_BYTES, in one chunk, immediately.
+    a.input(1000, 'navigation')
+    a.output(SUSTAINED_BYTES * 8, 1002)
+    expect(a.status).toBe('idle')
+    a.tick(1002 + 10_000)
+    expect(a.status).toBe('idle')
+  })
+
+  it('keeps ignoring repaints for as long as the scrolling goes on', () => {
+    const a = t()
+    for (let now = 0; now < 5000; now += 50) {
+      a.input(now, 'navigation')
+      a.output(SUSTAINED_BYTES * 4, now + 2)
+      a.tick(now + 2)
+    }
+    expect(a.status).toBe('idle')
+  })
+
+  it('goes busy the moment a command you ran starts printing', () => {
+    const a = t()
+    a.input(0)
+    a.output(SUSTAINED_BYTES, 10)
+    expect(a.status).toBe('busy')
+  })
+
+  it('stops ignoring repaints once you stop navigating', () => {
+    const a = t()
+    a.input(0, 'navigation')
+    a.output(SUSTAINED_BYTES, 10)
+    expect(a.status).toBe('idle')
+    a.output(SUSTAINED_BYTES, ECHO_MS + 1)
+    expect(a.status).toBe('busy')
+  })
+
+  it('reports the work when you scroll a menu and then answer it', () => {
+    const a = t()
+    // Arrow keys through a question Claude asked, then enter.
+    a.input(0, 'navigation')
+    a.output(SUSTAINED_BYTES * 4, 5)
+    a.input(50, 'navigation')
+    a.output(SUSTAINED_BYTES * 4, 55)
+    expect(a.status).toBe('idle')
+    a.input(100)
+    a.output(SUSTAINED_BYTES, 110)
+    expect(a.status).toBe('busy')
+  })
+
   it('exits from any state and keeps the code', () => {
     for (const setup of [
       (a: ActivityTracker) => {},
@@ -159,6 +209,7 @@ describe('ActivityTracker — worth announcing', () => {
     a.input(20)
     expect(a.notable).toBe(false)
     a.output(SUSTAINED_BYTES, 30)
+    expect(a.status).toBe('busy')
     expect(a.notable).toBe(false)
   })
 })

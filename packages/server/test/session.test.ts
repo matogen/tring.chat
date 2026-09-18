@@ -99,6 +99,33 @@ describe('Session', () => {
     expect(s.tracker.exitCode).toBe(3)
   })
 
+  /**
+   * A stand-in for a full-screen app on a scroll: it waits for exactly one
+   * three-byte sequence and then redraws far more than SUSTAINED_BYTES, all
+   * inside a few milliseconds, which is the shape that was turning tiles
+   * amber for work nobody had asked for.
+   */
+  const REDRAWS_ON_KEY =
+    "printf 'ready\\n'; read -r -n 3 x; printf 'y%.0s' $(seq 1 8000); sleep 5"
+
+  it('a wheel notch that makes an app redraw does not count as work', async () => {
+    const s = make(REDRAWS_ON_KEY)
+    await waitFor(() => s.serialize().includes('ready'))
+
+    s.write('\x1b[A') // one notch, as an app on the alternate screen sees it
+    await waitFor(() => s.serialize().includes('yyyyyyyy'))
+    expect(s.tracker.status).toBe('idle')
+  })
+
+  it('the same redraw after a keystroke you meant does count', async () => {
+    const s = make(REDRAWS_ON_KEY)
+    await waitFor(() => s.serialize().includes('ready'))
+
+    s.write('abc')
+    await waitFor(() => s.tracker.status === 'busy')
+    expect(s.tracker.status).toBe('busy')
+  })
+
   it('suppresses a snapshot when the visible buffer has not changed', async () => {
     const s = make()
     s.write('echo snap\n')

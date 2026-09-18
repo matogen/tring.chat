@@ -1,6 +1,6 @@
 {
   "name": "tring-chat",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Focus-centred terminal deck for agentic work — 16 live terminals around one focus, green when an agent is done",
   "keywords": [
     "terminal",
@@ -31,12 +31,14 @@
   },
   "files": [
     "dist",
+    "scripts",
     "README.md"
   ],
   "scripts": {
     "dev": "TRING_NO_OPEN=1 TRING_ALLOW_ORIGIN=http://localhost:5173,http://127.0.0.1:5173 tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "build": "node build.mjs",
+    "postinstall": "node scripts/postinstall.mjs",
     "prepublishOnly": "node build.mjs"
   },
   "dependencies": {
