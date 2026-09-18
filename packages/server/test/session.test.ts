@@ -44,6 +44,22 @@ describe('Session', () => {
     expect(s.serialize()).toContain('tring-replay-marker')
   })
 
+  it('replays the mouse report encoding along with the tracking mode', async () => {
+    const s = make()
+    // What nvim, Claude Code and friends send: track drags, report in SGR.
+    // The markers are computed so the echoed command line cannot match them.
+    s.write("printf '\\033[?1002h\\033[?1006h'; echo mouse-$((40+2))\n")
+    await waitFor(() => s.serialize().includes('mouse-42'))
+    const replay = s.serialize()
+    expect(replay).toContain('\x1b[?1002h')
+    expect(replay).toContain('\x1b[?1006h')
+    // And nothing is appended once no program asks for mouse reports.
+    s.write("printf '\\033[?1002l'; echo mouse-$((40+3))\n")
+    await waitFor(() => s.serialize().includes('mouse-43'))
+    expect(s.serialize()).not.toContain('\x1b[?1002h')
+    expect(s.serialize()).not.toContain('\x1b[?1006h')
+  })
+
   it('injects the env vars the Claude Code Stop hook depends on', async () => {
     const s = make()
     s.write('echo "[$TRING_SLOT|$TRING_PROJECT|$TRING_SESSION_ID]"\n')
