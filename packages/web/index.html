@@ -5,7 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>tring</title>
     <meta name="theme-color" content="#071411" />
-    <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- Credentialed: a login gate in front of the daemon (Cloudflare Access)
+         otherwise answers the manifest fetch with its sign-in page, and the
+         browser quietly refuses to install. -->
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
     <!-- iOS installs from these rather than the manifest's icons. -->
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <meta name="mobile-web-app-capable" content="yes" />
