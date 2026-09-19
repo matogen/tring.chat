@@ -421,6 +421,13 @@ previous session painted over the new one:
   terminal's canvas out of the document, and re-attaching does not repaint — so the old
   session's pixels can survive the rebuild.
 
+**Pasting** (`paste.ts`). Text reaches the PTY through xterm's own paste handling on
+its textarea, wrapped for bracketed paste. An image on the clipboard is a file, which
+xterm ignores, so a capture-phase `paste` listener on the focus cell runs ahead of
+xterm's: if `clipboardData.files` carries an image it stops the event and sends the
+image down the drop path — `insertImages` in `drop.ts` uploads it and pastes the path.
+A paste without an image is left alone.
+
 Switching projects restores the session you were last focused on there (`lastFocused`,
 keyed by project id, resolved when that project's `state` arrives), rather than leaving
 an empty centre. A custom key
@@ -553,6 +560,14 @@ while meaning nothing of the sort.
   it opens the picker. Right, a "next finished" button with the mint badge counting this
   project's finished sessions, disabled at zero. The count is per project because
   `nextDone` walks the viewed project's slots; the tab badges still carry the others.
+  Between them, a **paste button.** A phone has no Ctrl+V, and the textarea xterm
+  listens on is a transparent sliver at the cursor that no finger can long-press, so
+  the button calls `navigator.clipboard.read()` inside the tap — iOS puts up its own
+  "Paste" bubble, Android asks once for permission — and sorts what comes back:
+  images go through `insertImages`, text through `term.paste`. If the read throws (a
+  refused permission, an http origin, no API), `openPasteSheet` opens a bottom sheet
+  with a real textarea to long-press: an image pasted there is taken at once, text on
+  the Insert button. Disabled while no session is focused.
 - **The picker is the same picker, as a bottom sheet.** `#overlay` anchors the panel to
   the bottom edge, rows grow to 44px, and a `.picker-actions` row with "Next finished"
   and "New session" replaces the key legend, which is hidden. Both buttons call the same

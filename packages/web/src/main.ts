@@ -13,7 +13,8 @@ import { actionForEvent, isPrefix, legendForSlot, slotForEvent } from '@tring/sh
 import { uploadImage, WsClient } from './ws-client.ts'
 import { FocusTerminal } from './focus-terminal.ts'
 import { followFocus } from './focus-target.ts'
-import { attachImageDrop, refuseStrayDrops } from './drop.ts'
+import { attachImageDrop, insertImages, refuseStrayDrops } from './drop.ts'
+import { attachImagePaste, pasteFromClipboard, type PasteOptions } from './paste.ts'
 import { Thumbnail } from './thumbnail.ts'
 import {
   applyRing, placeInGrid, RING_SIZES, ringSize, setRingSize, type RingSize,
@@ -77,12 +78,15 @@ focusTerm.onInput = (data) => {
 // Drag an image onto the terminal and its path is typed into the prompt, the
 // way dropping a file on any other terminal types one (see drop.ts).
 refuseStrayDrops(window)
-attachImageDrop(focusCell, {
+const pasteOpts: PasteOptions = {
   upload: uploadImage,
   ready: () => focusedId !== null,
   insert: (text) => { focusTerm.paste(text); focusTerm.focus() },
   onError: showToast,
-})
+}
+attachImageDrop(focusCell, pasteOpts)
+// Ctrl+V with a screenshot on the clipboard goes the same way (see paste.ts).
+attachImagePaste(focusCell, pasteOpts)
 // The prefix never reaches the PTY, and nothing reaches it while an overlay
 // is up (spec §5.4).
 focusTerm.shouldSendKey = (e) => !ui.isOpen() && !isPrefix(e)
@@ -360,8 +364,22 @@ function paintSwitcher(): void {
   const sig = `${focused?.id}|${focused?.status}|${focused?.name}|${focused?.title}|${done}`
   if (sig === switcherSig) return
   switcherSig = sig
-  renderSwitcher(switcherEl, focused, done, { onOpen: openPicker, onNext: nextDone })
+  renderSwitcher(switcherEl, focused, done, {
+    onOpen: openPicker, onNext: nextDone, onPaste: pasteFromButton,
+  })
 }
+
+/** The switcher's paste button: the clipboard if it can be read, a sheet if not. */
+function pasteFromButton(): void {
+  void pasteFromClipboard({
+    ...pasteOpts,
+    fallback: () => ui.openPasteSheet({
+      onText: pasteOpts.insert,
+      onImages: (files) => { void insertImages(files, pasteOpts) },
+    }),
+  })
+}
+
 
 /* ---------- actions ---------- */
 

@@ -620,7 +620,8 @@ body {
 #switcher .current .nm { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #switcher .current .tag { color: var(--status, var(--dim)); font-size: 11px; }
 #switcher .current .chev { display: grid; color: var(--muted); }
-#switcher .next {
+#switcher .next,
+#switcher .paste {
   flex: 0 0 64px;
   display: flex;
   align-items: center;
@@ -628,8 +629,27 @@ body {
   gap: 6px;
   color: var(--muted);
 }
-#switcher .next:disabled { color: var(--dim); opacity: .5; cursor: default; }
-#switcher .next svg { display: block; }
+/* An icon alone; the "next" button also carries a count. */
+#switcher .paste { flex-basis: 52px; }
+#switcher .next:disabled,
+#switcher .paste:disabled { color: var(--dim); opacity: .5; cursor: default; }
+#switcher .next svg,
+#switcher .paste svg { display: block; }
+
+/* The paste sheet's box: the one textarea, sized for a thumb to hold. */
+.paste-box {
+  display: block;
+  width: 100%;
+  min-height: 96px;
+  padding: 10px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.4 var(--mono);
+  resize: vertical;
+}
+.paste-box:focus { outline: none; border-color: var(--emerald); }
 
 /* Desktop has the key legend; the buttons are the phone's version of it. */
 .picker-actions { display: none; }
