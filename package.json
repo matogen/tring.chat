@@ -14,7 +14,7 @@
     "start": "npm run start -w tring-chat",
     "test": "vitest run",
     "typecheck": "tsc -b --pretty",
-    "release": "npm run build && npm publish -w tring-chat && git tag v$(node -p \"require('./packages/server/package.json').version\") && git push --follow-tags"
+    "release": "npm run build && npm publish -w tring-chat && git tag -a -m '' v$(node -p \"require('./packages/server/package.json').version\") && git push --follow-tags"
   },
   "devDependencies": {
     "@types/node": "^26.4.1",
