@@ -24,6 +24,8 @@ export function describeSession(s: SessionInfo | null): SessionLabel {
 export interface SwitcherCallbacks {
   onOpen: () => void
   onNext: () => void
+  /** Reads the clipboard into the terminal; a phone has no Ctrl+V. */
+  onPaste: () => void
 }
 
 export function renderSwitcher(
@@ -45,6 +47,17 @@ export function renderSwitcher(
   current.append(key, nm, tag, chevron())
   current.onclick = () => cb.onOpen()
   container.append(current)
+
+  const paste = document.createElement('button')
+  paste.className = 'paste'
+  paste.disabled = !focused
+  paste.title = focused ? 'Paste from the clipboard' : 'Focus a session to paste'
+  paste.setAttribute('aria-label', 'Paste')
+  paste.innerHTML = icon(
+    '<rect x="4" y="3" width="8" height="11" rx="1.5"/><path d="M6 3V2h4v1M6.5 7h3M6.5 10h3"/>',
+  )
+  paste.onclick = () => cb.onPaste()
+  container.append(paste)
 
   const next = document.createElement('button')
   next.className = 'next'

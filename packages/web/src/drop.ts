@@ -9,11 +9,11 @@
  */
 
 /** Images Claude Code can read; anything else in the drop is left alone. */
-const IMAGE = /^image\/(png|jpeg|gif|webp)$/
+export const IMAGE = /^image\/(png|jpeg|gif|webp)$/
 
 export interface DropOptions {
   /** Sends one file and resolves with its path on the daemon's machine. */
-  upload: (file: File) => Promise<string>
+  upload: (file: Blob) => Promise<string>
   /** Puts the finished text into the terminal, as a paste. */
   insert: (text: string) => void
   /** False while there is no terminal to drop on — no session is focused. */
@@ -90,6 +90,14 @@ async function receive(files: File[], opts: DropOptions): Promise<void> {
       : 'nothing to drop')
     return
   }
+  await insertImages(images, opts)
+}
+
+/**
+ * Uploads each image and types the paths, however they arrived — dropped,
+ * pasted with Ctrl+V, or read off a phone's clipboard (see paste.ts).
+ */
+export async function insertImages(images: Blob[], opts: DropOptions): Promise<void> {
   if (!opts.ready()) {
     opts.onError('focus a session first — the image goes into its prompt')
     return

@@ -426,6 +426,13 @@ machine the shell is actually running on and answers with the path it chose.
 - The last 20 are kept. The directory is emptied when the daemon stops.
 - The upload goes through the same token as the rest of the API.
 
+Pasting works the same way. Ctrl+V with a screenshot on the clipboard uploads it
+and types the path; text pastes as it always did. On a phone, where there is no
+Ctrl+V and nothing to long-press, the switcher bar has a paste button: it reads
+the clipboard — iOS shows its own "Paste" bubble to tap, Android asks once — and
+types text or uploads an image accordingly. If the browser will not hand the
+clipboard over, a sheet with a box to paste into opens instead.
+
 ## Claude Code
 
 Optional. Add a `Stop` hook to `~/.claude/settings.json` so a tile turns green the

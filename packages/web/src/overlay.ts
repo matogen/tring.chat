@@ -2,6 +2,7 @@ import type { ProjectInfo, SessionInfo } from '@tring/shared/protocol'
 import { legendForSlot } from '@tring/shared/keymap'
 import { RING_SIZES, ringSize, type RingSize } from './ring-layout.ts'
 import { MOBILE_QUERY } from './switcher.ts'
+import { imagesIn } from './paste.ts'
 import { api } from './ws-client.ts'
 
 const root = document.getElementById('overlay') as HTMLElement
@@ -492,4 +493,47 @@ export function openConfirm(title: string, body: string, onYes: () => void): voi
   actions.append(cancel, ok)
   panel.append(actions)
   open(panel)
+}
+
+/**
+ * The fallback for the paste button (spec §5.11): a textarea big enough to
+ * long-press, for a browser that will not read the clipboard on request. A
+ * pasted image is taken the moment it lands, the way a drop is; text waits
+ * for the button, so a password can be checked before it goes.
+ */
+export function openPasteSheet(
+  cb: { onText: (text: string) => void; onImages: (files: File[]) => void },
+): void {
+  const panel = el('div', 'panel paste-sheet')
+  panel.append(el('h2', undefined, 'Paste'))
+  panel.append(el('p', 'hint',
+    'The clipboard could not be read directly. Long-press the box and paste: ' +
+    'text is typed into the terminal, an image goes in as a path.'))
+  const box = el('textarea', 'paste-box') as HTMLTextAreaElement
+  box.rows = 4
+  box.placeholder = 'paste here'
+  box.autocomplete = 'off'
+  box.autocapitalize = 'off'
+  box.spellcheck = false
+  box.addEventListener('paste', (e) => {
+    const images = imagesIn(e.clipboardData?.files)
+    if (images.length === 0) return
+    e.preventDefault()
+    close()
+    cb.onImages(images)
+  })
+  panel.append(box)
+  const actions = el('div', 'actions')
+  const cancel = el('button', 'btn', 'Cancel') as HTMLButtonElement
+  cancel.onclick = () => close()
+  const ok = el('button', 'btn primary', 'Insert') as HTMLButtonElement
+  ok.onclick = () => {
+    const text = box.value
+    close()
+    if (text) cb.onText(text)
+  }
+  actions.append(cancel, ok)
+  panel.append(actions)
+  open(panel)
+  box.focus()
 }
