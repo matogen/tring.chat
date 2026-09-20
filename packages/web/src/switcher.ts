@@ -26,6 +26,8 @@ export interface SwitcherCallbacks {
   onNext: () => void
   /** Reads the clipboard into the terminal; a phone has no Ctrl+V. */
   onPaste: () => void
+  /** Opens the copy sheet; a finger cannot select text off a canvas. */
+  onCopy: () => void
 }
 
 export function renderSwitcher(
@@ -58,6 +60,17 @@ export function renderSwitcher(
   )
   paste.onclick = () => cb.onPaste()
   container.append(paste)
+
+  const copy = document.createElement('button')
+  copy.className = 'copy'
+  copy.disabled = !focused
+  copy.title = focused ? 'Copy text off the screen' : 'Focus a session to copy'
+  copy.setAttribute('aria-label', 'Copy')
+  copy.innerHTML = icon(
+    '<rect x="6" y="6" width="8" height="8" rx="1.5"/><path d="M4 10H3.5A1.5 1.5 0 0 1 2 8.5v-5A1.5 1.5 0 0 1 3.5 2h5A1.5 1.5 0 0 1 10 3.5V4"/>',
+  )
+  copy.onclick = () => cb.onCopy()
+  container.append(copy)
 
   const next = document.createElement('button')
   next.className = 'next'

@@ -537,3 +537,58 @@ export function openPasteSheet(
   open(panel)
   box.focus()
 }
+
+/**
+ * The copy button's sheet (spec §5.11). The terminal is a canvas, so a
+ * long-press finds nothing to select there; this is the same text as DOM. The
+ * links get a button each, because the link a CLI just printed is what a
+ * phone most often needs and tapping beats selecting it character by
+ * character. The screen itself sits below, in a box the phone can select
+ * from the ordinary way.
+ */
+export function openCopySheet(
+  contents: { text: string; links: string[] },
+  copy: (text: string) => Promise<boolean>,
+): void {
+  const panel = el('div', 'panel copy-sheet')
+  panel.append(el('h2', undefined, 'Copy'))
+
+  const copyButton = (label: string, text: string, cls = 'btn'): HTMLButtonElement => {
+    const b = el('button', cls, label) as HTMLButtonElement
+    b.type = 'button'
+    b.onclick = () => {
+      void copy(text).then((ok) => {
+        b.textContent = ok ? 'Copied' : 'Copy failed'
+        // A second tap after the first must read as a fresh tap.
+        setTimeout(() => { b.textContent = label }, 1500)
+      })
+    }
+    return b
+  }
+
+  if (contents.links.length > 0) {
+    panel.append(el('p', 'hint', 'Links on screen, the latest first.'))
+    const list = el('div', 'links')
+    for (const url of contents.links) {
+      const row = el('div', 'link')
+      row.append(el('span', 'url', url), copyButton('Copy', url))
+      list.append(row)
+    }
+    panel.append(list)
+  }
+
+  panel.append(el('p', 'hint', contents.text
+    ? 'The screen as text. Long-press to select part of it, or copy all of it.'
+    : 'Nothing on the screen yet.'))
+  const box = el('pre', 'copy-box', contents.text)
+  panel.append(box)
+
+  const actions = el('div', 'actions')
+  const cancel = el('button', 'btn', 'Close') as HTMLButtonElement
+  cancel.onclick = () => close()
+  const all = copyButton('Copy screen', contents.text, 'btn primary')
+  all.disabled = contents.text === ''
+  actions.append(cancel, all)
+  panel.append(actions)
+  open(panel)
+}

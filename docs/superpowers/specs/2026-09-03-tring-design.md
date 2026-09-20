@@ -568,6 +568,14 @@ while meaning nothing of the sort.
   refused permission, an http origin, no API), `openPasteSheet` opens a bottom sheet
   with a real textarea to long-press: an image pasted there is taken at once, text on
   the Insert button. Disabled while no session is focused.
+  Beside it, a **copy button.** xterm draws on a canvas, so a long-press finds no text
+  to select, and its own selection has no touch handling. The button calls
+  `openCopySheet` with the screen as text (`screenText`, the viewport's rows joined
+  back into the lines a program wrote, so a wrapped URL comes out whole) and the links
+  in the last `LINK_LOOKBACK` rows (`recentLinks`, latest first). Each link gets its
+  own Copy button, since a login URL a CLI just printed is the usual need; the screen
+  sits below as a `<pre>` the phone can select from. `copyToClipboard` uses the async
+  API and falls back to a selection-and-`execCommand` copy on an http origin.
 - **The picker is the same picker, as a bottom sheet.** `#overlay` anchors the panel to
   the bottom edge, rows grow to 44px, and a `.picker-actions` row with "Next finished"
   and "New session" replaces the key legend, which is hidden. Both buttons call the same

@@ -121,7 +121,9 @@ Flags: `--port` (7331), `--host` (127.0.0.1), `--token`, `--tls-cert`, `--tls-ke
 Below 720px wide tring stops drawing the ring. The focus terminal fills the screen, and a
 bar under the project tabs shows which session you are in. Tap it to get the same picker
 `Ctrl+Space` opens on desktop, as a sheet you can thumb through; the button beside it jumps
-to the next finished session and counts how many are waiting.
+to the next finished session and counts how many are waiting. Two more buttons do what a
+phone cannot do to a terminal by itself: paste from the clipboard, and copy from the screen —
+the links on it with a tap each, or the screen as text to select from.
 
 The daemon only listens on `127.0.0.1` by default. Reaching it from a phone means binding
 it to the network, and that traffic has to be encrypted — it carries the token, every
