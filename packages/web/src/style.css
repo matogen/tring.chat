@@ -621,7 +621,8 @@ body {
 #switcher .current .tag { color: var(--status, var(--dim)); font-size: 11px; }
 #switcher .current .chev { display: grid; color: var(--muted); }
 #switcher .next,
-#switcher .paste {
+#switcher .paste,
+#switcher .copy {
   flex: 0 0 64px;
   display: flex;
   align-items: center;
@@ -630,11 +631,14 @@ body {
   color: var(--muted);
 }
 /* An icon alone; the "next" button also carries a count. */
-#switcher .paste { flex-basis: 52px; }
+#switcher .paste,
+#switcher .copy { flex-basis: 52px; }
 #switcher .next:disabled,
-#switcher .paste:disabled { color: var(--dim); opacity: .5; cursor: default; }
+#switcher .paste:disabled,
+#switcher .copy:disabled { color: var(--dim); opacity: .5; cursor: default; }
 #switcher .next svg,
-#switcher .paste svg { display: block; }
+#switcher .paste svg,
+#switcher .copy svg { display: block; }
 
 /* The paste sheet's box: the one textarea, sized for a thumb to hold. */
 .paste-box {
@@ -650,6 +654,43 @@ body {
   resize: vertical;
 }
 .paste-box:focus { outline: none; border-color: var(--emerald); }
+
+/* The copy sheet: links with a button each, then the screen as selectable text. */
+.copy-sheet .links { display: grid; gap: 4px; margin-bottom: 14px; }
+.copy-sheet .link {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 0 0 10px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.copy-sheet .link .url {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 12px var(--mono);
+  color: var(--text);
+}
+.copy-sheet .link .btn { flex: 0 0 auto; height: 44px; border: none; border-left: 1px solid var(--line-2); border-radius: 0 6px 6px 0; }
+.copy-box {
+  margin: 0;
+  max-height: 38vh;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: 12px/1.4 var(--mono);
+  white-space: pre;
+  -webkit-user-select: text;
+  user-select: text;
+}
 
 /* Desktop has the key legend; the buttons are the phone's version of it. */
 .picker-actions { display: none; }

@@ -15,6 +15,7 @@ import { FocusTerminal } from './focus-terminal.ts'
 import { followFocus } from './focus-target.ts'
 import { attachImageDrop, insertImages, refuseStrayDrops } from './drop.ts'
 import { attachImagePaste, pasteFromClipboard, type PasteOptions } from './paste.ts'
+import { copyToClipboard, recentLinks, screenText } from './copy.ts'
 import { Thumbnail } from './thumbnail.ts'
 import {
   applyRing, placeInGrid, RING_SIZES, ringSize, setRingSize, type RingSize,
@@ -365,7 +366,7 @@ function paintSwitcher(): void {
   if (sig === switcherSig) return
   switcherSig = sig
   renderSwitcher(switcherEl, focused, done, {
-    onOpen: openPicker, onNext: nextDone, onPaste: pasteFromButton,
+    onOpen: openPicker, onNext: nextDone, onPaste: pasteFromButton, onCopy: copyFromButton,
   })
 }
 
@@ -380,6 +381,15 @@ function pasteFromButton(): void {
   })
 }
 
+/** The switcher's copy button: the screen's links and text, as a sheet to copy from. */
+function copyFromButton(): void {
+  if (!focusedId) return
+  const buffer = focusTerm.term.buffer.active
+  ui.openCopySheet(
+    { text: screenText(buffer, focusTerm.term.rows), links: recentLinks(buffer) },
+    copyToClipboard,
+  )
+}
 
 /* ---------- actions ---------- */
 
