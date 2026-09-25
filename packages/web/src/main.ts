@@ -12,6 +12,7 @@ import type {
 import { actionForEvent, isPrefix, legendForSlot, slotForEvent } from '@tring/shared/keymap'
 import { uploadFile, WsClient } from './ws-client.ts'
 import { FocusTerminal } from './focus-terminal.ts'
+import { DiffPanel } from './diff-panel.ts'
 import { followFocus } from './focus-target.ts'
 import { attachFileDrop, insertFiles, refuseStrayDrops } from './drop.ts'
 import { attachImagePaste, pasteFromClipboard, type PasteOptions } from './paste.ts'
@@ -63,7 +64,14 @@ let focusOnArrival: number | null = null
 
 const focusCell = document.createElement('div')
 focusCell.className = 'focus-cell'
-const focusTerm = new FocusTerminal(focusCell)
+// The terminal gets a host of its own so the diff panel can sit beside it in
+// the same cell. The panel is built first: the terminal's initial fit then
+// already sees the width the panel leaves it.
+const termHost = document.createElement('div')
+termHost.className = 'term-host'
+focusCell.append(termHost)
+const diffPanel = new DiffPanel(focusCell, () => fitTerminal())
+const focusTerm = new FocusTerminal(termHost)
 
 const ws = new WsClient({
   onOpen: () => { hideToast(); reattach() },
@@ -424,6 +432,7 @@ function attachSession(id: string | null): void {
   if (focusedId) prevFocusedId = focusedId
   focusedId = s?.id ?? null
   focusedSlot = s?.slot ?? null
+  diffPanel.setSession(focusedId)
   if (!s) {
     focusTerm.clear()
     paintStatuses()
@@ -536,6 +545,7 @@ function activateProject(id: string): void {
   viewedId = id
   focusedId = null
   focusedSlot = null
+  diffPanel.setSession(null)
   focusTerm.clear()
   // The project's sessions arrive with the next `state`, so the session to
   // return to can only be chosen once they do.
@@ -600,6 +610,15 @@ function sessionMenu(id: string): void {
       if (v.color !== s.color) ws.send({ type: 'color', id, color: v.color })
     },
     () => killSession(s),
+    {
+      open: diffPanel.isOpen,
+      // The panel always describes the centre terminal, so opening it from
+      // another tile brings that tile to the centre first.
+      onToggle: () => {
+        if (!diffPanel.isOpen) focusSession(id)
+        diffPanel.toggle()
+      },
+    },
   )
 }
 
