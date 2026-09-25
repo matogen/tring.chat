@@ -106,3 +106,19 @@ export function decodeOutput(frame: Uint8Array): { id: string; data: Uint8Array 
     data: frame.subarray(sep + 1),
   }
 }
+
+/** One file in a session's uncommitted changes (GET /api/sessions/:id/diff). */
+export interface DiffFile {
+  /** Relative to the repository root. */
+  path: string
+  added: number
+  removed: number
+  /** Unified hunks from the first `@@` on; empty when `note` is set. */
+  patch: string
+  /** Shown instead of the patch: 'binary', 'too large', 'not a regular file'. */
+  note?: string
+}
+
+export type DiffResult =
+  | { cwd: string; files: DiffFile[]; truncated: boolean }
+  | { cwd: string; error: string }

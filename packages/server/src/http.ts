@@ -9,6 +9,7 @@ import {
 } from './security.ts'
 import { collectUsage, defaultTranscriptDir, type UsageReport } from './usage.ts'
 import { MAX_UPLOAD_BYTES, NotAnImage, type UploadStore } from './uploads.ts'
+import { gitDiff } from './git-diff.ts'
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -222,6 +223,16 @@ export function createHandler(opts: HttpOptions) {
       else if (body.status === 'busy') s.tracker.commandStart(Date.now())
       else return json(res, 400, { error: 'status must be "busy" or "done"' })
       return json(res, 200, { ok: true })
+    }
+
+    // The panel beside the centre terminal: what is uncommitted where that
+    // session's shell currently is. git is run without a shell and with the
+    // repo-config program hooks switched off — see git-diff.ts.
+    const diff = url.pathname.match(/^\/api\/sessions\/([^/]+)\/diff$/)
+    if (diff && req.method === 'GET') {
+      const s = pm.findSession(decodeURIComponent(diff[1]!))
+      if (!s) return json(res, 404, { error: 'no such session' })
+      return json(res, 200, await gitDiff(s.cwd))
     }
 
     // Directory listing for the project/session dialogs. A browser can never
