@@ -335,6 +335,7 @@ export const TILE_COLORS = [
 export function openSessionDialog(
   session: SessionInfo,
   onSubmit: (v: { name: string; color: string | null }) => void,
+  diff: { open: boolean; onToggle: () => void },
 ): void {
   const panel = el('div', 'panel')
   panel.append(el('h2', undefined, `Slot ${session.slot}`))
@@ -376,12 +377,18 @@ export function openSessionDialog(
   form.append(colorField)
 
   const actions = el('div', 'actions')
+  const diffBtn = el('button', 'btn diff-toggle',
+    diff.open ? 'Hide diff viewer' : 'Diff viewer') as HTMLButtonElement
+  diffBtn.type = 'button'
+  // On the left, apart from Cancel/Save: it acts now rather than on Save.
+  diffBtn.style.marginRight = 'auto'
+  diffBtn.onclick = () => { close(); diff.onToggle() }
   const cancel = el('button', 'btn', 'Cancel') as HTMLButtonElement
   cancel.type = 'button'
   cancel.onclick = () => close()
   const ok = el('button', 'btn primary', 'Save') as HTMLButtonElement
   ok.type = 'submit'
-  actions.append(cancel, ok)
+  actions.append(diffBtn, cancel, ok)
   form.append(actions)
 
   form.onsubmit = (e) => {
