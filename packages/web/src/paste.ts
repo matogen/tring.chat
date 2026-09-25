@@ -19,7 +19,7 @@
  * a real textarea opens instead, which every phone knows how to paste into.
  */
 
-import { IMAGE, insertImages, type DropOptions } from './drop.ts'
+import { IMAGE, insertFiles, type DropOptions } from './drop.ts'
 
 export type PasteOptions = DropOptions
 
@@ -37,7 +37,7 @@ export function attachImagePaste(el: HTMLElement, opts: PasteOptions): void {
       if (images.length === 0) return
       e.preventDefault()
       e.stopPropagation()
-      void insertImages(images, opts)
+      void insertFiles(images, opts)
     },
     { capture: true },
   )
@@ -98,7 +98,7 @@ export async function pasteFromClipboard(opts: ClipboardPasteOptions): Promise<v
     return
   }
   const { images, text } = await sortClipboard(items)
-  if (images.length > 0) await insertImages(images, opts)
+  if (images.length > 0) await insertFiles(images, opts)
   else if (text) opts.insert(text)
   else opts.onError('nothing on the clipboard to paste')
 }

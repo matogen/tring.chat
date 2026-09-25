@@ -372,14 +372,15 @@ describe('dropped images', () => {
     expect(ok.status).toBe(200)
   })
 
-  it('refuses a file that is not an image, whatever it says it is', async () => {
+  it('takes any file, keeping a cleaned-up version of its name', async () => {
     const r = await rig()
-    // The interesting case: a caller with the token dressing a script up as a
-    // PNG. The name is ours and the bytes are sniffed, so neither lands.
-    const res = await post(r.base, Buffer.from('#!/bin/sh\necho pwned\n'), {
-      'content-type': 'image/png',
+    const res = await fetch(`${r.base}/api/upload?name=${encodeURIComponent('../report.xlsx')}`, {
+      method: 'POST', body: Buffer.from('PK\x03\x04'),
     })
-    expect(res.status).toBe(415)
+    expect(res.status).toBe(200)
+    const { path: file } = await res.json() as { path: string }
+    expect(path.dirname(file)).toBe(path.join(r.dir, 'uploads'))
+    expect(path.basename(file)).toMatch(/^[0-9a-f]{16}-.*report\.xlsx$/)
   })
 
   it('turns away an upload too big to be a screenshot', async () => {

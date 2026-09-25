@@ -8,7 +8,7 @@ import {
   bearerEquals, createOriginCheck, SECURITY_HEADERS, type OriginCheck,
 } from './security.ts'
 import { collectUsage, defaultTranscriptDir, type UsageReport } from './usage.ts'
-import { MAX_UPLOAD_BYTES, NotAnImage, type UploadStore } from './uploads.ts'
+import { MAX_UPLOAD_BYTES, type UploadStore } from './uploads.ts'
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -263,7 +263,7 @@ export function createHandler(opts: HttpOptions) {
     }
 
     /**
-     * An image dropped on a terminal (spec §5.4).
+     * A file dropped on a terminal (spec §5.4).
      *
      * The response is a path on *this* machine, which is the only kind the
      * shell behind the terminal can open — the browser may well be on another
@@ -275,21 +275,20 @@ export function createHandler(opts: HttpOptions) {
 
       const declared = Number(req.headers['content-length'] ?? '0')
       if (declared > MAX_UPLOAD_BYTES) {
-        return json(res, 413, { error: `images are limited to ${MAX_UPLOAD_BYTES >> 20}MB` })
+        return json(res, 413, { error: `uploads are limited to ${MAX_UPLOAD_BYTES >> 20}MB` })
       }
       // Null is a body that overran the limit or was cut short — a lying
       // Content-Length lands here rather than on the 413 above.
       const bytes = await readBytes(req, MAX_UPLOAD_BYTES)
       if (bytes === null) {
-        return tooLarge(req, res, `images are limited to ${MAX_UPLOAD_BYTES >> 20}MB`)
+        return tooLarge(req, res, `uploads are limited to ${MAX_UPLOAD_BYTES >> 20}MB`)
       }
       if (bytes.length === 0) return json(res, 400, { error: 'empty upload' })
 
       try {
-        return json(res, 200, { path: await store.save(bytes) })
-      } catch (err) {
-        if (err instanceof NotAnImage) return json(res, 415, { error: err.message })
-        return json(res, 500, { error: 'cannot write the dropped image' })
+        return json(res, 200, { path: await store.save(bytes, url.searchParams.get('name') ?? '') })
+      } catch {
+        return json(res, 500, { error: 'cannot write the dropped file' })
       }
     }
 

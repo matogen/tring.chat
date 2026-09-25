@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   SLOT_COUNT, slotForEvent, actionForEvent, isPrefix, legendForSlot, SLOT_BINDINGS,
+  isNewlineKey, NEWLINE_SEQ,
 } from '../src/keymap.ts'
 
 const ev = (code: string, mods: Partial<Record<'ctrlKey'|'shiftKey'|'altKey'|'metaKey', boolean>> = {}) =>
@@ -40,6 +41,18 @@ describe('keymap', () => {
   it('ignores Alt and Meta combinations', () => {
     expect(slotForEvent(ev('Digit1', { altKey: true }))).toBeNull()
     expect(slotForEvent(ev('Digit1', { metaKey: true }))).toBeNull()
+  })
+
+  it('sends ESC+CR for Ctrl+Enter and Shift+Enter, plain CR for Enter', () => {
+    expect(NEWLINE_SEQ).toBe('\x1b\r')
+    expect(isNewlineKey(ev('Enter', { ctrlKey: true }))).toBe(true)
+    expect(isNewlineKey(ev('Enter', { shiftKey: true }))).toBe(true)
+    expect(isNewlineKey(ev('NumpadEnter', { ctrlKey: true }))).toBe(true)
+    // Bare Enter still submits, and Alt+Enter is already ESC+CR from xterm.
+    expect(isNewlineKey(ev('Enter'))).toBe(false)
+    expect(isNewlineKey(ev('Enter', { altKey: true }))).toBe(false)
+    expect(isNewlineKey(ev('Enter', { ctrlKey: true, metaKey: true }))).toBe(false)
+    expect(isNewlineKey(ev('KeyR', { ctrlKey: true }))).toBe(false)
   })
 
   it('recognises the prefix and picker actions', () => {

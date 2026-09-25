@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { NotAnImage, sniffImage, UploadStore } from '../src/uploads.ts'
+import { sniffImage, UploadStore } from '../src/uploads.ts'
 
 const dirs: string[] = []
 afterEach(async () => {
@@ -74,9 +74,27 @@ describe('UploadStore', () => {
     expect((await stat(file)).mode & 0o777).toBe(0o600)
   })
 
-  it('refuses a file that is not an image, however it was labelled', async () => {
+  it('keeps the name of a file that is not an image, so Claude knows what it is', async () => {
+    const { dir, uploads } = await store()
+    const file = await uploads.save(Buffer.from('a,b\n1,2\n'), 'Q3 budget.csv')
+
+    expect(path.dirname(file)).toBe(dir)
+    expect(path.basename(file)).toMatch(/^[0-9a-f]{16}-Q3_budget\.csv$/)
+    expect(await readFile(file, 'utf8')).toBe('a,b\n1,2\n')
+  })
+
+  it('never lets the name reach outside the uploads directory', async () => {
+    const { dir, uploads } = await store()
+    for (const name of ['../../etc/passwd', '..\\..\\win.ini', '/abs/path', '..', '']) {
+      const file = await uploads.save(Buffer.from('x'), name)
+      expect(path.dirname(file)).toBe(dir)
+      expect(path.basename(file)).toMatch(/^[0-9a-f]{16}-[\w.-]+$/)
+    }
+  })
+
+  it('names an image by its bytes, whatever the caller called it', async () => {
     const { uploads } = await store()
-    await expect(uploads.save(Buffer.from('#!/bin/sh\necho pwned\n'))).rejects.toBeInstanceOf(NotAnImage)
+    expect(path.basename(await uploads.save(png(), 'shot.txt'))).toMatch(/^[0-9a-f]{16}\.png$/)
   })
 
   it('prunes the oldest drops rather than growing without limit', async () => {
