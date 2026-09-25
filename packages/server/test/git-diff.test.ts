@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type { DiffFile } from '@tring/shared/protocol'
@@ -107,6 +108,11 @@ describe('gitDiff', () => {
 
   it('stops carrying patches past the cap and says so', async () => {
     const dir = await repo()
+    // Tracked, so git counts every line even where the patch is dropped.
+    await writeFile(path.join(dir, 'a.txt'), '')
+    await writeFile(path.join(dir, 'b.txt'), '')
+    git(dir, 'add', '.')
+    git(dir, 'commit', '-qm', 'init')
     const big = 'x'.repeat(1000) + '\n'
     await writeFile(path.join(dir, 'a.txt'), big.repeat(700)) // ~700 KB
     await writeFile(path.join(dir, 'b.txt'), big.repeat(700))
@@ -120,6 +126,19 @@ describe('gitDiff', () => {
     expect(total).toBeLessThanOrEqual(MAX_PATCH_BYTES)
   })
 
+  it('stops reading untracked files once the budget is spent', async () => {
+    const dir = await repo()
+    const big = 'x'.repeat(1000) + '\n'
+    await writeFile(path.join(dir, 'a.txt'), big.repeat(700))
+    await writeFile(path.join(dir, 'b.txt'), big.repeat(700))
+    const r = await gitDiff(dir)
+    if ('error' in r) throw new Error(r.error)
+    expect(r.files.map((f) => [f.path, f.added, f.note])).toEqual([
+      ['a.txt', 700, undefined], ['b.txt', 0, 'too large'],
+    ])
+    expect(r.truncated).toBe(true)
+  })
+
   it('notes an untracked file over the cap without reading it', async () => {
     const dir = await repo()
     await writeFile(path.join(dir, 'huge.log'), Buffer.alloc(MAX_PATCH_BYTES + 1, 0x61))
@@ -127,5 +146,42 @@ describe('gitDiff', () => {
     if ('error' in r) throw new Error(r.error)
     expect(r.files).toEqual([{ path: 'huge.log', added: 0, removed: 0, patch: '', note: 'too large' }])
     expect(r.truncated).toBe(true)
+  })
+
+  it('lists an unreadable untracked file without failing the rest', async () => {
+    const dir = await repo()
+    await writeFile(path.join(dir, 'ok.txt'), 'fine\n')
+    await writeFile(path.join(dir, 'locked.txt'), 'secret\n')
+    await chmod(path.join(dir, 'locked.txt'), 0o000)
+    expect(await files(dir)).toEqual([
+      { path: 'locked.txt', added: 0, removed: 0, patch: '', note: 'unreadable' },
+      { path: 'ok.txt', added: 1, removed: 0, patch: '@@ -0,0 +1,1 @@\n+fine' },
+    ])
+  })
+
+  it('keeps real paths when the user has diff.noprefix set', async () => {
+    const dir = await repo()
+    await mkdir(path.join(dir, 'src'))
+    await writeFile(path.join(dir, 'src', 'app.ts'), 'a\n')
+    git(dir, 'add', '.')
+    git(dir, 'commit', '-qm', 'init')
+    git(dir, 'config', 'diff.noprefix', 'true')
+    await writeFile(path.join(dir, 'src', 'app.ts'), 'b\n')
+    expect((await files(dir)).map((f) => f.path)).toEqual(['src/app.ts'])
+  })
+
+  it('never runs a clean filter the repository configures', async () => {
+    const dir = await repo()
+    const marker = path.join(dir, '..', `${path.basename(dir)}-ran`)
+    await writeFile(path.join(dir, 'a.txt'), 'one\n')
+    await writeFile(path.join(dir, '.gitattributes'), '*.txt filter=evil\n')
+    git(dir, 'add', '.')
+    git(dir, 'commit', '-qm', 'init')
+    git(dir, 'config', 'filter.evil.clean', `touch '${marker}'; cat`)
+    git(dir, 'config', 'filter.evil.process', `touch '${marker}'`)
+    await writeFile(path.join(dir, 'a.txt'), 'two\n')
+
+    expect((await files(dir)).map((f) => f.path)).toEqual(['a.txt'])
+    expect(existsSync(marker)).toBe(false)
   })
 })

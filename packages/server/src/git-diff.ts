@@ -27,6 +27,23 @@ async function git(cwd: string, args: string[]): Promise<string> {
   return stdout
 }
 
+/**
+ * `-c` overrides that empty every filter driver the repository defines.
+ *
+ * `git diff` pipes each stat-dirty file through its `.gitattributes` clean
+ * filter, which is a command from config — the same hazard as fsmonitor, but
+ * under a driver name only the config knows. Reading config runs nothing, so
+ * the names are listed first and each driver is blanked; an empty command is
+ * git's own "no filter", and `required=false` keeps that from being an error.
+ */
+async function filtersOff(root: string): Promise<string[]> {
+  const keys = await git(root, ['config', '--name-only', '--get-regexp', '^filter\\.']).catch(() => '')
+  const drivers = new Set(keys.split('\n').filter(Boolean).map((k) => k.slice(0, k.lastIndexOf('.'))))
+  return [...drivers].flatMap((d) => [
+    '-c', `${d}.clean=`, '-c', `${d}.smudge=`, '-c', `${d}.process=`, '-c', `${d}.required=false`,
+  ])
+}
+
 /** `+++ b/x` → `x`; git appends a TAB when the path has a space in it. */
 const pathOf = (line: string): string => line.slice(6).replace(/\t$/, '')
 
@@ -60,13 +77,25 @@ export function splitPatch(text: string): DiffFile[] {
   return out
 }
 
-/** An untracked file as an all-added patch, never read past the cap. */
-async function untracked(root: string, rel: string): Promise<DiffFile> {
+/**
+ * An untracked file as an all-added patch, never read past `budget`.
+ *
+ * Null for a file that vanished between `ls-files` and here — an editor's
+ * swap file does that constantly — and a note for one that cannot be read,
+ * so one odd file never takes the whole panel down with it.
+ */
+async function untracked(root: string, rel: string, budget: number): Promise<DiffFile | null> {
   const full = path.join(root, rel)
-  const st = await lstat(full)
-  if (!st.isFile()) return { path: rel, added: 0, removed: 0, patch: '', note: 'not a regular file' }
-  if (st.size > MAX_PATCH_BYTES) return { path: rel, added: 0, removed: 0, patch: '', note: 'too large' }
-  const bytes = await readFile(full)
+  let bytes: Buffer
+  try {
+    const st = await lstat(full)
+    if (!st.isFile()) return { path: rel, added: 0, removed: 0, patch: '', note: 'not a regular file' }
+    if (st.size > budget) return { path: rel, added: 0, removed: 0, patch: '', note: 'too large' }
+    bytes = await readFile(full)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+    return { path: rel, added: 0, removed: 0, patch: '', note: 'unreadable' }
+  }
   if (bytes.length === 0) return { path: rel, added: 0, removed: 0, patch: '' }
   if (bytes.subarray(0, 8000).includes(0)) return { path: rel, added: 0, removed: 0, patch: '', note: 'binary' }
   const lines = bytes.toString('utf8').replace(/\n$/, '').split('\n')
@@ -94,12 +123,26 @@ export async function gitDiff(cwd: string): Promise<DiffResult> {
   try {
     const base = await git(root, ['rev-parse', '--verify', '-q', 'HEAD']).then(() => 'HEAD', () => EMPTY_TREE)
     const tracked = splitPatch(await git(root, [
+      ...await filtersOff(root),
       'diff', base, '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames',
+      // Whatever diff.noprefix / diff.mnemonicPrefix the user has set.
+      '--src-prefix=a/', '--dst-prefix=b/',
     ]))
     const names = (await git(root, ['ls-files', '--others', '--exclude-standard', '-z']))
-      .split('\0').filter(Boolean)
-    const files = [...tracked, ...await Promise.all(names.map((n) => untracked(root, n)))]
-      .sort((a, b) => a.path.localeCompare(b.path))
+      .split('\0').filter(Boolean).sort()
+
+    // One at a time against a shrinking budget: a repo that does not ignore
+    // its build output can list thousands of files, and reading them all at
+    // once is hundreds of MB every two seconds.
+    const loose: DiffFile[] = []
+    let readBudget = MAX_PATCH_BYTES
+    for (const n of names) {
+      const f = await untracked(root, n, readBudget)
+      if (!f) continue
+      readBudget = Math.max(0, readBudget - Buffer.byteLength(f.patch))
+      loose.push(f)
+    }
+    const files = [...tracked, ...loose].sort((a, b) => a.path.localeCompare(b.path))
 
     let budget = MAX_PATCH_BYTES
     let truncated = files.some((f) => f.note === 'too large')

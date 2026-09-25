@@ -144,6 +144,9 @@ body {
 .diff-panel {
   flex: 0 0 auto;
   min-width: 0;
+  /* The saved width is only clamped while dragging; a smaller window after
+     that must still leave the terminal a quarter of the cell. */
+  max-width: 75%;
   display: flex;
   flex-direction: column;
   color: var(--text);
