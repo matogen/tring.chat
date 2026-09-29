@@ -84,6 +84,23 @@ export function actionForEvent(e: KeyEventLike): PickerAction | null {
   return PICKER_ACTIONS[e.code as keyof typeof PICKER_ACTIONS] ?? null
 }
 
+/**
+ * What Ctrl+Enter and Shift+Enter send instead of a bare CR.
+ *
+ * A terminal has no modifier bits for Enter — every variant is `\r` on the
+ * wire — so a CLI cannot tell "newline" from "submit" without help. ESC+CR is
+ * the sequence a native terminal is configured to send for those chords, and
+ * what agent CLIs read as "break the line, do not run it". Here the emulator
+ * is ours, so the mapping lives in the page rather than in a terminal profile.
+ */
+export const NEWLINE_SEQ = '\x1b\r'
+
+export function isNewlineKey(e: KeyEventLike): boolean {
+  if (e.code !== 'Enter' && e.code !== 'NumpadEnter') return false
+  // Alt+Enter already arrives as ESC+CR from xterm itself; leave it alone.
+  return (e.ctrlKey || e.shiftKey) && !e.altKey && !e.metaKey
+}
+
 /** Both forms are printed on tiles 11–16, since only one may reach the page. */
 export function legendForSlot(slot: number): string {
   return SLOT_BINDINGS.filter((b) => b.slot === slot)

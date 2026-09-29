@@ -10,10 +10,11 @@ import type {
   ProjectInfo, ScreenSnapshot, ServerMessage, SessionInfo, UpdateInfo,
 } from '@tring/shared/protocol'
 import { actionForEvent, isPrefix, legendForSlot, slotForEvent } from '@tring/shared/keymap'
-import { uploadImage, WsClient } from './ws-client.ts'
+import { uploadFile, WsClient } from './ws-client.ts'
 import { FocusTerminal } from './focus-terminal.ts'
+import { DiffPanel } from './diff-panel.ts'
 import { followFocus } from './focus-target.ts'
-import { attachImageDrop, insertImages, refuseStrayDrops } from './drop.ts'
+import { attachFileDrop, insertFiles, refuseStrayDrops } from './drop.ts'
 import { attachImagePaste, pasteFromClipboard, type PasteOptions } from './paste.ts'
 import { copyToClipboard, recentLinks, screenText } from './copy.ts'
 import { Thumbnail } from './thumbnail.ts'
@@ -63,7 +64,14 @@ let focusOnArrival: number | null = null
 
 const focusCell = document.createElement('div')
 focusCell.className = 'focus-cell'
-const focusTerm = new FocusTerminal(focusCell)
+// The terminal gets a host of its own so the diff panel can sit beside it in
+// the same cell. The panel is built first: the terminal's initial fit then
+// already sees the width the panel leaves it.
+const termHost = document.createElement('div')
+termHost.className = 'term-host'
+focusCell.append(termHost)
+const diffPanel = new DiffPanel(focusCell, () => fitTerminal())
+const focusTerm = new FocusTerminal(termHost)
 
 const ws = new WsClient({
   onOpen: () => { hideToast(); reattach() },
@@ -76,16 +84,16 @@ focusTerm.onInput = (data) => {
   if (focusedId) ws.send({ type: 'input', id: focusedId, data })
 }
 
-// Drag an image onto the terminal and its path is typed into the prompt, the
+// Drag a file onto the terminal and its path is typed into the prompt, the
 // way dropping a file on any other terminal types one (see drop.ts).
 refuseStrayDrops(window)
 const pasteOpts: PasteOptions = {
-  upload: uploadImage,
+  upload: uploadFile,
   ready: () => focusedId !== null,
   insert: (text) => { focusTerm.paste(text); focusTerm.focus() },
   onError: showToast,
 }
-attachImageDrop(focusCell, pasteOpts)
+attachFileDrop(focusCell, pasteOpts)
 // Ctrl+V with a screenshot on the clipboard goes the same way (see paste.ts).
 attachImagePaste(focusCell, pasteOpts)
 // The prefix never reaches the PTY, and nothing reaches it while an overlay
@@ -376,7 +384,7 @@ function pasteFromButton(): void {
     ...pasteOpts,
     fallback: () => ui.openPasteSheet({
       onText: pasteOpts.insert,
-      onImages: (files) => { void insertImages(files, pasteOpts) },
+      onImages: (files) => { void insertFiles(files, pasteOpts) },
     }),
   })
 }
@@ -424,6 +432,7 @@ function attachSession(id: string | null): void {
   if (focusedId) prevFocusedId = focusedId
   focusedId = s?.id ?? null
   focusedSlot = s?.slot ?? null
+  diffPanel.setSession(focusedId)
   if (!s) {
     focusTerm.clear()
     paintStatuses()
@@ -536,6 +545,7 @@ function activateProject(id: string): void {
   viewedId = id
   focusedId = null
   focusedSlot = null
+  diffPanel.setSession(null)
   focusTerm.clear()
   // The project's sessions arrive with the next `state`, so the session to
   // return to can only be chosen once they do.
@@ -593,10 +603,32 @@ function promptNewProject(blocking: boolean): void {
 function sessionMenu(id: string): void {
   const s = sessionById(id)
   if (!s) return
-  ui.openSessionDialog(s, (v) => {
-    if (v.name !== (s.name ?? '')) ws.send({ type: 'rename', id, name: v.name })
-    if (v.color !== s.color) ws.send({ type: 'color', id, color: v.color })
-  })
+  ui.openSessionDialog(
+    s,
+    (v) => {
+      if (v.name !== (s.name ?? '')) ws.send({ type: 'rename', id, name: v.name })
+      if (v.color !== s.color) ws.send({ type: 'color', id, color: v.color })
+    },
+    () => killSession(s),
+    {
+      open: diffPanel.isOpen,
+      // The panel always describes the centre terminal, so opening it from
+      // another tile brings that tile to the centre first.
+      onToggle: () => {
+        if (!diffPanel.isOpen) focusSession(id)
+        diffPanel.toggle()
+      },
+    },
+  )
+}
+
+/** Kills the PTY and frees the slot, so the tile goes back to `+`. */
+function killSession(s: SessionInfo): void {
+  ui.openConfirm(
+    'Delete session',
+    `Slot ${s.slot} — ${s.cwd}. The slot goes back to empty.`,
+    () => ws.send({ type: 'kill', id: s.id }),
+  )
 }
 
 function projectMenu(id: string): void {
@@ -743,8 +775,7 @@ function pickerKey(e: KeyboardEvent): void {
     case 'kill':
       if (!current) break
       ui.close(); overlayMode = null
-      ui.openConfirm('Kill session', `Slot ${current.slot} — ${current.cwd}`, () =>
-        ws.send({ type: 'kill', id: current.id }))
+      killSession(current)
       break
     case 'mark-seen':
       if (current) ws.send({ type: 'ack', id: current.id })

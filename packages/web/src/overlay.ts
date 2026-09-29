@@ -335,6 +335,8 @@ export const TILE_COLORS = [
 export function openSessionDialog(
   session: SessionInfo,
   onSubmit: (v: { name: string; color: string | null }) => void,
+  onDelete: () => void,
+  diff: { open: boolean; onToggle: () => void },
 ): void {
   const panel = el('div', 'panel')
   panel.append(el('h2', undefined, `Slot ${session.slot}`))
@@ -376,12 +378,23 @@ export function openSessionDialog(
   form.append(colorField)
 
   const actions = el('div', 'actions')
+  // Same shape as the project dialog: the destructive action sits apart from
+  // Cancel/Save so it is never the button you hit on the way to Save.
+  const del = el('button', 'btn danger', 'Delete') as HTMLButtonElement
+  del.type = 'button'
+  del.onclick = () => { close(); onDelete() }
+  const diffBtn = el('button', 'btn diff-toggle',
+    diff.open ? 'Hide diff viewer' : 'Diff viewer') as HTMLButtonElement
+  diffBtn.type = 'button'
+  // Delete and this sit on the left: both act now rather than on Save.
+  diffBtn.style.marginRight = 'auto'
+  diffBtn.onclick = () => { close(); diff.onToggle() }
   const cancel = el('button', 'btn', 'Cancel') as HTMLButtonElement
   cancel.type = 'button'
   cancel.onclick = () => close()
   const ok = el('button', 'btn primary', 'Save') as HTMLButtonElement
   ok.type = 'submit'
-  actions.append(cancel, ok)
+  actions.append(del, diffBtn, cancel, ok)
   form.append(actions)
 
   form.onsubmit = (e) => {

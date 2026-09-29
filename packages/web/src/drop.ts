@@ -1,5 +1,5 @@
 /**
- * Dropping images on the terminal (spec §5.4).
+ * Dropping files on the terminal (spec §5.4).
  *
  * A terminal you drag a file onto is expected to type its path for you. This
  * one is a web page, so there is no path to type: the browser hands over the
@@ -8,7 +8,7 @@
  * where — and that is what gets typed.
  */
 
-/** Images Claude Code can read; anything else in the drop is left alone. */
+/** Images Claude Code can read, for pastes; a drop takes any file. */
 export const IMAGE = /^image\/(png|jpeg|gif|webp)$/
 
 export interface DropOptions {
@@ -44,7 +44,7 @@ export function refuseStrayDrops(target: WindowEventHandlers & EventTarget): voi
   }
 }
 
-export function attachImageDrop(el: HTMLElement, opts: DropOptions): void {
+export function attachFileDrop(el: HTMLElement, opts: DropOptions): void {
   // dragenter and dragleave both fire again for every child element the
   // pointer crosses, so the highlight is counted in rather than toggled.
   let depth = 0
@@ -83,28 +83,22 @@ export function attachImageDrop(el: HTMLElement, opts: DropOptions): void {
 }
 
 async function receive(files: File[], opts: DropOptions): Promise<void> {
-  const images = files.filter((f) => IMAGE.test(f.type))
-  if (images.length === 0) {
-    opts.onError(files.length > 0
-      ? 'only PNG, JPEG, GIF and WebP images can be dropped on a terminal'
-      : 'nothing to drop')
-    return
-  }
-  await insertImages(images, opts)
+  if (files.length === 0) return opts.onError('nothing to drop')
+  await insertFiles(files, opts)
 }
 
 /**
- * Uploads each image and types the paths, however they arrived — dropped,
+ * Uploads each file and types the paths, however they arrived — dropped,
  * pasted with Ctrl+V, or read off a phone's clipboard (see paste.ts).
  */
-export async function insertImages(images: Blob[], opts: DropOptions): Promise<void> {
+export async function insertFiles(files: Blob[], opts: DropOptions): Promise<void> {
   if (!opts.ready()) {
-    opts.onError('focus a session first — the image goes into its prompt')
+    opts.onError('focus a session first — the file goes into its prompt')
     return
   }
 
   const paths: string[] = []
-  for (const file of images) {
+  for (const file of files) {
     try {
       paths.push(pathForPrompt(await opts.upload(file)))
     } catch (err) {
@@ -114,6 +108,6 @@ export async function insertImages(images: Blob[], opts: DropOptions): Promise<v
     }
   }
   // One paste with a trailing space, so the next thing typed is a sentence
-  // about the image rather than part of its name.
+  // about the file rather than part of its name.
   if (paths.length > 0) opts.insert(paths.join(' ') + ' ')
 }

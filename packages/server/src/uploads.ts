@@ -3,7 +3,7 @@ import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 /**
- * Images dropped on the terminal, landed on the daemon's disk.
+ * Files dropped on the terminal, landed on the daemon's disk.
  *
  * A browser hands a dropped file over as bytes and deliberately withholds its
  * path, so there is nothing to type into the prompt — and the path would be
@@ -28,8 +28,8 @@ const KEEP = 20
  * Sniffed, never trusted from the request.
  *
  * A content-type header and a filename are both the caller's to choose, and
- * the extension is what tells Claude Code how to read the file — so the only
- * honest source is the first few bytes. These four are what it accepts.
+ * the extension is what tells Claude Code how to read an image — so for these
+ * four, the only honest source is the first few bytes.
  */
 export function sniffImage(bytes: Uint8Array): string | null {
   const at = (i: number, sig: readonly number[]): boolean =>
@@ -43,24 +43,24 @@ export function sniffImage(bytes: Uint8Array): string | null {
   return null
 }
 
-export class NotAnImage extends Error {
-  constructor() {
-    super('only PNG, JPEG, GIF and WebP images can be dropped on a terminal')
-  }
-}
-
 export class UploadStore {
   constructor(private readonly dir: string, private readonly keep: number = KEEP) {}
 
-  /** Writes the bytes and returns the absolute path to type into the prompt. */
-  async save(bytes: Uint8Array): Promise<string> {
+  /**
+   * Writes the bytes and returns the absolute path to type into the prompt.
+   *
+   * An image is named by its bytes. Anything else — a spreadsheet, a PDF, a
+   * log — keeps its own name, since that is how Claude tells a .xlsx from a
+   * .csv, cut down to word characters, dots and dashes: no separator survives,
+   * so the random prefix always stays the first segment and traversal has
+   * nothing to work with.
+   */
+  async save(bytes: Uint8Array, name = ''): Promise<string> {
     const ext = sniffImage(bytes)
-    if (!ext) throw new NotAnImage()
+    const tail = ext ?? '-' + (name.replace(/[^\w.-]+/g, '_').slice(-80) || 'file')
 
     await mkdir(this.dir, { recursive: true, mode: 0o700 })
-    // Ours, not the client's, and unguessable — a dropped name never touches
-    // a path, so there is no traversal to get wrong.
-    const file = path.join(this.dir, randomBytes(8).toString('hex') + ext)
+    const file = path.join(this.dir, randomBytes(8).toString('hex') + tail)
     await writeFile(file, bytes, { mode: 0o600 })
     await this.prune()
     return file

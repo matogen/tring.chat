@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest'
+import { execFileSync } from 'node:child_process'
 import { createServer, request, type Server } from 'node:http'
 import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
@@ -159,6 +160,25 @@ describe('HTTP API', () => {
     const res = await fetch(`${r.base}/api/sessions/${s.id}/done`, { method: 'POST' })
     expect(res.status).toBe(200)
     expect(s.tracker.status).toBe('done')
+  })
+
+  it('serves the focused session\'s uncommitted changes', async () => {
+    const r = await rig()
+    execFileSync('git', ['init', '-q'], { cwd: r.dir })
+    await writeFile(path.join(r.dir, 'hello.txt'), 'hi\n')
+    const p = r.pm.createProject('demo', r.dir)
+    const s = r.pm.create(p, {})!
+
+    const res = await fetch(`${r.base}/api/sessions/${s.id}/diff`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as { files: { path: string }[] }
+    expect(body.files.map((f) => f.path)).toContain('hello.txt')
+  })
+
+  it('404s a diff for a session that does not exist', async () => {
+    const r = await rig()
+    const res = await fetch(`${r.base}/api/sessions/nope/diff`)
+    expect(res.status).toBe(404)
   })
 
   it('lists sessions with their project name for scripts', async () => {
@@ -372,14 +392,15 @@ describe('dropped images', () => {
     expect(ok.status).toBe(200)
   })
 
-  it('refuses a file that is not an image, whatever it says it is', async () => {
+  it('takes any file, keeping a cleaned-up version of its name', async () => {
     const r = await rig()
-    // The interesting case: a caller with the token dressing a script up as a
-    // PNG. The name is ours and the bytes are sniffed, so neither lands.
-    const res = await post(r.base, Buffer.from('#!/bin/sh\necho pwned\n'), {
-      'content-type': 'image/png',
+    const res = await fetch(`${r.base}/api/upload?name=${encodeURIComponent('../report.xlsx')}`, {
+      method: 'POST', body: Buffer.from('PK\x03\x04'),
     })
-    expect(res.status).toBe(415)
+    expect(res.status).toBe(200)
+    const { path: file } = await res.json() as { path: string }
+    expect(path.dirname(file)).toBe(path.join(r.dir, 'uploads'))
+    expect(path.basename(file)).toMatch(/^[0-9a-f]{16}-.*report\.xlsx$/)
   })
 
   it('turns away an upload too big to be a screenshot', async () => {

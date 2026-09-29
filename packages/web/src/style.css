@@ -127,6 +127,81 @@ body {
   box-shadow: inset 0 0 0 2px var(--mint), 0 0 24px rgba(62, 233, 164, 0.25);
 }
 
+/* The diff panel shares the focus cell with the terminal (diff-panel.ts). */
+.focus-cell { display: flex; }
+.term-host { flex: 1 1 auto; min-width: 0; height: 100%; }
+
+.diff-handle {
+  flex: 0 0 5px;
+  margin: 0 3px;
+  border-radius: 3px;
+  background: var(--line);
+  cursor: col-resize;
+  touch-action: none;
+}
+.diff-handle:hover, .diff-handle.dragging { background: var(--emerald); }
+
+.diff-panel {
+  flex: 0 0 auto;
+  min-width: 0;
+  /* The saved width is only clamped while dragging; a smaller window after
+     that must still leave the terminal a quarter of the cell. */
+  max-width: 75%;
+  display: flex;
+  flex-direction: column;
+  color: var(--text);
+  font: 11.5px/1.55 var(--mono);
+}
+.diff-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 2px 4px 6px;
+  border-bottom: 1px solid var(--line);
+}
+.diff-title { font-weight: 700; }
+.diff-plus { color: var(--mint); }
+.diff-minus { color: var(--red); }
+.diff-close {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  cursor: pointer;
+}
+.diff-close:hover { color: var(--text); }
+.diff-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.diff-files { padding: 4px 0; border-bottom: 1px solid var(--line); }
+.diff-file-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  padding: 1px 4px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.diff-file-row:hover { background: var(--panel-2); color: var(--text); }
+.diff-file-row .path { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-file-head {
+  position: sticky;
+  top: 0;
+  padding: 4px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+  font-weight: 700;
+}
+.dl { display: grid; grid-template-columns: 5ch 5ch 1fr; white-space: pre; }
+.dl .ln { padding-right: 1ch; color: var(--dim); text-align: right; user-select: none; }
+.dl-add { background: rgba(62, 233, 164, 0.12); }
+.dl-del { background: rgba(242, 84, 91, 0.12); }
+.dl-hunk { display: block; padding: 2px 4px; color: var(--dim); }
+.diff-note { padding: 6px 4px; color: var(--dim); }
+
 .tile {
   position: relative;
   min-width: 0;
@@ -696,6 +771,7 @@ body {
 .picker-actions { display: none; }
 
 @media (max-width: 720px) {
+  .diff-panel, .diff-handle, .diff-toggle { display: none !important; }
   /* The ring is not drawn: tiles are unreadable at this size and the one
      terminal you can read wants every pixel. Tiles stay in the DOM so slot
      bookkeeping is untouched; a hidden canvas simply never paints. */

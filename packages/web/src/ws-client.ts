@@ -32,8 +32,10 @@ export async function api<T>(path: string): Promise<T> {
  * terminal can actually open — the browser's own path for the file does not
  * exist, and would be the wrong machine's if it did.
  */
-export async function uploadImage(file: Blob): Promise<string> {
-  const res = await fetch(`${DAEMON}/api/upload`, {
+export async function uploadFile(file: Blob): Promise<string> {
+  // A pasted screenshot is a bare Blob with no name; the daemon names those.
+  const name = file instanceof File ? `?name=${encodeURIComponent(file.name)}` : ''
+  const res = await fetch(`${DAEMON}/api/upload${name}`, {
     method: 'POST',
     headers: {
       ...(TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}),
