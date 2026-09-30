@@ -274,6 +274,17 @@ so tring sends `ESC`+`CR` for those two chords, which is what Claude Code and ot
 agent CLIs read as "break the line". Native terminals need `/terminal-setup` to do the
 same thing; here it works out of the box.
 
+## Rearranging tiles
+
+Drag a tile onto another slot to move it there. Dropped on an empty slot it simply
+moves; dropped on another session the two swap. The slot is the key, so a moved session
+answers to its new number from then on. Escape abandons a drag. The order is saved with
+the project and survives a restart.
+
+`$TRING_SLOT` is fixed when a session's shell starts, so a moved session keeps reporting
+its old slot until it is restarted. Nothing in tring relies on it: hooks and the API
+address sessions by `$TRING_SESSION_ID`.
+
 ## Naming and colouring tiles
 
 Right-click a tile — or press `r` in the picker — to give it a name and a colour.

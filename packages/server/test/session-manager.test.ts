@@ -62,3 +62,49 @@ describe('SessionManager.respawn', () => {
     expect(seen).toEqual([null])
   })
 })
+
+describe('SessionManager.move', () => {
+  it('moves a session into an empty slot', () => {
+    const m = manager()
+    const s = m.create({ slot: 2 })
+    m.move(s.id, 5)
+    expect(s.slot).toBe(5)
+    expect(m.at(5)).toBe(s)
+    expect(m.at(2)).toBeUndefined()
+  })
+
+  it('swaps with whatever holds an occupied slot, in one structure change', () => {
+    const m = manager()
+    const a = m.create({ slot: 2 })
+    const b = m.create({ slot: 5 })
+    const seen: [string | undefined, string | undefined][] = []
+    m.onStructureChange = () => seen.push([m.at(2)?.id, m.at(5)?.id])
+
+    m.move(a.id, 5)
+    expect([a.slot, b.slot]).toEqual([5, 2])
+    expect(seen).toEqual([[b.id, a.id]])
+    expect(m.list().map((s) => s.id)).toEqual([b.id, a.id])
+  })
+
+  it('does nothing for its own slot, an unknown id or an out-of-range slot', () => {
+    const m = manager()
+    const s = m.create({ slot: 3 })
+    let changes = 0
+    m.onStructureChange = () => { changes++ }
+
+    m.move(s.id, 3)
+    m.move('nobody', 4)
+    m.move(s.id, 0)
+    m.move(s.id, 17)
+    m.move(s.id, 2.5)
+    expect(changes).toBe(0)
+    expect(m.at(3)).toBe(s)
+  })
+
+  it('respawns into the slot it was moved to', () => {
+    const m = manager()
+    const s = m.create({ slot: 1 })
+    m.move(s.id, 9)
+    expect(m.respawn(s.id)!.slot).toBe(9)
+  })
+})

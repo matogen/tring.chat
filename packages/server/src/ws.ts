@@ -158,6 +158,9 @@ export class Hub {
       case 'color':
         pm.findManager(msg.id)?.setColor(msg.id, msg.color)
         break
+      case 'move':
+        pm.findManager(msg.id)?.move(msg.id, msg.slot)
+        break
       case 'ack':
         pm.findSession(msg.id)?.ack()
         break

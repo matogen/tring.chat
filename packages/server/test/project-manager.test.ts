@@ -54,6 +54,21 @@ describe('ProjectManager', () => {
     expect(restored.list()[0]?.sessions[0]?.color).toBe('#a06cf0')
   })
 
+  it('remembers a dragged session order across a restart', async () => {
+    const { dir, statePath, pm } = await fixture()
+    const id = pm.createProject('api', dir)
+    const a = pm.create(id, { name: 'a', cwd: dir })!
+    pm.create(id, { name: 'b', cwd: dir })
+    pm.findManager(a.id)!.move(a.id, 2)
+    await pm.save()
+    await pm.dispose()
+
+    const restored = await open(statePath, dir)
+    live.push(restored)
+    const slots = restored.list()[0]!.sessions.map((s) => [s.slot, s.name])
+    expect(slots).toEqual([[1, 'b'], [2, 'a']])
+  })
+
   it('refuses a colour that is not a plain hex value, since it reaches CSS', async () => {
     const { dir, pm } = await fixture()
     const id = pm.createProject('api', dir)
