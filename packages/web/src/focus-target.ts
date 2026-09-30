@@ -25,7 +25,10 @@ export function followFocus(
   sessions: readonly SessionInfo[],
 ): FocusTarget | null {
   if (!current) return null
-  if (sessions.some((s) => s.id === current.id)) return current
+  // A session dragged to another slot keeps its id, and the slot has to come
+  // along with it, or a later respawn would be followed into the wrong tile.
+  const same = sessions.find((s) => s.id === current.id)
+  if (same) return same.slot === current.slot ? current : { id: same.id, slot: same.slot }
   const heir = sessions.find((s) => s.slot === current.slot)
   // No heir means the slot really is empty — killed, or its project deleted —
   // and the centre should go blank rather than keep a dead session's pixels.

@@ -58,7 +58,8 @@ export interface SessionOptions {
 export class Session {
   readonly id: string
   readonly projectId: string
-  readonly slot: number
+  /** Changes only through SessionManager.move; `$TRING_SLOT` keeps the spawn-time value. */
+  slot: number
   readonly command: string | null
   name: string | null
   color: string | null

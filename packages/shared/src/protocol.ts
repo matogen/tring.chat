@@ -58,6 +58,8 @@ export type ClientMessage =
   | { type: 'kill'; id: string }
   | { type: 'rename'; id: string; name: string }
   | { type: 'color'; id: string; color: string | null }
+  /** Into `slot`, swapping with any session already there. */
+  | { type: 'move'; id: string; slot: number }
   | { type: 'ack'; id: string }
   | { type: 'respawn'; id: string }
   | { type: 'activateProject'; projectId: string }

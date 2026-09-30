@@ -266,6 +266,10 @@ body {
 }
 .tile.empty:hover { border-color: var(--emerald); color: var(--muted); }
 .tile.viewing { box-shadow: inset 0 0 0 1px var(--emerald); }
+/* Dragging a tile to another slot (tile-drag.ts). */
+.tile.dragging { opacity: .45; }
+.tile.drop-target { border-color: var(--emerald); border-style: solid; box-shadow: inset 0 0 0 2px var(--emerald); }
+body.tile-dragging, body.tile-dragging .tile { cursor: grabbing; }
 .tile.st-busy { animation: pulse 1.4s ease-in-out infinite; }
 @keyframes pulse { 50% { border-color: rgba(245, 182, 66, 0.35); } }
 

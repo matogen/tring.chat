@@ -15,6 +15,7 @@ import { FocusTerminal } from './focus-terminal.ts'
 import { DiffPanel } from './diff-panel.ts'
 import { followFocus } from './focus-target.ts'
 import { attachFileDrop, insertFiles, refuseStrayDrops } from './drop.ts'
+import { attachTileDrag } from './tile-drag.ts'
 import { attachImagePaste, pasteFromClipboard, type PasteOptions } from './paste.ts'
 import { copyToClipboard, recentLinks, screenText } from './copy.ts'
 import { Thumbnail } from './thumbnail.ts'
@@ -94,6 +95,10 @@ const pasteOpts: PasteOptions = {
   onError: showToast,
 }
 attachFileDrop(focusCell, pasteOpts)
+attachTileDrag(ringEl, {
+  sessionAt: (slot) => sessionAt(slot)?.id,
+  onMove: (id, slot) => ws.send({ type: 'move', id, slot }),
+})
 // Ctrl+V with a screenshot on the clipboard goes the same way (see paste.ts).
 attachImagePaste(focusCell, pasteOpts)
 // The prefix never reaches the PTY, and nothing reaches it while an overlay
@@ -228,6 +233,7 @@ function renderRing(): void {
     // from bubbling and so never reaches the guard below.
     tile.onmousedown = (e) => e.preventDefault()
     placeInGrid(tile, slot, size)
+    tile.dataset['slot'] = String(slot)
 
     if (!s) {
       tile.classList.add('empty')
@@ -468,7 +474,10 @@ function reattach(): void {
 function reconcileFocus(): void {
   if (focusedId === null || focusedSlot === null) return
   const next = followFocus({ id: focusedId, slot: focusedSlot }, sessions())
-  if (next && next.id === focusedId) return
+  if (next && next.id === focusedId) {
+    focusedSlot = next.slot
+    return
+  }
   attachSession(next?.id ?? null)
 }
 

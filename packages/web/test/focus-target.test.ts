@@ -47,6 +47,8 @@ describe('followFocus', () => {
 
   it('prefers the id over the slot, so a moved session is not mistaken for an heir', () => {
     const list = [session('a', 3), session('b', 1)]
-    expect(followFocus({ id: 'a', slot: 1 }, list)).toEqual({ id: 'a', slot: 1 })
+    // ...and the slot comes along, or a later respawn of `a` would send the
+    // focus to whatever now sits where it used to be.
+    expect(followFocus({ id: 'a', slot: 1 }, list)).toEqual({ id: 'a', slot: 3 })
   })
 })

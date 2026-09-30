@@ -109,6 +109,27 @@ export class SessionManager {
     this.structureChanged()
   }
 
+  /**
+   * Drags a session to another slot, swapping with whatever already holds it.
+   * One structure change for the pair, so no client ever sees both sessions
+   * claiming a slot, or one of them nowhere.
+   */
+  move(id: string, slot: number): void {
+    const s = this.byId.get(id)
+    if (!s || !Number.isInteger(slot) || slot < 1 || slot > SLOT_COUNT) return
+    if (s.slot === slot) return
+    const other = this.bySlot.get(slot)
+    const from = s.slot
+    this.bySlot.delete(from)
+    if (other) {
+      other.slot = from
+      this.bySlot.set(from, other)
+    }
+    s.slot = slot
+    this.bySlot.set(slot, s)
+    this.structureChanged()
+  }
+
   kill(id: string): void {
     const s = this.byId.get(id)
     if (!s) return
