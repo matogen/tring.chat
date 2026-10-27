@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   SLOT_COUNT, slotForEvent, actionForEvent, isPrefix, legendForSlot, SLOT_BINDINGS,
-  isNewlineKey, NEWLINE_SEQ,
+  isNewlineKey, NEWLINE_SEQ, isPasteKey,
 } from '../src/keymap.ts'
 
 const ev = (code: string, mods: Partial<Record<'ctrlKey'|'shiftKey'|'altKey'|'metaKey', boolean>> = {}) =>
@@ -53,6 +53,16 @@ describe('keymap', () => {
     expect(isNewlineKey(ev('Enter', { altKey: true }))).toBe(false)
     expect(isNewlineKey(ev('Enter', { ctrlKey: true, metaKey: true }))).toBe(false)
     expect(isNewlineKey(ev('KeyR', { ctrlKey: true }))).toBe(false)
+  })
+
+  it('treats Ctrl+V as paste everywhere but a Mac', () => {
+    expect(isPasteKey(ev('KeyV', { ctrlKey: true }), false)).toBe(true)
+    // On a Mac Cmd+V pastes and Ctrl+V stays ^V.
+    expect(isPasteKey(ev('KeyV', { ctrlKey: true }), true)).toBe(false)
+    // Ctrl+Shift+V already reaches the browser as a paste.
+    expect(isPasteKey(ev('KeyV', { ctrlKey: true, shiftKey: true }), false)).toBe(false)
+    expect(isPasteKey(ev('KeyV'), false)).toBe(false)
+    expect(isPasteKey(ev('KeyC', { ctrlKey: true }), false)).toBe(false)
   })
 
   it('recognises the prefix and picker actions', () => {

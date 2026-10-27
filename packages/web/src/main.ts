@@ -104,6 +104,14 @@ attachImagePaste(focusCell, pasteOpts)
 // The prefix never reaches the PTY, and nothing reaches it while an overlay
 // is up (spec §5.4).
 focusTerm.shouldSendKey = (e) => !ui.isOpen() && !isPrefix(e)
+// Highlighting copies. The copy can borrow focus for a hidden textarea on an
+// http origin, so it is handed back to the terminal afterwards.
+focusTerm.onSelect = (text) => {
+  void copyToClipboard(text).then((ok) => {
+    if (!ok) showToast('could not copy the selection')
+    focusTerm.focus()
+  })
+}
 
 /* ---------- state ---------- */
 
