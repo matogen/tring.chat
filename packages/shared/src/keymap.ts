@@ -101,6 +101,16 @@ export function isNewlineKey(e: KeyEventLike): boolean {
   return (e.ctrlKey || e.shiftKey) && !e.altKey && !e.metaKey
 }
 
+/**
+ * Ctrl+V off a Mac, which should paste. xterm turns it into ^V for the shell
+ * and cancels the keystroke, so the browser never fires the paste event that
+ * carries the clipboard — text or a screenshot. On a Mac Cmd+V pastes and
+ * Ctrl+V stays ^V, as in any other terminal there.
+ */
+export function isPasteKey(e: KeyEventLike, isMac: boolean): boolean {
+  return !isMac && e.code === 'KeyV' && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey
+}
+
 /** Both forms are printed on tiles 11–16, since only one may reach the page. */
 export function legendForSlot(slot: number): string {
   return SLOT_BINDINGS.filter((b) => b.slot === slot)

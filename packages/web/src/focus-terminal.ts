@@ -1,11 +1,13 @@
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
-import { isNewlineKey, NEWLINE_SEQ } from '@tring/shared/keymap'
+import { isNewlineKey, isPasteKey, NEWLINE_SEQ } from '@tring/shared/keymap'
 import { xtermTheme } from './xterm-theme.ts'
 
 /** RIS. xterm maps ESC c to a full reset, and it travels in the write queue. */
 const RESET = '\x1bc'
+
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform)
 
 /** The single real terminal (spec §5.4). Thumbnails are canvases, not this. */
 export class FocusTerminal {
@@ -15,6 +17,8 @@ export class FocusTerminal {
   onInput: ((data: string) => void) | null = null
   /** Return true to let the key reach the PTY, false to swallow it. */
   shouldSendKey: ((e: KeyboardEvent) => boolean) | null = null
+  /** A mouse selection just finished; the text it covers. */
+  onSelect: ((text: string) => void) | null = null
 
   constructor(container: HTMLElement) {
     this.term = new Terminal({
@@ -23,6 +27,8 @@ export class FocusTerminal {
       fontSize: 13,
       cursorBlink: true,
       allowProposedApi: true,
+      // Shift+drag selects past mouse tracking elsewhere; this is the Mac's.
+      macOptionClickForcesSelection: true,
       scrollback: 5000,
     })
     this.term.loadAddon(this.fit)
@@ -39,6 +45,9 @@ export class FocusTerminal {
     this.term.onData((d) => this.onInput?.(d))
     this.term.attachCustomKeyEventHandler((e) => {
       if (this.shouldSendKey?.(e) === false) return false
+      // Returning false without preventDefault leaves the keystroke to the
+      // browser, which fires the paste event xterm and paste.ts read.
+      if (e.type === 'keydown' && isPasteKey(e, IS_MAC)) return false
       if (e.type === 'keydown' && isNewlineKey(e)) {
         e.preventDefault()
         this.onInput?.(NEWLINE_SEQ)
@@ -47,6 +56,7 @@ export class FocusTerminal {
       return true
     })
     this.bindTouchScroll(container)
+    this.bindCopyOnSelect(container)
     this.fitNow()
   }
 
@@ -105,6 +115,22 @@ export class FocusTerminal {
       },
       { capture: true, passive: false },
     )
+  }
+
+  /**
+   * Highlighting copies, as in every Linux terminal. Copied on mouseup rather
+   * than on each selection change, which fires for every cell of a drag.
+   * While Claude Code tracks the mouse a plain drag is its, not a selection;
+   * Shift+drag (Option+drag on a Mac) selects regardless.
+   */
+  private bindCopyOnSelect(container: HTMLElement): void {
+    container.addEventListener('mouseup', () => {
+      // xterm settles a double- or triple-click selection after the mouseup.
+      queueMicrotask(() => {
+        const text = this.term.getSelection()
+        if (text) this.onSelect?.(text)
+      })
+    })
   }
 
   /** True when xterm would ignore the touch and needs it as a wheel instead. */
