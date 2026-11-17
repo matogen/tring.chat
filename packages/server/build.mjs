@@ -22,7 +22,7 @@ await build({
   banner: { js: '#!/usr/bin/env node' },
   // Native and prebuilt packages stay external; they are real dependencies
   // and must be resolved from node_modules at runtime, not inlined.
-  external: ['node-pty', '@xterm/headless', '@xterm/addon-serialize', 'ws'],
+  external: ['node-pty', '@xterm/headless', '@xterm/addon-serialize', '@xterm/addon-unicode11', 'ws'],
 })
 await chmod('dist/tring.js', 0o755)
 

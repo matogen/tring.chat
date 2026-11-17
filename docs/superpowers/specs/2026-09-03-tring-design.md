@@ -5,6 +5,18 @@ Status: approved design, awaiting implementation plan
 
 ## 0. Changelog
 
+**2026-11-17 — Attach and talk on a phone.** The switcher bar (§5.11) becomes two rows.
+On top are the session and "next finished". Below are Esc, paste, an attach button that
+opens the phone's camera, photos or files picker, a mic button that types speech into the
+prompt through the browser's own speech recognition, and copy. Nothing changes on the
+daemon: attached files use the existing upload.
+
+**2026-11-17 — Unicode 11 widths.** Both terminals, the browser's and the daemon's
+headless one, load `@xterm/addon-unicode11`. xterm's built-in Unicode 6 table makes an
+emoji one column wide, where Claude Code counts two. Its redraws, which move the cursor to
+a cell and rewrite only that, then landed one cell off after any emoji and scattered
+stray letters over the screen.
+
 **2026-09-11 — Phone view.** Below 720px the ring is not drawn and a switcher bar
 (§5.11) takes its place: the focused session's slot, name and status, a tap to open the
 picker, a tap to the next finished session. The picker becomes a bottom sheet with 44px
@@ -555,12 +567,37 @@ while meaning nothing of the sort.
   treats as "nothing to draw". Thumbnails were never readable at phone size, and the one
   terminal you can read wants every pixel.
 - **A switcher bar sits under the project bar** (`#switcher`, rendered by
-  `renderSwitcher`). Left, a button carrying the focused session's slot number, name and
+  `renderSwitcher`), in two rows. Seven buttons do not fit one row on a 360px phone
+  without squeezing out the session's name.
+  The top row says where you are. Left, a button carrying the focused session's slot number, name and
   status with the status colour on its edge, exactly as a tile would show them; tapping
   it opens the picker. Right, a "next finished" button with the mint badge counting this
   project's finished sessions, disabled at zero. The count is per project because
   `nextDone` walks the viewed project's slots; the tab badges still carry the others.
-  Between them, a **paste button.** A phone has no Ctrl+V, and the textarea xterm
+  The bottom row holds the keys and gestures a phone lacks, in equal widths: Esc,
+  paste, attach, mic and copy. Each is disabled while no session is focused. Esc and the mic do
+  not take focus on press, so a keyboard that is up stays up.
+  An **Esc button** sends `\x1b`; a phone keyboard has no Escape key.
+  An **attach button** opens the phone's own picker (`filePicker` in `drop.ts`: a
+  hidden `<input type="file" multiple>` with no `accept`, so the camera, the photo
+  library and the files app are all offered). Picked files go through `insertFiles`
+  like a drop, under an "uploading…" toast, since a phone photo takes a few seconds on
+  mobile data.
+  A **mic button** (`dictation.ts`) types what you say into the prompt, using the
+  browser's `SpeechRecognition` (`webkitSpeechRecognition` in Chrome on Android and in
+  Safari). It is drawn only where that exists, so not in Firefox. A tap starts it and a
+  second tap stops it, rather than press-and-hold: on a touch screen only the finger
+  lifting counts as a user gesture, so Safari refuses a recognizer started as the finger
+  goes down. It listens continuously with interim results, and the words so far show in
+  a `.heard` box laid over the top of the terminal (absolutely positioned, so the
+  terminal does not refit). When it stops, the words are inserted with `term.paste` and
+  a trailing space, and never submitted. Pasting, rather than typing, keeps a leading
+  `!` or `/` from switching Claude Code's mode. Chrome on Android repeats earlier words
+  in each new result, and `extend` drops the repeat. Changing the focused session or
+  hiding the bar cancels listening and throws the words away, so they never land in
+  another session's prompt. Browsers refuse the microphone to an http origin, and the
+  error says so.
+  The **paste button.** A phone has no Ctrl+V, and the textarea xterm
   listens on is a transparent sliver at the cursor that no finger can long-press, so
   the button calls `navigator.clipboard.read()` inside the tap — iOS puts up its own
   "Paste" bubble, Android asks once for permission — and sorts what comes back:

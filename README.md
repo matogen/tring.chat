@@ -457,6 +457,17 @@ the clipboard — iOS shows its own "Paste" bubble to tap, Android asks once —
 types text or uploads an image accordingly. If the browser will not hand the
 clipboard over, a sheet with a box to paste into opens instead.
 
+The phone has nothing to drag a file from either, so the bar also has an attach
+button. It opens the phone's own picker: take a photo, choose one from the
+library, or pick any file. The file uploads and its path is typed, the same as a drop.
+
+Next to it, a mic button types what you say. Tap it, talk, and tap it again: the
+words show over the terminal while you speak and go into the prompt when you
+stop, without pressing Enter. It uses the browser's own speech recognition, so it
+works in Chrome on Android and Safari on iOS, but not in Firefox, where the button
+is not shown. Unlike paste, it has no fallback on plain http: browsers only give
+the microphone to an https page (or localhost).
+
 ## Claude Code
 
 Optional. Add a `Stop` hook to `~/.claude/settings.json` so a tile turns green the
