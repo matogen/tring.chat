@@ -14,7 +14,8 @@ import { uploadFile, WsClient } from './ws-client.ts'
 import { FocusTerminal } from './focus-terminal.ts'
 import { DiffPanel } from './diff-panel.ts'
 import { followFocus } from './focus-target.ts'
-import { attachFileDrop, insertFiles, refuseStrayDrops } from './drop.ts'
+import { attachFileDrop, filePicker, insertFiles, refuseStrayDrops } from './drop.ts'
+import { Dictation, recognitionFactory } from './dictation.ts'
 import { attachTileDrag } from './tile-drag.ts'
 import { attachImagePaste, pasteFromClipboard, type PasteOptions } from './paste.ts'
 import { copyToClipboard, recentLinks, screenText } from './copy.ts'
@@ -101,6 +102,34 @@ attachTileDrag(ringEl, {
 })
 // Ctrl+V with a screenshot on the clipboard goes the same way (see paste.ts).
 attachImagePaste(focusCell, pasteOpts)
+// And so does a photo or file picked with the phone's attach button.
+const pickFiles = filePicker((files) => { void attachFiles(files) })
+
+/** A phone photo takes a few seconds on mobile data, so the upload says it is under way. */
+async function attachFiles(files: File[]): Promise<void> {
+  const [only] = files
+  const note = showToast(files.length === 1 && only ? `uploading ${only.name}…` : `uploading ${files.length} files…`)
+  await insertFiles(files, pasteOpts)
+  // Only the note: an error raised by the upload replaced it, and stays up.
+  if (toast === note) hideToast()
+}
+
+// The phone's mic button (see dictation.ts). While it listens, the words heard
+// so far show over the top of the terminal.
+const heardEl = document.createElement('div')
+heardEl.className = 'heard'
+heardEl.hidden = true
+heardEl.setAttribute('aria-live', 'polite')
+focusCell.append(heardEl)
+const makeRecognition = recognitionFactory(window)
+const dictation = makeRecognition && new Dictation(makeRecognition, {
+  onListening: (on) => { heardEl.hidden = !on; paintSwitcher() },
+  onHeard: (text) => { heardEl.textContent = text || 'listening… tap the mic again to finish' },
+  // A trailing space, so the next words spoken or typed do not run on. Not
+  // focused: the keyboard stays as it was, up or down.
+  onText: (text) => { if (focusedId) focusTerm.paste(text + ' ') },
+  onError: showToast,
+}, navigator.language)
 // The prefix never reaches the PTY, and nothing reaches it while an overlay
 // is up (spec §5.4).
 focusTerm.shouldSendKey = (e) => !ui.isOpen() && !isPrefix(e)
@@ -379,17 +408,30 @@ function paintStatuses(): void {
 let switcherSig = ''
 function paintSwitcher(): void {
   switcherEl.hidden = !mobile.matches || viewMode !== 'ring'
-  if (switcherEl.hidden) { switcherSig = ''; return }
+  if (switcherEl.hidden) {
+    switcherSig = ''
+    // The bar holds the only button that stops the mic, so the mic goes with it.
+    dictation?.cancel()
+    return
+  }
   const focused = focusedId ? sessionById(focusedId) ?? null : null
   const done = sessions().filter((s) => s.status === 'done').length
+  const listening = dictation?.listening ?? false
   // Rebuilt only when what it shows changes. Every status message repaints,
   // and a button replaced between finger-down and finger-up is a lost tap.
-  const sig = `${focused?.id}|${focused?.status}|${focused?.name}|${focused?.title}|${done}`
+  const sig = `${focused?.id}|${focused?.status}|${focused?.name}|${focused?.title}|${done}|${listening}`
   if (sig === switcherSig) return
   switcherSig = sig
-  renderSwitcher(switcherEl, focused, done, {
-    onOpen: openPicker, onNext: nextDone, onPaste: pasteFromButton, onCopy: copyFromButton,
+  renderSwitcher(switcherEl, { focused, done, listening }, {
+    onOpen: openPicker, onNext: nextDone, onEsc: escFromButton,
+    onPaste: pasteFromButton, onAttach: pickFiles, onCopy: copyFromButton,
+    onMic: dictation ? () => dictation.toggle() : undefined,
   })
+}
+
+/** The switcher's Esc button: the key a phone keyboard does not have. */
+function escFromButton(): void {
+  if (focusedId) ws.send({ type: 'input', id: focusedId, data: '\x1b' })
 }
 
 /** The switcher's paste button: the clipboard if it can be read, a sheet if not. */
@@ -439,6 +481,8 @@ function focusSession(id: string | null): void {
  */
 function attachSession(id: string | null): void {
   if (id && id === focusedId) return
+  // Words spoken to one session never land in the next one's prompt.
+  dictation?.cancel()
   // Never aim at a session that is not in the state we hold — `prevFocusedId`
   // can outlive one. The daemon would take the focus, send nothing back, and
   // the centre terminal would sit frozen with nothing on screen saying why.
@@ -560,6 +604,7 @@ function activateProject(id: string): void {
   showRing()
   if (id === viewedId) return
   viewedId = id
+  dictation?.cancel()
   focusedId = null
   focusedSlot = null
   diffPanel.setSession(null)
@@ -804,12 +849,13 @@ function pickerKey(e: KeyboardEvent): void {
 /* ---------- misc ---------- */
 
 let toast: HTMLElement | null = null
-function showToast(message: string): void {
+function showToast(message: string): HTMLElement {
   hideToast()
   toast = document.createElement('div')
   toast.id = 'toast'
   toast.textContent = message
   document.body.append(toast)
+  return toast
 }
 function hideToast(): void {
   toast?.remove()

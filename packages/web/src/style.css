@@ -671,11 +671,15 @@ body.tile-dragging, body.tile-dragging .tile { cursor: grabbing; }
 #switcher {
   flex: 0 0 auto;
   display: flex;
+  flex-direction: column;
   gap: 6px;
   padding: 6px;
   background: var(--bg-2);
   border-bottom: 1px solid var(--line);
 }
+/* Where you are on top; below it, the keys and gestures a phone lacks. */
+#switcher .row { display: flex; gap: 6px; }
+#switcher .tools button { flex: 1 1 0; min-width: 0; height: 40px; }
 #switcher button {
   height: 44px;
   border: 1px solid var(--line-2);
@@ -699,25 +703,47 @@ body.tile-dragging, body.tile-dragging .tile { cursor: grabbing; }
 #switcher .current .nm { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #switcher .current .tag { color: var(--status, var(--dim)); font-size: 11px; }
 #switcher .current .chev { display: grid; color: var(--muted); }
+#switcher .next { flex: 0 0 64px; }
 #switcher .next,
-#switcher .paste,
-#switcher .copy {
-  flex: 0 0 64px;
+#switcher .tools button {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
   color: var(--muted);
 }
-/* An icon alone; the "next" button also carries a count. */
-#switcher .paste,
-#switcher .copy { flex-basis: 52px; }
+#switcher .esc { font-weight: 700; }
 #switcher .next:disabled,
-#switcher .paste:disabled,
-#switcher .copy:disabled { color: var(--dim); opacity: .5; cursor: default; }
-#switcher .next svg,
-#switcher .paste svg,
-#switcher .copy svg { display: block; }
+#switcher .tools button:disabled { color: var(--dim); opacity: .5; cursor: default; }
+#switcher button svg { display: block; }
+/* The mic while it listens: red, the way every recorder says it is recording. */
+#switcher .mic.listening {
+  border-color: var(--red);
+  color: var(--red);
+  animation: listening 1.2s ease-in-out infinite;
+}
+@keyframes listening { 50% { background: rgba(242, 84, 91, 0.16); } }
+
+/* What the mic has heard so far, over the top of the terminal. It does not
+   take a row of its own, because the terminal would refit every time it came
+   and went. */
+.focus-cell { position: relative; }
+.heard {
+  position: absolute;
+  inset: 8px 8px auto 8px;
+  z-index: 5;
+  max-height: 40%;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--red);
+  border-radius: 6px;
+  background: var(--bg-2);
+  color: var(--text);
+  font: 14px/1.4 var(--sans);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+.heard[hidden] { display: none; }
 
 /* The paste sheet's box: the one textarea, sized for a thumb to hold. */
 .paste-box {

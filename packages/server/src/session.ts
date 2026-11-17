@@ -7,6 +7,7 @@ import { inputKind } from '@tring/shared/input'
 import { ActivityTracker, DEFAULT_IDLE_MS } from '@tring/shared/status'
 import { DEFAULT_SCROLLBACK, type ScreenSnapshot, type SessionInfo } from '@tring/shared/protocol'
 import { snapshot } from './snapshot.ts'
+import { useModernWidths } from './widths.ts'
 import { commandArgs, defaultShell, interactiveArgs, shQuote, usesPosixCd } from './shell.ts'
 
 // Both xterm packages are CJS bundles that assign their exports in a way
@@ -137,6 +138,7 @@ export class Session {
       scrollback: opts.scrollback ?? DEFAULT_SCROLLBACK,
       allowProposedApi: true,
     })
+    useModernWidths(this.term)
     this.serializer = new SerializeAddon()
     this.term.loadAddon(this.serializer)
 

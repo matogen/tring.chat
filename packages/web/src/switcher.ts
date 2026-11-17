@@ -21,24 +21,40 @@ export function describeSession(s: SessionInfo | null): SessionLabel {
   return { key: String(s.slot), name: s.name ?? s.title ?? 'shell', status: s.status }
 }
 
+export interface SwitcherState {
+  focused: SessionInfo | null
+  /** Finished sessions in this project, for the "next" button's count. */
+  done: number
+  /** The mic is on (see dictation.ts). */
+  listening: boolean
+}
+
 export interface SwitcherCallbacks {
   onOpen: () => void
   onNext: () => void
+  /** Sends Escape to the terminal; a phone keyboard has no Esc key. */
+  onEsc: () => void
   /** Reads the clipboard into the terminal; a phone has no Ctrl+V. */
   onPaste: () => void
+  /** Opens the phone's file picker; a phone has nothing to drop a file from. */
+  onAttach: () => void
+  /** Starts or stops voice input. Left out where the browser cannot listen. */
+  onMic?: () => void
   /** Opens the copy sheet; a finger cannot select text off a canvas. */
   onCopy: () => void
 }
 
-export function renderSwitcher(
-  container: HTMLElement,
-  focused: SessionInfo | null,
-  done: number,
-  cb: SwitcherCallbacks,
-): void {
-  container.replaceChildren()
+/**
+ * Two rows. The first says where you are: the session in the centre, and the
+ * way to the next finished one. The second holds the keys and gestures a
+ * phone lacks. On a 360px phone that is too many buttons for one row: the
+ * session's name was squeezed out entirely.
+ */
+export function renderSwitcher(container: HTMLElement, state: SwitcherState, cb: SwitcherCallbacks): void {
+  const { focused, done, listening } = state
   const label = describeSession(focused)
 
+  const nav = row('nav')
   const current = document.createElement('button')
   current.className = `current st-${label.status}`
   current.title = 'Switch session'
@@ -48,29 +64,7 @@ export function renderSwitcher(
   const tag = span('tag', focused ? label.status : '')
   current.append(key, nm, tag, chevron())
   current.onclick = () => cb.onOpen()
-  container.append(current)
-
-  const paste = document.createElement('button')
-  paste.className = 'paste'
-  paste.disabled = !focused
-  paste.title = focused ? 'Paste from the clipboard' : 'Focus a session to paste'
-  paste.setAttribute('aria-label', 'Paste')
-  paste.innerHTML = icon(
-    '<rect x="4" y="3" width="8" height="11" rx="1.5"/><path d="M6 3V2h4v1M6.5 7h3M6.5 10h3"/>',
-  )
-  paste.onclick = () => cb.onPaste()
-  container.append(paste)
-
-  const copy = document.createElement('button')
-  copy.className = 'copy'
-  copy.disabled = !focused
-  copy.title = focused ? 'Copy text off the screen' : 'Focus a session to copy'
-  copy.setAttribute('aria-label', 'Copy')
-  copy.innerHTML = icon(
-    '<rect x="6" y="6" width="8" height="8" rx="1.5"/><path d="M4 10H3.5A1.5 1.5 0 0 1 2 8.5v-5A1.5 1.5 0 0 1 3.5 2h5A1.5 1.5 0 0 1 10 3.5V4"/>',
-  )
-  copy.onclick = () => cb.onCopy()
-  container.append(copy)
+  nav.append(current)
 
   const next = document.createElement('button')
   next.className = 'next'
@@ -80,7 +74,82 @@ export function renderSwitcher(
   next.innerHTML = icon('<path d="M5 3l6 5-6 5"/>')
   if (done > 0) next.append(span('badge', String(done)))
   next.onclick = () => cb.onNext()
-  container.append(next)
+  nav.append(next)
+
+  const tools = row('tools')
+  const esc = tool('esc', 'Escape', focused ? 'Send Escape' : 'Focus a session to send Escape', !focused)
+  esc.textContent = 'Esc'
+  // Esc is usually pressed in the middle of typing, to interrupt Claude Code
+  // or leave a menu. Moving focus to the button would hide the keyboard, so
+  // the press does not take focus and the keyboard stays on the terminal.
+  keepKeyboard(esc)
+  esc.onclick = () => cb.onEsc()
+  tools.append(esc)
+
+  const paste = tool('paste', 'Paste', focused ? 'Paste from the clipboard' : 'Focus a session to paste', !focused)
+  paste.innerHTML = icon(
+    '<rect x="4" y="3" width="8" height="11" rx="1.5"/><path d="M6 3V2h4v1M6.5 7h3M6.5 10h3"/>',
+  )
+  paste.onclick = () => cb.onPaste()
+  tools.append(paste)
+
+  const attach = tool(
+    'attach', 'Attach', focused ? 'Attach a photo or file' : 'Focus a session to attach a file', !focused,
+  )
+  attach.innerHTML = icon(
+    '<path d="M13 7.5l-5.3 5.3a3.2 3.2 0 0 1-4.5-4.5L8.8 2.7a2.1 2.1 0 0 1 3 3L6.3 11.2a1 1 0 0 1-1.5-1.5L9.5 5"/>',
+  )
+  attach.onclick = () => cb.onAttach()
+  tools.append(attach)
+
+  if (cb.onMic) {
+    const onMic = cb.onMic
+    const mic = tool(
+      'mic',
+      listening ? 'Stop listening' : 'Talk',
+      listening ? 'Stop listening and insert the words'
+        : focused ? 'Talk: what you say is typed into the prompt' : 'Focus a session to talk',
+      !focused && !listening,
+    )
+    mic.classList.toggle('listening', listening)
+    mic.setAttribute('aria-pressed', String(listening))
+    mic.innerHTML = icon(
+      '<rect x="5.5" y="1.5" width="5" height="8" rx="2.5"/><path d="M3 7.5a5 5 0 0 0 10 0M8 12.5V15"/>',
+    )
+    // The words go in at the cursor, and the keyboard stays as it was.
+    keepKeyboard(mic)
+    mic.onclick = () => onMic()
+    tools.append(mic)
+  }
+
+  const copy = tool('copy', 'Copy', focused ? 'Copy text off the screen' : 'Focus a session to copy', !focused)
+  copy.innerHTML = icon(
+    '<rect x="6" y="6" width="8" height="8" rx="1.5"/><path d="M4 10H3.5A1.5 1.5 0 0 1 2 8.5v-5A1.5 1.5 0 0 1 3.5 2h5A1.5 1.5 0 0 1 10 3.5V4"/>',
+  )
+  copy.onclick = () => cb.onCopy()
+  tools.append(copy)
+
+  container.replaceChildren(nav, tools)
+}
+
+function row(cls: string): HTMLElement {
+  const el = document.createElement('div')
+  el.className = `row ${cls}`
+  return el
+}
+
+function tool(cls: string, label: string, title: string, disabled: boolean): HTMLButtonElement {
+  const b = document.createElement('button')
+  b.className = cls
+  b.disabled = disabled
+  b.title = title
+  b.setAttribute('aria-label', label)
+  return b
+}
+
+/** A press that leaves focus, and so the phone keyboard, where it was. */
+function keepKeyboard(b: HTMLButtonElement): void {
+  b.onmousedown = (e) => e.preventDefault()
 }
 
 function span(cls: string, text: string): HTMLElement {

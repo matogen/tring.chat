@@ -1,8 +1,10 @@
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebglAddon } from '@xterm/addon-webgl'
+import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { isNewlineKey, isPasteKey, NEWLINE_SEQ } from '@tring/shared/keymap'
 import { xtermTheme } from './xterm-theme.ts'
+import { attachImeReset } from './ime-reset.ts'
 
 /** RIS. xterm maps ESC c to a full reset, and it travels in the write queue. */
 const RESET = '\x1bc'
@@ -32,17 +34,17 @@ export class FocusTerminal {
       scrollback: 5000,
     })
     this.term.loadAddon(this.fit)
+    // An emoji is two columns to Claude Code and one in xterm's own table, so
+    // its redraws landed one cell off and scattered stray letters. The daemon
+    // loads the same table; see widths.ts there.
+    this.term.loadAddon(new Unicode11Addon())
+    this.term.unicode.activeVersion = '11'
     this.term.open(container)
 
-    // WebGL is the only context we spend; if it is unavailable the canvas
-    // renderer is still correct, just slower.
-    try {
-      this.term.loadAddon(new WebglAddon())
-    } catch {
-      /* fall back silently */
-    }
+    this.loadWebgl()
 
     this.term.onData((d) => this.onInput?.(d))
+    if (this.term.textarea) attachImeReset(this.term.textarea, (fn) => this.term.onData(fn))
     this.term.attachCustomKeyEventHandler((e) => {
       if (this.shouldSendKey?.(e) === false) return false
       // Returning false without preventDefault leaves the keystroke to the
@@ -58,6 +60,36 @@ export class FocusTerminal {
     this.bindTouchScroll(container)
     this.bindCopyOnSelect(container)
     this.fitNow()
+  }
+
+  /**
+   * WebGL is the only GPU context we use. If it is unavailable, xterm's DOM
+   * renderer still draws correctly, only more slowly.
+   *
+   * The browser can take the context away at any time: a GPU driver reset,
+   * waking from sleep, or Chrome restarting its GPU process. The addon then
+   * waits a few seconds for the context to come back, and if it does not, it
+   * stops drawing and fires onContextLoss. Nothing else happens, so the
+   * terminal looked frozen. Input still reached the PTY and output still
+   * arrived, but the screen never changed again until a reload. The addon
+   * leaves the response to the app, so the dead one is dropped here and
+   * a new one is tried. If the GPU keeps losing contexts, the DOM renderer
+   * takes over for good.
+   */
+  private webglLosses = 0
+  private loadWebgl(): void {
+    let addon: WebglAddon
+    try {
+      addon = new WebglAddon()
+      this.term.loadAddon(addon)
+    } catch {
+      return
+    }
+    addon.onContextLoss(() => {
+      addon.dispose()
+      if (++this.webglLosses < 3) this.loadWebgl()
+      this.term.refresh(0, this.term.rows - 1)
+    })
   }
 
   /**

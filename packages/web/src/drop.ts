@@ -82,6 +82,31 @@ export function attachFileDrop(el: HTMLElement, opts: DropOptions): void {
   })
 }
 
+/**
+ * The attach button. A phone has nothing to drop a file from, so the bar
+ * opens the phone's own picker instead: the camera, the photo library or the
+ * files app. No `accept`, because the daemon takes any file and the picker
+ * offers everything only when it is not told to filter. The input lives in
+ * the page because iOS does not open the picker for one that is not.
+ *
+ * Returns the function that opens the picker. Call it from a tap: a browser
+ * opens a file picker only on a user gesture.
+ */
+export function filePicker(onFiles: (files: File[]) => void): () => void {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.multiple = true
+  input.hidden = true
+  input.addEventListener('change', () => {
+    const files = Array.from(input.files ?? [])
+    // Emptied, so picking the same photo twice still fires a change.
+    input.value = ''
+    if (files.length > 0) onFiles(files)
+  })
+  document.body.append(input)
+  return () => input.click()
+}
+
 async function receive(files: File[], opts: DropOptions): Promise<void> {
   if (files.length === 0) return opts.onError('nothing to drop')
   await insertFiles(files, opts)
@@ -89,7 +114,8 @@ async function receive(files: File[], opts: DropOptions): Promise<void> {
 
 /**
  * Uploads each file and types the paths, however they arrived — dropped,
- * pasted with Ctrl+V, or read off a phone's clipboard (see paste.ts).
+ * pasted with Ctrl+V, read off a phone's clipboard (see paste.ts), or picked
+ * with the attach button.
  */
 export async function insertFiles(files: Blob[], opts: DropOptions): Promise<void> {
   if (!opts.ready()) {
