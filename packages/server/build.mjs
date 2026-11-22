@@ -26,6 +26,19 @@ await build({
 })
 await chmod('dist/tring.js', 0o755)
 
+// The command Claude Code hooks run (hook-cli.ts). Its own tiny bundle, since
+// it starts once per hook event and should not load the daemon to do it.
+await build({
+  entryPoints: ['src/hook-cli.ts'],
+  bundle: true,
+  platform: 'node',
+  format: 'esm',
+  target: 'node20',
+  outfile: 'dist/tring-hook.js',
+  banner: { js: '#!/usr/bin/env node' },
+})
+await chmod('dist/tring-hook.js', 0o755)
+
 // The same spawn-helper repair the daemon runs at startup, as a script the
 // postinstall hook can run at install time — where it is still whoever owns
 // the install, and can therefore fix a global one owned by root. One source,

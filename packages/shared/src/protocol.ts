@@ -66,6 +66,18 @@ export type ClientMessage =
   | { type: 'createProject'; name: string; root: string }
   | { type: 'renameProject'; projectId: string; name: string }
   | { type: 'deleteProject'; projectId: string }
+  /** Settles a permission or question card in the orchestrator inbox. */
+  | {
+      type: 'answer'
+      itemId: string
+      decision: InboxDecision
+      /** Question text -> chosen label(s), comma-joined for multi-select. */
+      answers?: Record<string, string>
+      /** Shown to the agent with a deny. */
+      message?: string
+    }
+  /** Types a follow-up prompt into a session that finished and is waiting. */
+  | { type: 'reply'; itemId: string; text: string }
 
 export type ServerMessage =
   | {
@@ -87,6 +99,8 @@ export type ServerMessage =
   | { type: 'snapshot'; id: string; snapshot: ScreenSnapshot }
   | { type: 'exit'; id: string; code: number }
   | { type: 'error'; message: string }
+  /** Every open card, oldest first, whenever the set changes. */
+  | { type: 'inbox'; items: InboxItem[] }
 
 /**
  * Output travels as a binary frame — a UTF-8 session id, a 0x00 separator,
@@ -124,3 +138,43 @@ export interface DiffFile {
 export type DiffResult =
   | { cwd: string; files: DiffFile[]; truncated: boolean }
   | { cwd: string; error: string }
+
+/**
+ * Orchestrator mode: what the agents in other sessions are asking.
+ *
+ * Cards come from Claude Code hooks, never from reading the screen — the
+ * hook payload says exactly which tool and which input, where a scraped
+ * prompt is a guess that breaks with every TUI redesign.
+ */
+export type InboxKind = 'permission' | 'question' | 'reply'
+
+/** `terminal` hands the prompt back to the session's own TUI unanswered. */
+export type InboxDecision = 'allow' | 'deny' | 'terminal'
+
+export interface InboxOption {
+  label: string
+  description?: string
+}
+
+/** One question from Claude Code's AskUserQuestion tool. */
+export interface InboxQuestion {
+  question: string
+  header?: string
+  options: InboxOption[]
+  multiSelect?: boolean
+}
+
+export interface InboxItem {
+  id: string
+  sessionId: string
+  kind: InboxKind
+  createdAt: number
+  /** permission: the tool asking, e.g. "Bash", "Edit", "mcp__github__create_pr". */
+  tool?: string
+  /** permission: the tool's input as the agent sent it. Untrusted text. */
+  input?: Record<string, unknown>
+  /** question: what AskUserQuestion is asking. */
+  questions?: InboxQuestion[]
+  /** reply: the agent's last message before it stopped. */
+  message?: string
+}

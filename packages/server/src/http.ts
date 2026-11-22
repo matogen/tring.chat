@@ -10,6 +10,10 @@ import {
 import { collectUsage, defaultTranscriptDir, type UsageReport } from './usage.ts'
 import { MAX_UPLOAD_BYTES, type UploadStore } from './uploads.ts'
 import { gitDiff } from './git-diff.ts'
+import type { Inbox, HookPayload } from './inbox.ts'
+import { routeHook } from './hook-route.ts'
+import type { InboxItem } from '@tring/shared/protocol'
+import { hooksStatus, installHooks, type HooksStatus } from './hooks-install.ts'
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -35,6 +39,12 @@ export interface HttpOptions {
   fsRoots?: readonly string[]
   /** Where images dropped on a terminal are written. Null disables the route. */
   uploads?: UploadStore | null
+  /** Orchestrator mode. Null leaves the hook route answering "no opinion". */
+  inbox?: Inbox | null
+  /** Offered each new permission card; may settle it (auto-answer). */
+  onPermission?: (item: InboxItem) => void
+  /** Where Claude Code's user settings live; overridable for tests. */
+  claudeSettingsPath?: string
 }
 
 /** No response leaves without the header block — a 404 is framable too. */
@@ -205,6 +215,56 @@ export function createHandler(opts: HttpOptions) {
       if (!s) return json(res, 404, { error: 'no such session' })
       s.hook()
       return json(res, 200, { ok: true })
+    }
+
+    /**
+     * Every Claude Code hook tring installs lands here (see hook-cli.ts).
+     *
+     * A permission or question is held open until it is settled — from the
+     * inbox, by the auto-answerer, or by the hook hanging up because the
+     * prompt was answered in the terminal. Holding is safe: in an interactive
+     * session Claude shows its own dialog alongside, and the first answer wins.
+     */
+    const hook = url.pathname.match(/^\/api\/sessions\/([^/]+)\/hook$/)
+    if (hook && req.method === 'POST') {
+      const s = pm.findSession(decodeURIComponent(hook[1]!))
+      if (!s) return json(res, 404, { error: 'no such session' })
+      const raw = await readBody(req)
+      if (raw === null) return tooLarge(req, res, 'body too large')
+      let body: { event?: unknown; payload?: unknown }
+      try {
+        body = JSON.parse(raw || '{}') as typeof body
+      } catch {
+        return json(res, 400, { error: 'malformed body' })
+      }
+      if (typeof body.event !== 'string') return json(res, 400, { error: 'event is required' })
+      const payload = (body.payload && typeof body.payload === 'object' ? body.payload : {}) as HookPayload
+      if (!opts.inbox) {
+        if (body.event === 'Stop' || body.event === 'Notification') s.hook()
+        return json(res, 200, { output: null })
+      }
+      // `close` on the response before it is written means the hook process
+      // went away: Claude timed it out, or the prompt was answered elsewhere.
+      const gone = new AbortController()
+      res.on('close', () => { if (!res.writableFinished) gone.abort() })
+      const output = await routeHook({
+        inbox: opts.inbox, session: s, event: body.event, payload,
+        signal: gone.signal, onPermission: opts.onPermission,
+      })
+      if (gone.signal.aborted) return
+      return json(res, 200, { output })
+    }
+
+    if (url.pathname === '/api/hooks' && req.method === 'GET') {
+      return json(res, 200, await hooksStatus(opts.claudeSettingsPath) satisfies HooksStatus)
+    }
+    if (url.pathname === '/api/hooks' && req.method === 'POST') {
+      try {
+        await installHooks(opts.claudeSettingsPath)
+        return json(res, 200, await hooksStatus(opts.claudeSettingsPath))
+      } catch (err) {
+        return json(res, 500, { error: (err as Error).message })
+      }
     }
 
     const status = url.pathname.match(/^\/api\/sessions\/([^/]+)\/status$/)
