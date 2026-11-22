@@ -78,6 +78,8 @@ export type ClientMessage =
     }
   /** Types a follow-up prompt into a session that finished and is waiting. */
   | { type: 'reply'; itemId: string; text: string }
+  /** Turns the supervisor that approves routine permission prompts on or off. */
+  | { type: 'autoAnswer'; enabled: boolean }
 
 export type ServerMessage =
   | {
@@ -101,6 +103,8 @@ export type ServerMessage =
   | { type: 'error'; message: string }
   /** Every open card, oldest first, whenever the set changes. */
   | { type: 'inbox'; items: InboxItem[] }
+  /** The supervisor's switch and what it decided, newest first. */
+  | { type: 'autoAnswer'; enabled: boolean; history: AutoDecision[] }
 
 /**
  * Output travels as a binary frame — a UTF-8 session id, a 0x00 separator,
@@ -177,4 +181,16 @@ export interface InboxItem {
   questions?: InboxQuestion[]
   /** reply: the agent's last message before it stopped. */
   message?: string
+}
+
+/** One permission prompt the supervisor looked at. */
+export interface AutoDecision {
+  at: number
+  sessionId: string
+  tool: string
+  /** The command, path or URL, cut short. Untrusted text. */
+  what: string
+  /** `allow` was approved for you; `ask` was left in the inbox. */
+  verdict: 'allow' | 'ask'
+  reason: string
 }

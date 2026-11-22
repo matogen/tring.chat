@@ -261,6 +261,7 @@ streams thumbnails, which is what keeps several projects cheap.
 | `Space` | back to the previous session |
 | `c` / `r` / `x` | new session / rename and colour / kill |
 | `m` | mark seen |
+| `o` | orchestrator: every agent's questions in the centre |
 | `Esc` | close the picker |
 
 Browsers reserve `Ctrl+1`–`Ctrl+8` for tab switching, so `Shift+digit` is the
@@ -468,9 +469,54 @@ works in Chrome on Android and Safari on iOS, but not in Firefox, where the butt
 is not shown. Unlike paste, it has no fallback on plain http: browsers only give
 the microphone to an https page (or localhost).
 
+## Orchestrator
+
+With many agents running, finding the one that is waiting means hunting through the
+ring. The **Orchestrator** tab (or `Ctrl+Space`, then `o`) turns the centre into an
+inbox of everything the agents are waiting on, from every session in every project:
+
+- **permission prompts** — the command, the file and the edit, or the tool input, with
+  Allow, Deny (with an optional reason the agent sees) and *Answer in terminal*
+- **questions** Claude asks with its AskUserQuestion tool — pick an option, or type
+  your own answer
+- **finished turns** — the agent's last message and a box to reply in
+
+Answer and the card goes; the next one moves up. The ring keeps running around it, and
+*Open* takes you to that session's terminal. On a card, `a` allows, `d` denies, `t`
+hands it back to the terminal, `o` opens it, `1`–`9` picks an option, and `↑`/`↓` move
+between cards.
+
+The prompt also stays live in the session's own terminal, and whichever you answer first
+wins — answer it there and the card clears itself.
+
+It reads what the agents ask through Claude Code hooks, never by scraping the screen:
+
+```
+tring hooks install     # or the Install button the inbox shows when they are missing
+tring hooks status
+tring hooks uninstall
+```
+
+This adds a `tring-hook` entry per event to `~/.claude/settings.json` (keeping a backup
+beside it, and leaving your own hooks alone). Outside a tring session `tring-hook` exits
+at once and does nothing, so the same settings are safe for every `claude` you run.
+Restart running `claude` sessions to pick the hooks up.
+
+**AI approves routine prompts** (a switch in the inbox, off by default) has a small
+Claude model (`claude -p --model haiku`, on your own Claude login) approve the prompts
+that are plainly routine — tests, builds, edits inside the session's directory — so
+only the rest reach you. It can only approve or leave a card for you; it never denies,
+never answers a question and never replies for you. Some things always come to you
+without the model being asked: `rm -r`/`-f`, `sudo`, `git push`/`reset --hard`,
+publishing, deploys, `kubectl`/`terraform`, anything mentioning production, secrets and
+`.env` files, paths outside the session's directory, MCP tools and plan approvals.
+Every decision it makes is listed in the inbox with its reason.
+
 ## Claude Code
 
-Optional. Add a `Stop` hook to `~/.claude/settings.json` so a tile turns green the
+`tring hooks install` (see [Orchestrator](#orchestrator)) includes a Stop hook, so
+a tile turns green the instant Claude ends its turn. To do only that by hand, add a
+`Stop` hook to `~/.claude/settings.json` so a tile turns green the
 instant Claude ends its turn instead of after the idle timeout:
 
 ```json

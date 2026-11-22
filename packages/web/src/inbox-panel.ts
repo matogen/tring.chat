@@ -1,4 +1,4 @@
-import type { InboxDecision, InboxItem } from '@tring/shared/protocol'
+import type { AutoDecision, InboxDecision, InboxItem } from '@tring/shared/protocol'
 import { age, answersFor, describe } from './inbox-view.ts'
 
 const STORAGE_KEY = 'tring.orchestrator'
@@ -25,6 +25,8 @@ export interface InboxCallbacks {
   /** Hooks are what fill the inbox; null while unknown. */
   hooks: () => Promise<{ installed: boolean; path: string }>
   installHooks: () => Promise<void>
+  /** The supervisor that approves routine permission prompts. */
+  onAuto: (enabled: boolean) => void
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -63,6 +65,10 @@ export class InboxPanel {
   private readonly list = el('div', 'inbox-list')
   private readonly empty = el('div', 'inbox-empty')
   private readonly banner = el('div', 'inbox-banner')
+  private readonly autoBox = el('input')
+  private readonly history = el('details', 'inbox-history')
+  private readonly historyList = el('ol', 'inbox-history-list')
+  private readonly historySummary = el('summary')
   private readonly cards = new Map<string, Card>()
   private items: InboxItem[] = []
   private shown = false
@@ -75,8 +81,19 @@ export class InboxPanel {
     const head = el('div', 'inbox-head')
     head.append(el('span', 'inbox-title', 'Orchestrator'), el('span', 'inbox-hint',
       'a allow · d deny · t answer in terminal · o open · 1–9 pick · ↑↓ move · Ctrl+Space then o to leave'))
+    // The supervisor's switch. Off by default; what it decides is listed
+    // below so an approval made for you is never invisible.
+    this.autoBox.type = 'checkbox'
+    this.autoBox.onchange = () => this.cb.onAuto(this.autoBox.checked)
+    const autoLabel = el('label', 'inbox-auto')
+    autoLabel.title = 'A small Claude model approves routine permission prompts (tests, builds, edits inside the project). ' +
+      'Pushes, deletes, sudo, secrets, publishing, MCP tools, plans and questions always come to you. It never denies.'
+    autoLabel.append(this.autoBox, el('span', undefined, 'AI approves routine prompts'))
+    head.append(autoLabel)
+    this.history.hidden = true
+    this.history.append(this.historySummary, this.historyList)
     this.banner.hidden = true
-    this.el.append(head, this.banner, this.list, this.empty)
+    this.el.append(head, this.banner, this.history, this.list, this.empty)
     this.el.addEventListener('keydown', (e) => this.onKey(e))
     cell.append(this.el)
   }
@@ -128,6 +145,26 @@ export class InboxPanel {
     if (this.shown && focusedId && !this.cards.has(focusedId)) this.focusCard(0, true)
     else if (this.shown && !focusedId && document.activeElement === this.el) this.focusCard(0, true)
     return items.filter((i) => !before.has(i.id))
+  }
+
+  setAuto(enabled: boolean, history: AutoDecision[]): void {
+    this.autoBox.checked = enabled
+    this.history.hidden = history.length === 0
+    const allowed = history.filter((h) => h.verdict === 'allow').length
+    this.historySummary.textContent =
+      `AI decisions: ${allowed} approved for you, ${history.length - allowed} left for you`
+    this.historyList.replaceChildren(...history.map((h) => {
+      const li = el('li', `hist-${h.verdict}`)
+      const who = this.cb.label(h.sessionId)
+      li.append(
+        el('span', 'hist-verdict', h.verdict === 'allow' ? 'approved' : 'asked you'),
+        el('span', 'hist-who', who ? `${who.slot} ${who.name}` : 'closed session'),
+        el('code', 'hist-what', h.what || h.tool),
+        el('span', 'hist-reason', h.reason),
+        el('span', 'hist-age', age(Date.now() - h.at)),
+      )
+      return li
+    }))
   }
 
   /** Labels changed (rename, recolour), not the cards. */

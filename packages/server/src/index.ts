@@ -17,6 +17,7 @@ import { fixSpawnHelper } from './spawn-helper.ts'
 import { UploadStore } from './uploads.ts'
 import { checkForUpdate, currentVersion } from './update-check.ts'
 import { Inbox } from './inbox.ts'
+import { AutoAnswerer } from './auto-answer.ts'
 import { hooksStatus, installHooks, uninstallHooks } from './hooks-install.ts'
 import { prependPath, writeHookShim } from './hook-shim.ts'
 
@@ -162,8 +163,21 @@ async function main(): Promise<void> {
   // Orchestrator mode: what the agents are asking, shared by the hook route
   // that fills it and the sockets that show and answer it.
   const inbox = new Inbox()
+  // Off until switched on from the inbox, and remembered across restarts.
+  const auto = new AutoAnswerer({
+    inbox,
+    statePath: path.join(path.dirname(pm.statePath), 'orchestrator.json'),
+    context: (id) => {
+      const s = pm.findSession(id)
+      if (!s) return null
+      const shot = s.snapshotNow()
+      return { cwd: s.cwd, screen: shot.rows.map((r) => r.map((c) => c.text).join('')).join('\n') }
+    },
+  })
+  await auto.load()
   const handle = createHandler({
     pm, webRoot, token, sameOrigin, fsRoots: args.fsRoot, uploads, inbox,
+    onPermission: (item) => { void auto.offer(item) },
   })
   const listener: RequestListener = (req, res) => {
     void handle(req, res).catch(() => {
@@ -175,7 +189,7 @@ async function main(): Promise<void> {
   // Rejected at the handshake, before Hub ever sees a socket: an origin that
   // is refused here never gets to send a `hello` at all.
   const wss = new WebSocketServer({ server, verifyClient: upgradeGuard(sameOrigin) })
-  const hub = new Hub({ pm, token, inbox })
+  const hub = new Hub({ pm, token, inbox, auto })
   hub.attach(wss)
 
   // The one link that carries the secret. The client stores it and scrubs it

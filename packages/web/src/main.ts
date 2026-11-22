@@ -94,6 +94,7 @@ const inboxPanel = new InboxPanel(focusCell, {
   onOpen: (id) => openFromInbox(id),
   hooks: () => api<{ installed: boolean; path: string }>('/api/hooks'),
   installHooks: async () => { await apiPost('/api/hooks') },
+  onAuto: (enabled) => ws.send({ type: 'autoAnswer', enabled }),
 })
 /** The first `inbox` after connecting is the backlog, not news worth a chime. */
 let inboxSeen = false
@@ -234,6 +235,9 @@ function handleMessage(msg: ServerMessage): void {
       break
     case 'error':
       showToast(msg.message)
+      break
+    case 'autoAnswer':
+      inboxPanel.setAuto(msg.enabled, msg.history)
       break
     case 'inbox': {
       const fresh = inboxPanel.setItems(msg.items)

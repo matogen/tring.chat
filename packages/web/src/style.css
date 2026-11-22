@@ -1009,3 +1009,48 @@ pre.card-body {
 }
 /* The key legend is for a keyboard; on a phone it only pushes the cards down. */
 @media (max-width: 720px) { .inbox-hint { display: none; } }
+
+.inbox-auto {
+  margin-left: auto;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 12px var(--sans);
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.inbox-auto input { accent-color: var(--emerald); }
+.inbox-history {
+  margin: 8px 12px 0;
+  font: 12px/1.5 var(--sans);
+  color: var(--muted);
+}
+.inbox-history summary { cursor: pointer; }
+.inbox-history-list {
+  max-height: 12em;
+  overflow-y: auto;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.inbox-history-list li {
+  display: grid;
+  grid-template-columns: 70px 110px 1fr auto;
+  gap: 2px 8px;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--line);
+}
+.hist-verdict { font-weight: 600; }
+.hist-allow .hist-verdict { color: var(--emerald); }
+.hist-ask .hist-verdict { color: var(--muted); }
+.hist-who { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist-what { font: 11px var(--mono); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist-reason { grid-column: 2 / 4; color: var(--dim); }
+.hist-age { grid-row: 1; grid-column: 4; color: var(--dim); font: 11px var(--mono); }
+@media (max-width: 720px) {
+  .inbox-history-list li { grid-template-columns: 70px 1fr auto; }
+  .hist-who { display: none; }
+  .hist-reason { grid-column: 2 / 3; }
+}

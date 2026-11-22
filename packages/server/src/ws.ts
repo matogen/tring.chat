@@ -6,6 +6,7 @@ import type { ProjectManager } from './project-manager.ts'
 import { secretEquals } from './security.ts'
 import type { Session } from './session.ts'
 import type { Inbox } from './inbox.ts'
+import type { AutoAnswerer } from './auto-answer.ts'
 
 export interface HubOptions {
   pm: ProjectManager
@@ -14,6 +15,8 @@ export interface HubOptions {
   snapshotMs?: number
   /** Orchestrator mode's cards. Without one, `answer` and `reply` do nothing. */
   inbox?: Inbox | null
+  /** The supervisor; its switch and history are pushed to every client. */
+  auto?: AutoAnswerer | null
 }
 
 /**
@@ -60,6 +63,7 @@ export class Hub {
       this.broadcast({ type: 'exit', id: s.id, code })
     }
     if (opts.inbox) opts.inbox.onChange = () => this.broadcastInbox()
+    if (opts.auto) opts.auto.onChange = () => this.broadcastAuto()
     pm.onSessionData = (s, data) => {
       const frame = encodeOutput(s.id, Buffer.from(data, 'utf8'))
       for (const c of this.clients) {
@@ -126,6 +130,7 @@ export class Hub {
       this.sendState(c)
       this.sendSnapshots(c)
       if (this.opts.inbox) this.send(c, { type: 'inbox', items: this.opts.inbox.list() })
+      if (this.opts.auto) this.send(c, this.autoMessage(this.opts.auto))
       return
     }
     if (!c.authed) return this.send(c, { type: 'error', message: 'expected hello' })
@@ -213,6 +218,9 @@ export class Hub {
         })
         break
       }
+      case 'autoAnswer':
+        void this.opts.auto?.setEnabled(msg.enabled === true)
+        break
       case 'reply': {
         const inbox = this.opts.inbox
         const item = inbox?.get(msg.itemId)
@@ -281,6 +289,14 @@ export class Hub {
       title: s.title,
       notable: s.tracker.notable,
     })
+  }
+
+  private autoMessage(auto: AutoAnswerer): ServerMessage {
+    return { type: 'autoAnswer', enabled: auto.enabled, history: auto.decisions }
+  }
+
+  private broadcastAuto(): void {
+    if (this.opts.auto) this.broadcast(this.autoMessage(this.opts.auto))
   }
 
   private broadcastInbox(): void {
