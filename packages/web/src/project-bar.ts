@@ -10,6 +10,7 @@ export interface BarCallbacks {
   onSoundToggle: () => void
   onSettings: () => void
   onUsage: () => void
+  onInbox: () => void
 }
 
 /**
@@ -24,6 +25,7 @@ export function renderBar(
   cb: BarCallbacks,
   update?: UpdateInfo | null,
   usageActive = false,
+  inbox: { open: boolean; count: number } = { open: false, count: 0 },
 ): void {
   container.replaceChildren()
 
@@ -70,6 +72,25 @@ export function renderBar(
     nm.textContent = 'Usage'
     tab.append(nm)
     tab.onclick = () => cb.onUsage()
+    container.append(tab)
+  }
+
+  // Pinned like Usage: a view over every project's sessions, not a project.
+  {
+    const tab = document.createElement('button')
+    tab.className = 'tab pinned' + (inbox.open ? ' active' : '')
+    tab.title = 'Orchestrator — every agent waiting on you (Ctrl+Space, o)'
+    const nm = document.createElement('span')
+    nm.className = 'nm'
+    nm.textContent = 'Orchestrator'
+    tab.append(nm)
+    if (inbox.count > 0) {
+      const badge = document.createElement('span')
+      badge.className = 'badge asking'
+      badge.textContent = String(inbox.count)
+      tab.append(badge)
+    }
+    tab.onclick = () => cb.onInbox()
     container.append(tab)
   }
 

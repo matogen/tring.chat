@@ -40,11 +40,19 @@ export class Hub {
 
   constructor(private readonly opts: HubOptions) {
     const pm = opts.pm
-    pm.onChange = () => this.broadcastState()
+    pm.onChange = () => {
+      // A killed or deleted session never sends `exit` here, and its cards
+      // would otherwise wait for an agent that no longer exists.
+      opts.inbox?.drop((i) => !pm.findSession(i.sessionId))
+      this.broadcastState()
+    }
     pm.onSessionStatus = (s) => {
       // A reply card is "this session stopped and is waiting for you". Once
-      // it is working again, or someone has typed into it, that is over.
-      if (s.tracker.status !== 'done') opts.inbox?.dropSession(s.id, 'reply')
+      // it is working again that is over. Typing a prompt into its terminal
+      // ends it too, through the UserPromptSubmit hook; idle is not enough on
+      // its own, since a reply short enough never to have looked busy leaves
+      // the session idle from start to finish.
+      if (s.tracker.status === 'busy') opts.inbox?.dropSession(s.id, 'reply')
       this.broadcastStatus(s)
     }
     pm.onSessionExit = (s, code) => {
@@ -194,8 +202,10 @@ export class Hub {
         const item = inbox?.get(msg.itemId)
         // A card already settled elsewhere is not an error worth showing:
         // the inbox broadcast that removed it is already on its way.
-        if (!inbox || !item || item.kind === 'reply') break
+        if (!inbox || !item) break
         if (msg.decision !== 'allow' && msg.decision !== 'deny' && msg.decision !== 'terminal') break
+        // A reply card can only be dismissed; its answer is typed, via `reply`.
+        if (item.kind === 'reply' && msg.decision !== 'terminal') break
         inbox.answer(item.id, {
           decision: msg.decision,
           ...(msg.answers ? { answers: msg.answers } : {}),

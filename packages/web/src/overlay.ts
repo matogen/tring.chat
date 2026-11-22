@@ -162,7 +162,7 @@ export function openPicker(
   const legend = el('div', 'legend')
   legend.innerHTML =
     '<b>n</b> next finished &nbsp; <b>p</b> projects &nbsp; <b>c</b> new session &nbsp; ' +
-    '<b>r</b> rename &nbsp; <b>x</b> kill &nbsp; <b>m</b> mark seen &nbsp; <b>esc</b> close'
+    '<b>r</b> rename &nbsp; <b>x</b> kill &nbsp; <b>m</b> mark seen &nbsp; <b>o</b> orchestrator &nbsp; <b>esc</b> close'
   panel.append(legend)
 
   open(panel)

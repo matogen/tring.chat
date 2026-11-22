@@ -25,6 +25,20 @@ export async function api<T>(path: string): Promise<T> {
   return body
 }
 
+export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${DAEMON}${path}`, {
+    method: 'POST',
+    headers: {
+      ...(TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}),
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify(body ?? {}),
+  })
+  const out = (await res.json().catch(() => ({}))) as T & { error?: string }
+  if (!res.ok) throw new Error(out.error ?? `request failed (${res.status})`)
+  return out
+}
+
 /**
  * Sends a dropped image to the daemon and gets back the path it wrote it to.
  *
