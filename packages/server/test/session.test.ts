@@ -1,5 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { Session } from '../src/session.ts'
+import { mkdtemp, writeFile, chmod } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import { Session, claudeConversation } from '../src/session.ts'
 
 const live: Session[] = []
 afterEach(() => { for (const s of live.splice(0)) s.dispose() })
@@ -132,5 +135,79 @@ describe('Session', () => {
     await waitFor(() => s.serialize().includes('snap'))
     expect(s.takeSnapshot()).not.toBeNull()
     expect(s.takeSnapshot()).toBeNull()
+  })
+
+  describe('reopening a Claude conversation', () => {
+    const id = '0b9f3c1e-6a2d-4f3b-9c8e-1d2e3f4a5b6c'
+
+    /** /bin/sh -i reads no rc file, so the fake `claude` first on PATH is the one run. */
+    async function resumed(conv: unknown, command: string | null = null) {
+      const bin = await mkdtemp(path.join(os.tmpdir(), 'tring-bin-'))
+      await writeFile(path.join(bin, 'claude'), '#!/bin/sh\necho "FAKE-CLAUDE $*"\n')
+      await chmod(path.join(bin, 'claude'), 0o755)
+      const prev = process.env['PATH']
+      process.env['PATH'] = `${bin}:${prev}`
+      try {
+        const s = new Session({
+          id: 's1', projectId: 'p1', projectName: 'demo', slot: 1,
+          cwd: process.cwd(), command, autorun: false, shell: '/bin/sh',
+          url: 'http://127.0.0.1:7331', scrollback: 100, resume: conv as never,
+        })
+        live.push(s)
+        return s
+      } finally {
+        process.env['PATH'] = prev
+      }
+    }
+
+    it('types claude --resume into the shell and remembers the conversation', async () => {
+      const s = await resumed({ id, cwd: process.cwd() })
+      expect(s.claude).toEqual({ id, cwd: process.cwd() })
+      await waitFor(() => s.serialize().includes(`FAKE-CLAUDE --resume ${id}`))
+    })
+
+    it('goes to the directory Claude was started in first', async () => {
+      const dir = await mkdtemp(path.join(os.tmpdir(), 'tring-conv-'))
+      const s = await resumed({ id, cwd: dir })
+      await waitFor(() => s.serialize().includes(`FAKE-CLAUDE --resume ${id}`))
+      s.write('echo "AT=$(pwd)"\n')
+      await waitFor(() => s.serialize().includes(`AT=${dir}`))
+    })
+
+    it('never types an id that is not a UUID', async () => {
+      const s = await resumed({ id: '$(touch /tmp/pwned)', cwd: process.cwd() })
+      expect(s.claude).toBeNull()
+      await new Promise((r) => setTimeout(r, 900))
+      expect(s.serialize()).not.toContain('--resume')
+    })
+
+    it('leaves the prompt alone once the user has typed', async () => {
+      const s = await resumed({ id, cwd: process.cwd() })
+      s.write('echo mine\n')
+      await new Promise((r) => setTimeout(r, 900))
+      expect(s.serialize()).not.toContain('FAKE-CLAUDE')
+    })
+  })
+
+  it('validates conversations: UUID ids, absolute cwds only', () => {
+    const id = '0b9f3c1e-6a2d-4f3b-9c8e-1d2e3f4a5b6c'
+    expect(claudeConversation({ id, cwd: '/x' })).toEqual({ id, cwd: '/x' })
+    expect(claudeConversation({ id, cwd: 'rel/x' })).toEqual({ id, cwd: '' })
+    expect(claudeConversation({ id: 'nope', cwd: '/x' })).toBeNull()
+    expect(claudeConversation(null)).toBeNull()
+  })
+
+  it('setClaude records, ignores repeats and junk, and forgets on null', () => {
+    const s = make()
+    let changes = 0
+    s.onClaudeChange = () => changes++
+    const conv = { id: '0b9f3c1e-6a2d-4f3b-9c8e-1d2e3f4a5b6c', cwd: '/x' }
+    s.setClaude(conv)
+    s.setClaude({ ...conv })
+    s.setClaude({ id: 'bad', cwd: '/x' })
+    expect(s.claude).toEqual(conv)
+    s.setClaude(null)
+    expect(s.claude).toBeNull()
+    expect(changes).toBe(2)
   })
 })

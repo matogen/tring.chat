@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type { ProjectInfo } from '@tring/shared/protocol'
-import type { Session } from './session.ts'
+import type { ClaudeConversation, Session } from './session.ts'
 import { SessionManager, type SessionSpec } from './session-manager.ts'
 
 export interface PersistedSession {
@@ -12,6 +12,8 @@ export interface PersistedSession {
   cwd: string
   command: string | null
   color?: string | null
+  /** The Claude conversation the tile was running; reopened on restore. */
+  claude?: ClaudeConversation | null
 }
 
 export interface PersistedProject {
@@ -65,6 +67,13 @@ export class ProjectManager {
   private activeId: string | null = null
   private timer: NodeJS.Timeout | null = null
   private writing: Promise<void> = Promise.resolve()
+  /**
+   * Set once shutdown starts. Stopping the daemon (or the machine) signals
+   * every shell and Claude in it as well, and what they do on the way out —
+   * exiting, ending their conversation — must not be saved as the state to
+   * come back to.
+   */
+  private closing = false
 
   onChange: (() => void) | null = null
   onSessionData: ((s: Session, data: string) => void) | null = null
@@ -136,8 +145,10 @@ export class ProjectManager {
     if (!e.manager) {
       e.manager = this.spawnManager(e)
       for (const rec of e.pending) {
-        // autorun false: restore the place, not the command.
-        e.manager.create({ ...rec, autorun: false })
+        // autorun false: restore the place, not the command. A Claude
+        // conversation is the exception: it waits for a prompt, so reopening
+        // it starts nothing the user did not already have running.
+        e.manager.create({ ...rec, autorun: false, resume: rec.claude ?? null })
       }
       e.pending = []
     }
@@ -177,6 +188,7 @@ export class ProjectManager {
   }
 
   async dispose(): Promise<void> {
+    this.closing = true
     if (this.timer) clearInterval(this.timer)
     this.timer = null
     for (const e of this.entries.values()) e.manager?.disposeAll()
@@ -212,6 +224,7 @@ export class ProjectManager {
   }
 
   private changed(): void {
+    if (this.closing) return
     this.onChange?.()
     void this.save()
   }
@@ -231,6 +244,7 @@ export class ProjectManager {
               cwd: s.cwd,
               command: s.command,
               color: s.color,
+              ...(s.claude ? { claude: s.claude } : {}),
             }))
           : e.pending,
       })),

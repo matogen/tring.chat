@@ -8,8 +8,8 @@ const mkInbox = () => {
   return new Inbox(() => t++, () => `i${++n}`)
 }
 
-const session = (id = 's1'): HookSession & { hooks: number } => {
-  const s = { id, hooks: 0, hook() { s.hooks++ } }
+const session = (id = 's1'): HookSession & { hooks: number; conv: { id: string; cwd: string } | null | undefined } => {
+  const s = { id, hooks: 0, conv: undefined as { id: string; cwd: string } | null | undefined, hook() { s.hooks++ }, setClaude(c: { id: string; cwd: string } | null) { s.conv = c } }
   return s
 }
 
@@ -112,6 +112,28 @@ describe('hookOutput', () => {
 describe('routeHook', () => {
   const run = (inbox: Inbox, s: HookSession, event: string, payload: object, signal = new AbortController().signal) =>
     routeHook({ inbox, session: s, event, payload, signal })
+
+  it('records the conversation a tile runs from SessionStart', async () => {
+    const s = session()
+    expect(await run(mkInbox(), s, 'SessionStart', { session_id: 'abc', cwd: '/repo', source: 'startup' })).toBeNull()
+    expect(s.conv).toEqual({ id: 'abc', cwd: '/repo' })
+  })
+
+  it('forgets it only when the user ended the conversation', async () => {
+    for (const reason of ['prompt_input_exit', 'logout', 'clear']) {
+      const s = session()
+      s.conv = { id: 'abc', cwd: '/repo' }
+      await run(mkInbox(), s, 'SessionEnd', { reason })
+      expect(s.conv, reason).toBeNull()
+    }
+    // A signal (tring or the machine stopping) is `other`: keep it to reopen.
+    for (const reason of ['other', undefined]) {
+      const s = session()
+      s.conv = { id: 'abc', cwd: '/repo' }
+      await run(mkInbox(), s, 'SessionEnd', { reason })
+      expect(s.conv, String(reason)).toEqual({ id: 'abc', cwd: '/repo' })
+    }
+  })
 
   it('holds a permission request until it is answered', async () => {
     const inbox = mkInbox()

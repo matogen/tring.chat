@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { Session } from './session.ts'
+import { Session, type ClaudeConversation } from './session.ts'
 
 export interface SessionSpec {
   slot?: number
@@ -9,6 +9,8 @@ export interface SessionSpec {
   color?: string | null
   /** False when restoring from disk; see Session's `autorun`. */
   autorun?: boolean
+  /** A Claude conversation to reopen in the new shell; see Session's `resume`. */
+  resume?: ClaudeConversation | null
 }
 
 export interface SessionManagerOptions {
@@ -64,6 +66,7 @@ export class SessionManager {
       idleMs: this.opts.idleMs,
       ...(this.opts.shell ? { shell: this.opts.shell } : {}),
       autorun: spec.autorun,
+      resume: spec.resume ?? null,
     })
 
     session.onData = (data) => this.onSessionData?.(session, data)
@@ -71,6 +74,7 @@ export class SessionManager {
     session.onExit = (code) => this.onSessionExit?.(session, code)
     // A moved shell changes what a restart would restore, so persist it.
     session.onCwdChange = () => this.structureChanged()
+    session.onClaudeChange = () => this.structureChanged()
 
     this.bySlot.set(slot, session)
     this.byId.set(session.id, session)
@@ -153,6 +157,9 @@ export class SessionManager {
       name: old.name,
       color: old.color,
       autorun: true,
+      // A dead tile that was a shell running Claude comes back to the same
+      // conversation; one with its own command re-runs that instead.
+      resume: old.claude,
     }
     // One change, not two. The new PTY gets a new id, so a client watching
     // this slot has to follow it there — and a client that is first told the
