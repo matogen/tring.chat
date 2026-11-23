@@ -189,6 +189,21 @@ describe('Session', () => {
     })
   })
 
+  it("does not hand a tile the Claude session tring itself was started from", async () => {
+    process.env['CLAUDE_CODE_SESSION_ID'] = 'parent'
+    process.env['CLAUDE_CODE_CHILD_SESSION'] = '1'
+    process.env['CLAUDE_CODE_USE_BEDROCK'] = 'kept'
+    try {
+      const s = make()
+      s.write('echo "SID=[$CLAUDE_CODE_SESSION_ID] CHILD=[$CLAUDE_CODE_CHILD_SESSION] BR=[$CLAUDE_CODE_USE_BEDROCK]"\n')
+      await waitFor(() => s.serialize().includes('SID=[] CHILD=[] BR=[kept]'))
+    } finally {
+      delete process.env['CLAUDE_CODE_SESSION_ID']
+      delete process.env['CLAUDE_CODE_CHILD_SESSION']
+      delete process.env['CLAUDE_CODE_USE_BEDROCK']
+    }
+  })
+
   it('validates conversations: UUID ids, absolute cwds only', () => {
     const id = '0b9f3c1e-6a2d-4f3b-9c8e-1d2e3f4a5b6c'
     expect(claudeConversation({ id, cwd: '/x' })).toEqual({ id, cwd: '/x' })

@@ -37,6 +37,19 @@ export interface ClaudeConversation {
  */
 const CLAUDE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+/**
+ * What a running Claude Code hands its own child processes. A daemon started
+ * from inside Claude (`npm run dev` in an agent's terminal) would pass them to
+ * every tile, and a `claude` there then runs as that session's child: it saves
+ * no transcript of its own, so there is nothing to resume later. Only these
+ * per-process ones go; settings a user exports (CLAUDE_CODE_USE_BEDROCK, …) stay.
+ */
+const INHERITED_CLAUDE = [
+  'CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_EFFORT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_CHILD_SESSION',
+  'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_EXECPATH',
+  'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN',
+]
+
 export function claudeConversation(v: unknown): ClaudeConversation | null {
   if (!v || typeof v !== 'object') return null
   const { id, cwd } = v as Record<string, unknown>
@@ -140,6 +153,7 @@ export class Session {
     const shell = opts.shell ?? defaultShell()
     const env: Record<string, string> = {}
     for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v
+    for (const k of INHERITED_CLAUDE) delete env[k]
     env['TRING_SESSION_ID'] = this.id
     env['TRING_SLOT'] = String(this.slot)
     env['TRING_PROJECT'] = opts.projectName

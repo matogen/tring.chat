@@ -430,6 +430,34 @@ Two things are deliberate:
   Auto-executing whatever was there last time is how four dev servers end up fighting
   over a port.
 
+### Claude conversations come back too
+
+A tile that was running Claude Code reopens the same conversation after a restart
+of tring or of the machine: tring types `claude --resume <id>` into the tile's shell
+once it has started. Claude waits for your next prompt, so nothing runs that was not
+already running. Quitting Claude still leaves you in that shell.
+
+tring learns which conversation each tile is running from Claude Code's
+`SessionStart` and `SessionEnd` hooks, which `tring hooks install` adds (run it again
+if you installed the hooks before this, then restart your `claude` sessions once).
+Ending a conversation yourself (`/exit`, Ctrl+D, `/clear`) forgets it. Stopping tring
+or shutting down does not, since that is the conversation you want back. A tile that
+was resumed runs plain `claude --resume`, so flags you started it with (`--model`,
+a permission mode) fall back to your settings.
+
+To have tring itself running after a reboot:
+
+```sh
+tring autostart on      # flags after `on` are passed to the daemon, e.g. --allow-origin …
+tring autostart status
+tring autostart off
+```
+
+This writes a systemd user unit on Linux, a LaunchAgent on macOS, or a `.cmd` in the
+Startup folder on Windows, with the `PATH` you ran it from so the tiles find `claude`
+and your tools. It is enabled for your next login, not started, since tring is usually
+running already. A file at that path that tring did not write is left alone.
+
 ## Dropping files on a terminal
 
 Drag a screenshot, a spreadsheet or any other file onto the centre terminal and its path is typed into the prompt,
