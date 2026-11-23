@@ -30,6 +30,9 @@ export const HOOK_SPECS: readonly HookSpec[] = [
   { event: 'UserPromptSubmit', timeout: 10 },
   { event: 'Notification', timeout: 10 },
   { event: 'Stop', timeout: 10 },
+  // Which conversation each tile is running, so a restart can reopen it.
+  { event: 'SessionStart', timeout: 10 },
+  { event: 'SessionEnd', timeout: 10 },
 ]
 
 interface HookEntry { type?: string; command?: string; timeout?: number }

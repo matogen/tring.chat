@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { createServer, type RequestListener } from 'node:http'
 import { createServer as createSecureServer } from 'node:https'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { WebSocketServer } from 'ws'
@@ -20,6 +21,7 @@ import { Inbox } from './inbox.ts'
 import { AutoAnswerer } from './auto-answer.ts'
 import { hooksStatus, installHooks, uninstallHooks } from './hooks-install.ts'
 import { prependPath, writeHookShim } from './hook-shim.ts'
+import { autostartOff, autostartOn, autostartStatus, ForeignAutostart, type AutostartEnv } from './autostart.ts'
 
 interface Auth {
   token: string | null
@@ -73,8 +75,43 @@ async function hooksCommand(argv: string[]): Promise<boolean> {
   return true
 }
 
+/** `tring autostart on|off|status`; true when argv was that command. */
+async function autostartCommand(argv: string[]): Promise<boolean> {
+  if (argv[0] !== 'autostart') return false
+  const script = fileURLToPath(import.meta.url)
+  if (script.endsWith('.ts')) {
+    throw new UsageError('autostart needs an installed tring (npm i -g tring-chat); a source checkout has no script to start')
+  }
+  const env: AutostartEnv = { platform: process.platform, home: os.homedir(), env: process.env, node: process.execPath, script }
+  const verb = argv[1] ?? 'status'
+  try {
+    if (verb === 'on') {
+      // The flags are checked the way the daemon will read them, so a typo
+      // fails here rather than at every login.
+      parseArgs(argv.slice(2))
+      const st = await autostartOn(env, argv.slice(2))
+      console.log(`tring will start at login: ${st.file}`)
+      if (process.platform === 'linux') console.log('  start it now: systemctl --user start tring')
+    } else if (verb === 'off') {
+      console.log(await autostartOff(env) ? 'tring will no longer start at login' : 'autostart was not on')
+    } else if (verb === 'status') {
+      const st = await autostartStatus(env)
+      console.log(!st.present ? `autostart is off (${st.file} does not exist)\n  run: tring autostart on`
+        : st.ours ? `autostart is on: ${st.file}`
+        : `${st.file} exists but was not written by tring; tring leaves it alone`)
+    } else {
+      throw new UsageError(`unknown autostart command ${verb}; use on, off or status`)
+    }
+  } catch (err) {
+    if (err instanceof ForeignAutostart) throw new UsageError(err.message)
+    throw err
+  }
+  return true
+}
+
 async function main(): Promise<void> {
   if (await hooksCommand(process.argv.slice(2))) return
+  if (await autostartCommand(process.argv.slice(2))) return
   const args = parseArgs(process.argv.slice(2))
 
   let auth: Auth

@@ -6,7 +6,17 @@ export interface HookSession {
   id: string
   /** Marks a busy session done — the explicit signal the Stop hook always sent. */
   hook(): void
+  /** Records (or, with null, forgets) the Claude conversation running here. */
+  setClaude(conv: { id: string; cwd: string } | null): void
 }
+
+/**
+ * SessionEnd reasons that mean the user ended the conversation. Anything else
+ * — `other` is what a signal gives — is left alone: stopping tring or the
+ * machine signals Claude too, and that is exactly the conversation a restart
+ * should reopen.
+ */
+const USER_ENDED = new Set(['prompt_input_exit', 'logout', 'clear'])
 
 export interface HookRequest {
   inbox: Inbox
@@ -54,6 +64,16 @@ export function routeHook(req: HookRequest): Promise<Record<string, unknown> | n
 
     case 'Notification':
       session.hook()
+      return Promise.resolve(null)
+
+    // New, resumed, after /clear or a compaction: whichever, it is now the
+    // conversation this tile would reopen.
+    case 'SessionStart':
+      if (payload.session_id) session.setClaude({ id: payload.session_id, cwd: payload.cwd ?? '' })
+      return Promise.resolve(null)
+
+    case 'SessionEnd':
+      if (payload.reason && USER_ENDED.has(payload.reason)) session.setClaude(null)
       return Promise.resolve(null)
 
     // The user typed into this session's own terminal: whatever its cards

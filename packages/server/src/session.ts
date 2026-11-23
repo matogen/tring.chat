@@ -1,4 +1,5 @@
 import { readlinkSync } from 'node:fs'
+import path from 'node:path'
 import { createRequire } from 'node:module'
 import { spawn, type IPty } from 'node-pty'
 import type { Terminal as TerminalT } from '@xterm/headless'
@@ -23,6 +24,39 @@ const CWD_POLL_MS = 2000
 /** Grace period for rc files to finish before checking where we landed. */
 const CWD_ENFORCE_MS = 400
 
+/** The Claude Code conversation a tile was running, from its SessionStart hook. */
+export interface ClaudeConversation {
+  id: string
+  /** Where Claude was started; its transcripts are filed under this directory. */
+  cwd: string
+}
+
+/**
+ * Claude Code's session ids are UUIDs. Anything else is refused before it is
+ * kept, because the id is later typed into a shell.
+ */
+const CLAUDE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * What a running Claude Code hands its own child processes. A daemon started
+ * from inside Claude (`npm run dev` in an agent's terminal) would pass them to
+ * every tile, and a `claude` there then runs as that session's child: it saves
+ * no transcript of its own, so there is nothing to resume later. Only these
+ * per-process ones go; settings a user exports (CLAUDE_CODE_USE_BEDROCK, …) stay.
+ */
+const INHERITED_CLAUDE = [
+  'CLAUDECODE', 'CLAUDE_PID', 'CLAUDE_EFFORT', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_CHILD_SESSION',
+  'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_EXECPATH',
+  'CLAUDE_CODE_MESSAGING_SOCKET', 'CLAUDE_CODE_MESSAGING_TOKEN',
+]
+
+export function claudeConversation(v: unknown): ClaudeConversation | null {
+  if (!v || typeof v !== 'object') return null
+  const { id, cwd } = v as Record<string, unknown>
+  if (typeof id !== 'string' || !CLAUDE_ID.test(id)) return null
+  return { id, cwd: typeof cwd === 'string' && path.isAbsolute(cwd) ? cwd : '' }
+}
+
 export interface SessionOptions {
   id: string
   projectId: string
@@ -46,6 +80,12 @@ export interface SessionOptions {
    * last time is how four dev servers end up fighting over a port.
    */
   autorun?: boolean
+  /**
+   * A Claude conversation to reopen: typed into the shell as
+   * `claude --resume <id>` once rc files have run, so quitting Claude leaves
+   * the tile the shell it was before. Ignored when `command` autoruns.
+   */
+  resume?: ClaudeConversation | null
 }
 
 /**
@@ -65,6 +105,8 @@ export class Session {
   name: string | null
   color: string | null
   title: string | null = null
+  /** The conversation running here, kept so a restart can reopen it. */
+  claude: ClaudeConversation | null = null
 
   readonly tracker: ActivityTracker
 
@@ -86,6 +128,8 @@ export class Session {
 
   /** Fires when the shell moves, so the new location gets persisted. */
   onCwdChange: (() => void) | null = null
+  /** Fires when Claude starts, switches or ends a conversation here. */
+  onClaudeChange: (() => void) | null = null
 
   /**
    * Where the shell *is*, not where it started. A session spawned in a project
@@ -109,6 +153,7 @@ export class Session {
     const shell = opts.shell ?? defaultShell()
     const env: Record<string, string> = {}
     for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v
+    for (const k of INHERITED_CLAUDE) delete env[k]
     env['TRING_SESSION_ID'] = this.id
     env['TRING_SLOT'] = String(this.slot)
     env['TRING_PROJECT'] = opts.projectName
@@ -179,8 +224,15 @@ export class Session {
     // and common example — which would silently discard the directory the user
     // chose in the dialog. An explicit per-session choice should beat a global
     // default, so put the shell back once, after rc files have run.
-    if (!(this.command && autorun) && usesPosixCd(shell)) {
-      this.enforceTimer = setTimeout(() => this.enforceCwd(), CWD_ENFORCE_MS)
+    const interactive = !(this.command && autorun)
+    const resume = interactive ? claudeConversation(opts.resume) : null
+    this.claude = resume
+    const posix = usesPosixCd(shell)
+    if (interactive && (posix || resume)) {
+      this.enforceTimer = setTimeout(() => {
+        if (posix) this.enforceCwd()
+        if (resume) this.typeResume(resume, posix)
+      }, CWD_ENFORCE_MS)
       this.enforceTimer.unref?.()
     }
 
@@ -282,6 +334,29 @@ export class Session {
     } catch {
       // Process gone, or /proc not readable; keep the last known directory.
     }
+  }
+
+  /**
+   * Claude Code's hook payload is the only source of these, and it reports a
+   * conversation start (new, resumed, after /clear) and end. Null forgets it.
+   */
+  setClaude(conv: ClaudeConversation | null): void {
+    const next = conv ? claudeConversation(conv) : null
+    if (conv && !next) return
+    if (next?.id === this.claude?.id && next?.cwd === this.claude?.cwd) return
+    this.claude = next
+    this.onClaudeChange?.()
+  }
+
+  /**
+   * Typed straight to the PTY rather than through write(): it is tring's
+   * keystroke, not the user's, and must not count as them having taken over
+   * the shell. Skipped if they already have, since then the prompt is theirs.
+   */
+  private typeResume(conv: ClaudeConversation, posix: boolean): void {
+    if (this.disposed || this.hasInput) return
+    const cd = posix && conv.cwd && conv.cwd !== this.spawnCwd ? `cd -- ${shQuote(conv.cwd)} && ` : ''
+    this.pty.write(`${cd}claude --resume ${conv.id}\r`)
   }
 
   /** Runs once, only if the shell is not where it was asked to be. */

@@ -41,6 +41,39 @@ describe('ProjectManager', () => {
     expect(state.projects[0]?.sessions[0]).toMatchObject({ slot: 1, name: 'server', cwd: dir })
   })
 
+  it('remembers the Claude conversation and reopens it after a restart', async () => {
+    const { dir, statePath, pm } = await fixture()
+    const id = pm.createProject('api', dir)
+    const s = pm.create(id, { name: 'agent', cwd: dir })!
+    const conv = { id: '0b9f3c1e-6a2d-4f3b-9c8e-1d2e3f4a5b6c', cwd: dir }
+    s.setClaude(conv)
+    await pm.save()
+    const state = JSON.parse(await readFile(statePath, 'utf8')) as PersistedState
+    expect(state.projects[0]?.sessions[0]?.claude).toEqual(conv)
+    await pm.dispose()
+
+    const restored = await open(statePath, dir)
+    live.push(restored)
+    const back = restored.findSession(restored.list()[0]!.sessions[0]!.id)!
+    expect(back.claude).toEqual(conv)
+    // Before the resume is typed: the real `claude` may be on this PATH.
+    await restored.dispose()
+  })
+
+  it('saves nothing once shutdown starts, so a dying Claude cannot overwrite the state', async () => {
+    const { dir, statePath, pm } = await fixture()
+    const id = pm.createProject('api', dir)
+    const s = pm.create(id, { name: 'agent', cwd: dir })!
+    s.setClaude({ id: '0b9f3c1e-6a2d-4f3b-9c8e-1d2e3f4a5b6c', cwd: dir })
+    await pm.save()
+    const before = await readFile(statePath, 'utf8')
+    const closing = pm.dispose()
+    s.setClaude(null)
+    await closing
+    await settle(100)
+    expect(await readFile(statePath, 'utf8')).toBe(before)
+  })
+
   it('remembers a tile colour across a restart', async () => {
     const { dir, statePath, pm } = await fixture()
     const id = pm.createProject('api', dir)

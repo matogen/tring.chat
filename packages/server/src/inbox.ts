@@ -38,6 +38,12 @@ export interface HookPayload {
   last_assistant_message?: string
   notification_type?: string
   message?: string
+  session_id?: string
+  cwd?: string
+  /** SessionStart: startup | resume | clear | compact. */
+  source?: string
+  /** SessionEnd: clear | logout | prompt_input_exit | other … */
+  reason?: string
 }
 
 export class Inbox {

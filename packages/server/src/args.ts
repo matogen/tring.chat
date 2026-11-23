@@ -32,6 +32,10 @@ const HELP = `tring — focus-centred terminal deck
                     add or remove the Claude Code hooks orchestrator mode
                     reads, in ~/.claude/settings.json. They do nothing
                     outside a tring session
+  tring autostart on|off|status [flags]
+                    start tring at login (systemd user unit, LaunchAgent, or
+                    the Windows Startup folder), with the given flags.
+                    With the hooks, a reboot reopens every Claude conversation
 
   --port <n>        default ${DEFAULT_PORT}
   --host <addr>     default ${DEFAULT_HOST}
