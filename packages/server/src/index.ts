@@ -16,6 +16,10 @@ import { openWindow, describeFallback } from './open-window.ts'
 import { fixSpawnHelper } from './spawn-helper.ts'
 import { UploadStore } from './uploads.ts'
 import { checkForUpdate, currentVersion } from './update-check.ts'
+import { Inbox } from './inbox.ts'
+import { AutoAnswerer } from './auto-answer.ts'
+import { hooksStatus, installHooks, uninstallHooks } from './hooks-install.ts'
+import { prependPath, writeHookShim } from './hook-shim.ts'
 
 interface Auth {
   token: string | null
@@ -46,7 +50,31 @@ function loadTls(certFile: string, keyFile: string): { cert: Buffer; key: Buffer
   return { cert: read(certFile, 'certificate'), key: read(keyFile, 'key') }
 }
 
+/** `tring hooks install|uninstall|status`; true when argv was that command. */
+async function hooksCommand(argv: string[]): Promise<boolean> {
+  if (argv[0] !== 'hooks') return false
+  const verb = argv[1] ?? 'status'
+  if (verb === 'install') {
+    await installHooks()
+    const st = await hooksStatus()
+    console.log(`installed tring hooks in ${st.path} (backup beside it as settings.json.tring-backup)`)
+  } else if (verb === 'uninstall') {
+    const removed = await uninstallHooks()
+    console.log(removed ? 'removed tring hooks' : 'no tring hooks were installed')
+  } else if (verb === 'status') {
+    const st = await hooksStatus()
+    console.log(st.installed
+      ? `tring hooks installed in ${st.path}`
+      : `tring hooks not installed in ${st.path}${st.events.length ? ` (partial: ${st.events.join(', ')})` : ''}` +
+        '\n  run: tring hooks install')
+  } else {
+    throw new UsageError(`unknown hooks command ${verb}; use install, uninstall or status`)
+  }
+  return true
+}
+
 async function main(): Promise<void> {
+  if (await hooksCommand(process.argv.slice(2))) return
   const args = parseArgs(process.argv.slice(2))
 
   let auth: Auth
@@ -96,6 +124,21 @@ async function main(): Promise<void> {
   // difference between a tile and `posix_spawnp failed` (see spawn-helper.ts).
   for (const file of fixSpawnHelper()) console.log(`made ${file} executable`)
 
+  // Before the first session spawns: each copies this PATH, and the installed
+  // Claude Code hooks find `tring-hook` through it (see hook-shim.ts). Built
+  // installs run the bundled script; a source checkout runs the .ts directly.
+  const hookScript = [path.resolve(here, 'tring-hook.js'), path.resolve(here, 'hook-cli.ts')]
+    .find((p) => existsSync(p))
+  if (hookScript) {
+    const binDir = path.join(path.dirname(defaultTokenPath()), 'bin')
+    try {
+      await writeHookShim(binDir, process.execPath, hookScript)
+      process.env['PATH'] = prependPath(process.env['PATH'], binDir)
+    } catch (err) {
+      console.warn(`warning: cannot write ${binDir}: ${(err as Error).message} — orchestrator hooks will not reach this daemon`)
+    }
+  }
+
   const pm = await ProjectManager.open({
     url,
     // Reaches each session as $TRING_TOKEN, so the documented Stop hook can
@@ -117,8 +160,24 @@ async function main(): Promise<void> {
 
   // Built once, not per request: the handler holds the usage-scan cache, and a
   // fresh closure per request would throw that away on every call.
+  // Orchestrator mode: what the agents are asking, shared by the hook route
+  // that fills it and the sockets that show and answer it.
+  const inbox = new Inbox()
+  // Off until switched on from the inbox, and remembered across restarts.
+  const auto = new AutoAnswerer({
+    inbox,
+    statePath: path.join(path.dirname(pm.statePath), 'orchestrator.json'),
+    context: (id) => {
+      const s = pm.findSession(id)
+      if (!s) return null
+      const shot = s.snapshotNow()
+      return { cwd: s.cwd, screen: shot.rows.map((r) => r.map((c) => c.text).join('')).join('\n') }
+    },
+  })
+  await auto.load()
   const handle = createHandler({
-    pm, webRoot, token, sameOrigin, fsRoots: args.fsRoot, uploads,
+    pm, webRoot, token, sameOrigin, fsRoots: args.fsRoot, uploads, inbox,
+    onPermission: (item) => { void auto.offer(item) },
   })
   const listener: RequestListener = (req, res) => {
     void handle(req, res).catch(() => {
@@ -130,7 +189,7 @@ async function main(): Promise<void> {
   // Rejected at the handshake, before Hub ever sees a socket: an origin that
   // is refused here never gets to send a `hello` at all.
   const wss = new WebSocketServer({ server, verifyClient: upgradeGuard(sameOrigin) })
-  const hub = new Hub({ pm, token })
+  const hub = new Hub({ pm, token, inbox, auto })
   hub.attach(wss)
 
   // The one link that carries the secret. The client stores it and scrubs it

@@ -5,13 +5,28 @@ import {
 import type { ProjectManager } from './project-manager.ts'
 import { secretEquals } from './security.ts'
 import type { Session } from './session.ts'
+import type { Inbox } from './inbox.ts'
+import type { AutoAnswerer } from './auto-answer.ts'
 
 export interface HubOptions {
   pm: ProjectManager
   token?: string | null
   /** Snapshot cadence; spec caps thumbnails at 4 per second. */
   snapshotMs?: number
+  /** Orchestrator mode's cards. Without one, `answer` and `reply` do nothing. */
+  inbox?: Inbox | null
+  /** The supervisor; its switch and history are pushed to every client. */
+  auto?: AutoAnswerer | null
 }
+
+/**
+ * A follow-up typed into a session that has stopped and is waiting.
+ *
+ * Sent as a bracketed paste so a multi-line reply arrives as one prompt
+ * rather than as several Enters, then Enter on its own a beat later: some
+ * TUIs drop a CR that lands in the same read as the paste's end marker.
+ */
+const PASTE_SETTLE_MS = 60
 
 interface Client {
   ws: WebSocket
@@ -28,9 +43,27 @@ export class Hub {
 
   constructor(private readonly opts: HubOptions) {
     const pm = opts.pm
-    pm.onChange = () => this.broadcastState()
-    pm.onSessionStatus = (s) => this.broadcastStatus(s)
-    pm.onSessionExit = (s, code) => this.broadcast({ type: 'exit', id: s.id, code })
+    pm.onChange = () => {
+      // A killed or deleted session never sends `exit` here, and its cards
+      // would otherwise wait for an agent that no longer exists.
+      opts.inbox?.drop((i) => !pm.findSession(i.sessionId))
+      this.broadcastState()
+    }
+    pm.onSessionStatus = (s) => {
+      // A reply card is "this session stopped and is waiting for you". Once
+      // it is working again that is over. Typing a prompt into its terminal
+      // ends it too, through the UserPromptSubmit hook; idle is not enough on
+      // its own, since a reply short enough never to have looked busy leaves
+      // the session idle from start to finish.
+      if (s.tracker.status === 'busy') opts.inbox?.dropSession(s.id, 'reply')
+      this.broadcastStatus(s)
+    }
+    pm.onSessionExit = (s, code) => {
+      opts.inbox?.dropSession(s.id)
+      this.broadcast({ type: 'exit', id: s.id, code })
+    }
+    if (opts.inbox) opts.inbox.onChange = () => this.broadcastInbox()
+    if (opts.auto) opts.auto.onChange = () => this.broadcastAuto()
     pm.onSessionData = (s, data) => {
       const frame = encodeOutput(s.id, Buffer.from(data, 'utf8'))
       for (const c of this.clients) {
@@ -96,6 +129,8 @@ export class Hub {
       c.projectId = pm.activeProjectId
       this.sendState(c)
       this.sendSnapshots(c)
+      if (this.opts.inbox) this.send(c, { type: 'inbox', items: this.opts.inbox.list() })
+      if (this.opts.auto) this.send(c, this.autoMessage(this.opts.auto))
       return
     }
     if (!c.authed) return this.send(c, { type: 'error', message: 'expected hello' })
@@ -167,6 +202,39 @@ export class Hub {
       case 'respawn':
         pm.findManager(msg.id)?.respawn(msg.id)
         break
+      case 'answer': {
+        const inbox = this.opts.inbox
+        const item = inbox?.get(msg.itemId)
+        // A card already settled elsewhere is not an error worth showing:
+        // the inbox broadcast that removed it is already on its way.
+        if (!inbox || !item) break
+        if (msg.decision !== 'allow' && msg.decision !== 'deny' && msg.decision !== 'terminal') break
+        // A reply card can only be dismissed; its answer is typed, via `reply`.
+        if (item.kind === 'reply' && msg.decision !== 'terminal') break
+        inbox.answer(item.id, {
+          decision: msg.decision,
+          ...(msg.answers ? { answers: msg.answers } : {}),
+          ...(typeof msg.message === 'string' ? { message: msg.message } : {}),
+        })
+        break
+      }
+      case 'autoAnswer':
+        void this.opts.auto?.setEnabled(msg.enabled === true)
+        break
+      case 'reply': {
+        const inbox = this.opts.inbox
+        const item = inbox?.get(msg.itemId)
+        if (!inbox || !item || item.kind !== 'reply') break
+        const s = pm.findSession(item.sessionId)
+        const text = String(msg.text ?? '').replace(/\x1b\[20[01]~/g, '').trimEnd()
+        // Never typed into a session that has started working again: the
+        // prompt this reply was written for is no longer the one on screen.
+        if (!s || s.tracker.status === 'busy' || s.tracker.status === 'exited' || !text) break
+        inbox.answer(item.id, { decision: 'allow' })
+        s.write(`\x1b[200~${text}\x1b[201~`)
+        setTimeout(() => s.write('\r'), PASTE_SETTLE_MS).unref?.()
+        break
+      }
     }
   }
 
@@ -221,6 +289,18 @@ export class Hub {
       title: s.title,
       notable: s.tracker.notable,
     })
+  }
+
+  private autoMessage(auto: AutoAnswerer): ServerMessage {
+    return { type: 'autoAnswer', enabled: auto.enabled, history: auto.decisions }
+  }
+
+  private broadcastAuto(): void {
+    if (this.opts.auto) this.broadcast(this.autoMessage(this.opts.auto))
+  }
+
+  private broadcastInbox(): void {
+    if (this.opts.inbox) this.broadcast({ type: 'inbox', items: this.opts.inbox.list() })
   }
 
   private sendState(c: Client): void {

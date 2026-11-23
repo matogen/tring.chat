@@ -28,6 +28,11 @@ export class UsageError extends Error {}
 
 const HELP = `tring — focus-centred terminal deck
 
+  tring hooks install|uninstall|status
+                    add or remove the Claude Code hooks orchestrator mode
+                    reads, in ~/.claude/settings.json. They do nothing
+                    outside a tring session
+
   --port <n>        default ${DEFAULT_PORT}
   --host <addr>     default ${DEFAULT_HOST}
   --token <secret>  bearer token clients must present. One is generated and

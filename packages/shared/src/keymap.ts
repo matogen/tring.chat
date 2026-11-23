@@ -47,6 +47,7 @@ export const PICKER_ACTIONS = {
   KeyR: 'rename',
   KeyX: 'kill',
   KeyM: 'mark-seen',
+  KeyO: 'orchestrator',
   Escape: 'close',
 } as const
 

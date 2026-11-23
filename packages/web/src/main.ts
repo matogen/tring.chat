@@ -10,7 +10,8 @@ import type {
   ProjectInfo, ScreenSnapshot, ServerMessage, SessionInfo, UpdateInfo,
 } from '@tring/shared/protocol'
 import { actionForEvent, isPrefix, legendForSlot, slotForEvent } from '@tring/shared/keymap'
-import { uploadFile, WsClient } from './ws-client.ts'
+import { api, apiPost, uploadFile, WsClient } from './ws-client.ts'
+import { InboxPanel } from './inbox-panel.ts'
 import { FocusTerminal } from './focus-terminal.ts'
 import { DiffPanel } from './diff-panel.ts'
 import { followFocus } from './focus-target.ts'
@@ -74,6 +75,29 @@ termHost.className = 'term-host'
 focusCell.append(termHost)
 const diffPanel = new DiffPanel(focusCell, () => fitTerminal())
 const focusTerm = new FocusTerminal(termHost)
+// Orchestrator mode: laid over the terminal, never instead of it, so the
+// WebGL canvas stays attached and comes back exactly as it was.
+const inboxPanel = new InboxPanel(focusCell, {
+  label: (id) => {
+    const s = sessionById(id)
+    if (!s) return null
+    const project = projects.find((p) => p.id === s.projectId)
+    return {
+      name: s.name ?? s.title ?? 'shell',
+      slot: s.slot,
+      color: s.color,
+      elsewhere: s.projectId !== viewedId ? project?.name ?? 'another project' : null,
+    }
+  },
+  onAnswer: (itemId, decision, extra) => ws.send({ type: 'answer', itemId, decision, ...extra }),
+  onReply: (itemId, text) => ws.send({ type: 'reply', itemId, text }),
+  onOpen: (id) => openFromInbox(id),
+  hooks: () => api<{ installed: boolean; path: string }>('/api/hooks'),
+  installHooks: async () => { await apiPost('/api/hooks') },
+  onAuto: (enabled) => ws.send({ type: 'autoAnswer', enabled }),
+})
+/** The first `inbox` after connecting is the backlog, not news worth a chime. */
+let inboxSeen = false
 
 const ws = new WsClient({
   onOpen: () => { hideToast(); reattach() },
@@ -212,6 +236,16 @@ function handleMessage(msg: ServerMessage): void {
     case 'error':
       showToast(msg.message)
       break
+    case 'autoAnswer':
+      inboxPanel.setAuto(msg.enabled, msg.history)
+      break
+    case 'inbox': {
+      const fresh = inboxPanel.setItems(msg.items)
+      if (inboxSeen && fresh.length > 0) tring()
+      inboxSeen = true
+      paintStatuses()
+      break
+    }
   }
 }
 
@@ -225,10 +259,12 @@ const barCallbacks = () => ({
   onSoundToggle: () => paintStatuses(),
   onSettings: () => openSettings(),
   onUsage: () => showUsage(),
+  onInbox: () => toggleInbox(),
 })
 
 const paintBar = (): void =>
-  renderBar(barEl, projects, viewedId, barCallbacks(), update, viewMode === 'usage')
+  renderBar(barEl, projects, viewedId, barCallbacks(), update, viewMode === 'usage',
+    { open: inboxPanel.isOpen, count: inboxPanel.count })
 
 function render(): void {
   paintBar()
@@ -343,12 +379,13 @@ const span = (cls: string): HTMLElement => {
  * title, a `cd` or an exit reach the tile through here or not at all.
  */
 function paintTile(tile: HTMLElement, s: SessionInfo | undefined): void {
-  tile.classList.remove('st-idle', 'st-busy', 'st-done', 'st-exited', 'viewing')
+  tile.classList.remove('st-idle', 'st-busy', 'st-done', 'st-exited', 'viewing', 'asking')
   tile.style.removeProperty('--tint')
   if (!s) return
 
   tile.classList.add(`st-${s.status}`)
   if (s.id === focusedId) tile.classList.add('viewing')
+  if (inboxPanel.countFor(s.id) > 0) tile.classList.add('asking')
   if (s.color) tile.style.setProperty('--tint', s.color)
 
   const name = s.name ?? s.title ?? 'shell'
@@ -396,6 +433,7 @@ function paintStatuses(): void {
   }
   paintBar()
   paintSwitcher()
+  inboxPanel.repaint()
   const done = globalDone()
   document.title = done > 0 ? `(${done}) tring` : 'tring'
 }
@@ -463,13 +501,47 @@ function fitTerminal(): void {
   for (const t of thumbs.values()) t.refresh()
 }
 
-function focusSession(id: string | null): void {
+function focusSession(id: string | null, keepInbox = false): void {
   showRing()
+  // Picking a session is leaving the inbox for it — except where the focus
+  // moves on its own (a project switch restoring where you were), which must
+  // not pull you out of a view you chose.
+  if (!keepInbox && inboxPanel.isOpen) closeInbox()
   attachSession(id)
   // Also when the session did not change. Whatever got us here — a click on a
   // tile, a key in the picker — left the keyboard somewhere else, and
   // attachSession returns early rather than re-aiming at what it already has.
+  if (focusedId && !inboxPanel.isOpen) focusTerm.focus()
+}
+
+function toggleInbox(): void {
+  if (inboxPanel.isOpen) closeInbox()
+  else openInbox()
+}
+
+function openInbox(): void {
+  showRing()
+  inboxPanel.open()
+  paintBar()
+}
+
+function closeInbox(): void {
+  inboxPanel.close()
+  paintBar()
   if (focusedId) focusTerm.focus()
+}
+
+/** A card's Open: that session in the centre, across projects if need be. */
+function openFromInbox(id: string): void {
+  const s = sessionById(id)
+  if (!s) return
+  closeInbox()
+  if (s.projectId !== viewedId) {
+    lastFocused.set(s.projectId, s.id)
+    activateProject(s.projectId)
+    return
+  }
+  focusSession(s.id)
 }
 
 /**
@@ -621,7 +693,7 @@ function focusArrival(): void {
   const s = sessionAt(slot)
   if (!s) return
   focusOnArrival = null
-  focusSession(s.id)
+  focusSession(s.id, true)
 }
 
 /** Puts you back in the session you were last using in this project. */
@@ -630,7 +702,7 @@ function restoreProjectFocus(): void {
   if (!want || want !== viewedId) return
   restoreFocusFor = null
   const id = lastFocused.get(want)
-  if (id && sessions().some((s) => s.id === id)) focusSession(id)
+  if (id && sessions().some((s) => s.id === id)) focusSession(id, true)
 }
 
 function nextDone(): void {
@@ -750,7 +822,7 @@ document.addEventListener('keydown', (e) => {
  * meant to go instead — and so is the usage view, which has no terminal.
  */
 document.addEventListener('click', () => {
-  if (ui.isOpen() || viewMode !== 'ring' || !focusedId) return
+  if (ui.isOpen() || viewMode !== 'ring' || !focusedId || inboxPanel.isOpen) return
   focusTerm.focus()
 })
 
@@ -839,6 +911,10 @@ function pickerKey(e: KeyboardEvent): void {
       ui.close(); overlayMode = null
       killSession(current)
       break
+    case 'orchestrator':
+      ui.close(); overlayMode = null
+      toggleInbox()
+      break
     case 'mark-seen':
       if (current) ws.send({ type: 'ack', id: current.id })
       ui.close(); overlayMode = null
@@ -875,4 +951,5 @@ mobile.addEventListener('change', () => {
   paintSwitcher()
   requestAnimationFrame(() => fitTerminal())
 })
+if (InboxPanel.wanted()) openInbox()
 ws.connect()
