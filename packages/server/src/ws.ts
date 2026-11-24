@@ -32,6 +32,8 @@ interface Client {
   focusedId: string | null
   /** This client's terminal size for its focused session, from focus and resize. */
   size: { cols: number; rows: number } | null
+  /** Until when this screen counts as in front of someone (presence messages). */
+  activeUntil: number
 }
 
 /** A size a PTY can take; anything else is ignored rather than passed to it. */
@@ -39,6 +41,9 @@ function validSize(cols: unknown, rows: unknown): { cols: number; rows: number }
   const ok = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 2000
   return ok(cols) && ok(rows) ? { cols, rows } : null
 }
+
+/** How long a presence message counts for; the browser repeats it every minute. */
+const PRESENCE_MS = 90_000
 
 export class Hub {
   private readonly clients = new Set<Client>()
@@ -105,7 +110,7 @@ export class Hub {
   }
 
   private accept(ws: WebSocket): void {
-    const client: Client = { ws, authed: false, projectId: null, focusedId: null, size: null }
+    const client: Client = { ws, authed: false, projectId: null, focusedId: null, size: null, activeUntil: 0 }
     this.clients.add(client)
     ws.on('close', () => {
       this.clients.delete(client)
@@ -216,6 +221,10 @@ export class Hub {
         if (msg.claim === true || this.sizes.mayResize(s.id, c)) this.take(c, s, true)
         break
       }
+      case 'presence':
+        // Renewed while true; a screen that stops saying so lapses.
+        c.activeUntil = msg.active === true ? Date.now() + PRESENCE_MS : 0
+        break
       case 'agent': {
         const agent = this.opts.agent
         if (!agent) break
@@ -367,6 +376,12 @@ export class Hub {
       this.send(o, { type: 'size', id: s.id, cols: s.cols, rows: s.rows, mine: o === c })
       if (changed && (o !== c || replay)) this.send(o, { type: 'screen', id: s.id, ansi: s.serialize() })
     }
+  }
+
+  /** Whether any connected screen has tring in front of someone right now. */
+  anyoneActive(now = Date.now()): boolean {
+    for (const c of this.clients) if (c.authed && c.activeUntil > now) return true
+    return false
   }
 
   /** A tile, or the orchestrator agent's own terminal. */

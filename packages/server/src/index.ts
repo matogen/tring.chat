@@ -24,6 +24,10 @@ import { prependPath, writeHookShim } from './hook-shim.ts'
 import { autostartOff, autostartOn, autostartStatus, ForeignAutostart, type AutostartEnv } from './autostart.ts'
 import { OrchestratorAgent } from './orchestrator-agent.ts'
 import { OrchestratorTools } from './orchestrator-tools.ts'
+import { PushStore } from './push-store.ts'
+import { Notifier } from './notifier.ts'
+import { pushApi } from './push-api.ts'
+import { sendPush } from './web-push.ts'
 
 interface Auth {
   token: string | null
@@ -229,11 +233,31 @@ async function main(): Promise<void> {
     node: process.execPath,
   })
   const tools = new OrchestratorTools({ pm, inbox })
+  // Phone notifications for orchestrator cards: off until a device turns
+  // them on in settings. The VAPID key is made on first run and kept.
+  const pushStore = new PushStore(path.join(configDir, 'push.json'))
+  await pushStore.load()
+  let hubRef: Hub | null = null
+  const notifier = new Notifier({
+    devices: () => pushStore.devices(),
+    forget: (endpoint) => { void pushStore.remove(endpoint) },
+    stillOpen: (id) => inbox.get(id) !== undefined,
+    anyoneActive: () => hubRef?.anyoneActive() ?? false,
+    label: (sessionId) => {
+      const s = pm.findSession(sessionId)
+      if (!s) return null
+      const project = pm.list().find((p) => p.id === s.projectId)
+      return `${project?.name ?? 'tring'}/${s.slot}${s.name ? ` ${s.name}` : ''}`
+    },
+    send: (device, payload, opts) => sendPush(device.sub, payload, pushStore.vapid, 'https://tring.chat', opts),
+  })
+  inbox.onAdded = (item) => notifier.onCard(item)
   const handle = createHandler({
     pm, webRoot, token, sameOrigin, fsRoots: args.fsRoot, uploads, inbox,
     onPermission: (item) => { void auto.offer(item) },
     tools,
     agentSession: (id) => agent.find(id),
+    push: pushApi(pushStore, notifier),
   })
   const listener: RequestListener = (req, res) => {
     void handle(req, res).catch(() => {
@@ -246,6 +270,7 @@ async function main(): Promise<void> {
   // is refused here never gets to send a `hello` at all.
   const wss = new WebSocketServer({ server, verifyClient: upgradeGuard(sameOrigin) })
   const hub = new Hub({ pm, token, inbox, auto, agent })
+  hubRef = hub
   hub.attach(wss)
   // After the hub, so its first state change reaches the sockets.
   await agent.load()
