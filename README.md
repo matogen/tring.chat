@@ -602,6 +602,24 @@ tile that is waiting on a permission prompt or a question — those stay yours, 
 cards beside it, as before. What the agents in the tiles do is still governed by their
 own permissions.
 
+**It never does the work itself.** It allocates work to tiles and looks things up; "test
+it in the browser" goes to the tile that owns the work. That is enforced, not just asked:
+its workspace settings deny editing and writing files, browser and computer-use tools,
+web fetch and search, and subagents, in every permission mode. It loads tring's MCP
+server and no other (`--strict-mcp-config`). Its workspace runs in the default
+permission mode even if yours is `auto`, so any shell command you have not allowed asks
+you first.
+
+To let it run a lookup without asking — a ticket tool, say — allow that command in
+`~/.config/tring/orchestrator/.claude/settings.local.json`, which is yours and never
+rewritten, and say how to call it in `CLAUDE.md` there. Use the literal path with
+backslashes doubled (Claude Code never pre-approves a command with `$HOME` in it), and the
+shell the tool expects:
+
+```json
+{ "permissions": { "allow": ["PowerShell(node \"C:\\\\Users\\\\me\\\\tools\\\\tickets.mjs\":*)"] } }
+```
+
 The agent lives in `~/.config/tring/orchestrator`, which tring rewrites on every start
 (`TRING.md` holds its instructions; add your own to `CLAUDE.md` there, which is kept).
 The first time it opens, Claude Code asks whether to trust that folder and lists the
