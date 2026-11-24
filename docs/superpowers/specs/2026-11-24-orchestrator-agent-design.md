@@ -35,6 +35,12 @@ Shipped alongside, from the same request:
 - A tile only counts as a match with every word in one place, or at least half of them in its name, branch, title, prompts or edits. Live testing found "payments page" landing on the tile whose agent wrote "login page"; now it says no tile clearly matches. Near ties (second within 75 % of the best) say so. `TRING.md` tells the agent to ask the user in both cases rather than guess.
 - Verified with two real Claude tiles in their own worktrees, also after a daemon restart: reporting-box request → the reporting tile, login → the auth tile, payments → no clear match.
 
+## Fixes after the first week (0.1.22)
+- **Freeze when changing tabs**: switching project reset the socket's focus to none, which stopped the agent's output reaching that browser while keystrokes still reached the agent (reproduced on 0.1.21: the agent had `before-switch after-switch`, the screen showed `before-switch`). `Hub.keepFocus` keeps a socket on the agent, which is in no project, across `activateProject` and `deleteProject`.
+- **Cards cut off**: `MAX_BODY` was 4 000 characters ("… N more characters"). Now 100 000, as a ceiling against a runaway Write, and any body taller than its box gets *Show all* / *Show less* (`expandable`, re-measured on resize).
+- **Card column fixed width**: a drag handle like the diff panel's, width saved per browser (`tring.inboxWidth`), clamped to 240 px–75 %, terminal refitted on release. Hidden in the stacked phone layout.
+- **Missed tile**: asked to "edit tring", the agent found no tile, though GENERAL/1 had spent the day editing tring from `C:\Users\User`. Transcripts now also record files read and shell commands; `workedIn` (list_sessions) and a strong `worked in` field (find_work) give the worktrees an agent actually worked in, found by walking up to `.git` without running git. Words no tile mentions no longer count against confidence, and a word only one tile has in its purpose fields is enough. Replayed on the real transcript: "Best match: GENERAL/1". A person's message starting with a tag (a paste) is no longer dropped as a system line. The agent is told not to scan the disk for repositories.
+
 ## UI
 - Inbox header: **Agent** switch (server-side, persisted in `orchestrator-agent.json`).
 - Agent on + orchestrator open: centre terminal attaches to the agent (`main.ts` `target()`/`applyCentre()`); the inbox becomes a side column (`.inbox.beside`), on a phone stacked above the terminal. The focused tile is kept to return to; diff panel hidden.

@@ -30,6 +30,10 @@ const fakeGit: GitOps = {
     if (!tree) return null
     return { root: tree.path, commonDir: '/repo/.git', linked: bare(tree.path) !== '/repo', branch: tree.branch, detached: false } satisfies GitPlace
   },
+  async rootOf(p) {
+    const d = bare(p)
+    return [...trees].reverse().find((w) => d === bare(w.path) || d.startsWith(`${bare(w.path)}/`))?.path ?? null
+  },
   async worktrees() { return trees },
   async branchExists(_dir, b) { return branches.has(b) },
   async checkBranch(_dir, b) { return /\s|^-/.test(b) ? `"${b}" is not a valid branch name` : null },
@@ -429,6 +433,37 @@ describe('knowing what each tile is working on', () => {
     const some = await tools.call('session_history', { session: 'a', search: 'commit' })
     expect(some).toMatch(/2 of 2 matching turn/)
     expect(await tools.call('session_history', { session: 'b' })).toMatch(/not running Claude Code/)
+  })
+
+  it('finds the tile whose agent has been editing a repo, wherever its shell started', async () => {
+    // The live case: a Claude in the home directory, editing tring all day.
+    trees.push(wt('/src/tring.chat', 'main'))
+    sessions.push(stub({
+      id: 'd', slot: 4, projectId: 'p1', cwd: '/home/u', claude: { id: 'c4', cwd: '/home/u' }, transcript: '/t/d.jsonl',
+    }))
+    talks['/t/d.jsonl'] = talk('AI-powered feature ideas', [
+      { role: 'user', text: 'Think of some cool ideas we can build', at: null },
+      {
+        role: 'assistant', text: 'Fixed.', at: null,
+        files: ['/src/tring.chat/packages/web/src/inbox-panel.ts'],
+        paths: ['/src/tring.chat/README.md'],
+        commands: ['cd "/src/tring.chat" && npm test'],
+      },
+    ])
+    const out = await tools.call('find_work', { query: 'edit tring since it cuts off characters on cards' })
+    expect(out).toMatch(/^Best match: tring.chat\/4/)
+    expect(out).toMatch(/matched [^)]*worked in/)
+    const listed = JSON.parse(await tools.call('list_sessions', {})) as { projects: Array<{ sessions: Array<Record<string, unknown>> }> }
+    const d = listed.projects[0]!.sessions.find((s) => s['ref'] === 'tring.chat/4')!
+    expect(d['git']).toBeNull()
+    expect(d['workedIn']).toEqual(['/src/tring.chat (1 edits, 2 reads)'])
+  })
+
+  it('pulls absolute paths out of shell commands', async () => {
+    const { pathsIn } = await import('../src/orchestrator-tools.ts')
+    expect(pathsIn('cd "C:/Matogen/Internal Matogen/tring.chat" && npm test')).toEqual(['C:/Matogen/Internal Matogen/tring.chat'])
+    expect(pathsIn("git -C /src/app status; ls 'D:\\work\\x y'")).toEqual(['D:\\work\\x y', '/src/app'])
+    expect(pathsIn('npm run build && echo done // not a path')).toEqual([])
   })
 
   it('stems words so "reporting" finds "reports"', async () => {

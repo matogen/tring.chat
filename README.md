@@ -547,7 +547,9 @@ button of its own in the bar under the tabs, with the count of cards waiting.
 ### Orchestrator agent
 
 Optional, off by default. Tick **Agent** in the Orchestrator's header and the centre
-becomes a Claude Code session of its own, with the cards in a column beside it. Instead of
+becomes a Claude Code session of its own, with the cards in a column beside it. Drag
+the bar between them to make the column wider or narrower; the width is remembered. A
+long reply or plan on a card folds behind **Show all**. Instead of
 typing into each tile, you tell it what you want:
 
 > *Which tiles are on which branch? Ask the api tile to run its tests, and start a new
@@ -572,7 +574,9 @@ green"* — and it goes to the tile that has been working on the reporting box, 
 already has the context. tring reads each tile's own Claude Code transcript (the path
 every hook reports) for Claude's title for the conversation, the prompts it was given and
 the files it edited, so a tile is found by what it has been doing even after its work is
-committed and its screen has moved on. When two tiles match about equally, or none
+committed and its screen has moved on. The repositories an agent has edited and read in
+count too, so a Claude started in your home directory that has spent the day in one
+repository is found as working in that repository. When two tiles match about equally, or none
 clearly does, the agent asks you which rather than guessing.
 
 **Worktrees.** The agent works one branch, one worktree, one agent. A tile is placed

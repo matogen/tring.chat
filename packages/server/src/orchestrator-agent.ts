@@ -241,9 +241,10 @@ you get the work done through the agents in those tiles.
 
 - \`list_sessions\` — every project and tile: status (busy = working, done =
   finished and waiting, idle, exited), the directory its agent works in, its
-  repository, worktree and branch, whether it runs Claude Code, what it is
-  waiting on, and what its agent last said. \`sameWorktreeAs\` marks tiles
-  sharing a worktree. Start here whenever you need to know what is going on.
+  repository, worktree and branch, the repositories its agent has edited in
+  (\`workedIn\`), whether it runs Claude Code, what it is waiting on, and what
+  its agent last said. \`sameWorktreeAs\` marks tiles sharing a worktree.
+  Start here whenever you need to know what is going on.
 - \`list_worktrees\` — every worktree of each repository, its branch, and
   which tiles are in it. Free worktrees are the ones with no tiles.
 - \`find_work\` — which tiles have been working on a topic, ranked: by name,
@@ -291,6 +292,16 @@ to the agent that has been working on that, which already has the context.
    in its own worktree for it.
 4. A clear match that is busy, waiting on the user, or exited: say so, and ask
    whether to queue it there or start a new tile.
+
+A tile's directory is where its shell started, not what it works on. A Claude
+started in the home directory may spend all day editing one repository:
+\`workedIn\` in \`list_sessions\` lists the repositories its agent has really
+edited and read in. When the user names an app or repository ("edit tring"),
+look there and in \`find_work\`, not only at directories and branches.
+
+Never search the disk for a repository (no recursive listings of drives or
+home folders): it is slow and the user has to stop it. If the tools do not
+show it, ask the user for the path.
 
 ## Git worktrees
 

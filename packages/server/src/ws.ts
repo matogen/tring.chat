@@ -140,7 +140,11 @@ export class Hub {
       case 'activateProject': {
         pm.activate(msg.projectId)
         c.projectId = msg.projectId
-        c.focusedId = null
+        // The orchestrator agent belongs to no project: switching projects
+        // underneath it must not stop its output reaching this screen. That
+        // was the "freezes when I change tabs": keys still went in, nothing
+        // came back.
+        c.focusedId = this.keepFocus(c)
         this.sendState(c)
         this.sendSnapshots(c)
         break
@@ -157,7 +161,7 @@ export class Hub {
         pm.deleteProject(msg.projectId)
         if (c.projectId === msg.projectId) {
           c.projectId = pm.activeProjectId
-          c.focusedId = null
+          c.focusedId = this.keepFocus(c)
         }
         break
       case 'create':
@@ -305,6 +309,14 @@ export class Hub {
 
   private broadcastAuto(): void {
     if (this.opts.auto) this.broadcast(this.autoMessage(this.opts.auto))
+  }
+
+  /**
+   * What a socket stays focused on when its project changes: the orchestrator
+   * agent, which is in no project, and nothing else.
+   */
+  private keepFocus(c: Client): string | null {
+    return c.focusedId && this.opts.agent?.find(c.focusedId) ? c.focusedId : null
   }
 
   /** A tile, or the orchestrator agent's own terminal. */
