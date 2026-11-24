@@ -51,6 +51,8 @@ export interface HookPayload {
 export class Inbox {
   private readonly entries = new Map<string, Entry>()
   onChange: (() => void) | null = null
+  /** A new card, every kind; phone notifications start here (notifier.ts). */
+  onAdded: ((item: InboxItem) => void) | null = null
 
   constructor(
     private readonly now: () => number = Date.now,
@@ -72,6 +74,7 @@ export class Inbox {
     const item: InboxItem = { ...fields, id: this.newId(), createdAt: this.now() }
     this.entries.set(item.id, { item, settle })
     this.onChange?.()
+    this.onAdded?.(item)
     return item
   }
 

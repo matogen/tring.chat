@@ -28,6 +28,7 @@ import { renderBar } from './project-bar.ts'
 import { MOBILE_QUERY, renderSwitcher } from './switcher.ts'
 import * as usage from './usage-panel.ts'
 import * as ui from './overlay.ts'
+import { notificationsSection } from './notifications.ts'
 import { tring } from './sound.ts'
 
 const barEl = document.getElementById('bar') as HTMLElement
@@ -122,7 +123,8 @@ let pendingSize: { cols: number; rows: number; claim: boolean } | null = null
 const target = (): string | null => (agentView() ? agent.id : focusedId)
 
 const ws = new WsClient({
-  onOpen: () => { hideToast(); reattach() },
+  // Presence too: a daemon that restarted has forgotten every screen.
+  onOpen: () => { hideToast(); reattach(); sayPresence(true) },
   onClose: () => showToast('daemon disconnected — reconnecting'),
   onOutput: (id, data) => { if (id === target()) focusTerm.write(data) },
   onMessage: handleMessage,
@@ -821,7 +823,7 @@ function openSettings(): void {
     }
     if (v.ring !== ringSize()) changeRingSize(v.ring)
     else { paintBar(); void refreshUsage() }
-  })
+  }, [notificationsSection()])
 }
 
 function changeRingSize(size: RingSize): void {
@@ -1124,5 +1126,40 @@ mobile.addEventListener('change', () => {
   inboxPanel.setBeside(agentView())
   requestAnimationFrame(() => fitTerminal(true))
 })
-if (InboxPanel.wanted()) openInbox()
+/*
+ * Presence, for phone notifications: whether tring is in front of someone on
+ * this screen — visible, and touched in the last two minutes. The daemon only
+ * notifies a phone when no screen is (notifier.ts), so the phone stays quiet
+ * while you sit at the PC. Repeated every minute while true; a screen that
+ * stops saying so lapses on the daemon's side.
+ */
+const ACTIVE_MS = 120_000
+let lastTouch = Date.now()
+let saidActive: boolean | null = null
+const isActive = (): boolean => !document.hidden && Date.now() - lastTouch < ACTIVE_MS
+function sayPresence(force = false): void {
+  const now = isActive()
+  if (!force && now === saidActive) return
+  saidActive = now
+  ws.send({ type: 'presence', active: now })
+}
+for (const ev of ['keydown', 'pointerdown', 'wheel', 'touchstart'] as const) {
+  window.addEventListener(ev, () => { lastTouch = Date.now(); sayPresence() }, { capture: true, passive: true })
+}
+document.addEventListener('visibilitychange', () => sayPresence())
+setInterval(() => sayPresence(isActive()), 60_000)
+
+/* A tapped notification lands on the orchestrator: a fresh window by its URL,
+   an open one by a message from the service worker. */
+const params = new URLSearchParams(location.search)
+const fromNotification = params.has('inbox')
+if (fromNotification) {
+  params.delete('inbox')
+  history.replaceState(null, '', `${location.pathname}${params.size ? `?${params}` : ''}${location.hash}`)
+}
+navigator.serviceWorker?.addEventListener('message', (e: MessageEvent<{ type?: string }>) => {
+  if (e.data?.type === 'open-inbox' && !inboxPanel.isOpen) openInbox()
+})
+
+if (fromNotification || InboxPanel.wanted()) openInbox()
 ws.connect()

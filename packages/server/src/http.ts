@@ -17,6 +17,7 @@ import { hooksStatus, installHooks, type HooksStatus } from './hooks-install.ts'
 import { ToolError, TOOLS, type OrchestratorTools } from './orchestrator-tools.ts'
 import type { Session } from './session.ts'
 import { claudeConversation } from './session.ts'
+import type { PushApi } from './push-api.ts'
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -52,6 +53,8 @@ export interface HttpOptions {
   tools?: OrchestratorTools | null
   /** The orchestrator agent's own session, which is in no project. */
   agentSession?: (id: string) => Session | undefined
+  /** Phone notifications for orchestrator cards. Null answers 503. */
+  push?: PushApi | null
 }
 
 /** No response leaves without the header block — a 404 is framable too. */
@@ -306,6 +309,46 @@ export function createHandler(opts: HttpOptions) {
         if (gone.signal.aborted) return
         if (err instanceof ToolError) return json(res, 200, { text: err.message, isError: true })
         return json(res, 200, { text: `tring could not do that: ${(err as Error).message}`, isError: true })
+      }
+    }
+
+    /**
+     * Phone notifications: the settings section's calls. Each names its
+     * device by the push subscription's endpoint, which only that browser has.
+     */
+    if (url.pathname === '/api/push' && req.method === 'GET') {
+      if (!opts.push) return json(res, 503, { error: 'notifications are not available' })
+      return json(res, 200, { publicKey: opts.push.publicKey() })
+    }
+    const pushRoute = url.pathname.match(/^\/api\/push\/(status|subscribe|prefs|unsubscribe|test)$/)
+    if (pushRoute && req.method === 'POST') {
+      const push = opts.push
+      if (!push) return json(res, 503, { error: 'notifications are not available' })
+      const raw = await readBody(req)
+      if (raw === null) return tooLarge(req, res, 'body too large')
+      let body: { endpoint?: unknown; subscription?: unknown; prefs?: unknown; label?: unknown }
+      try {
+        body = JSON.parse(raw || '{}') as typeof body
+      } catch {
+        return json(res, 400, { error: 'malformed body' })
+      }
+      const endpoint = typeof body.endpoint === 'string' ? body.endpoint : ''
+      switch (pushRoute[1]) {
+        case 'status': return json(res, 200, push.status(endpoint))
+        case 'subscribe':
+          return await push.subscribe(body.subscription, body.prefs, body.label)
+            ? json(res, 200, { ok: true })
+            : json(res, 400, { error: 'not a push subscription' })
+        case 'prefs':
+          return await push.setPrefs(endpoint, body.prefs) ? json(res, 200, { ok: true }) : json(res, 404, { error: 'unknown device' })
+        case 'unsubscribe':
+          await push.unsubscribe(endpoint)
+          return json(res, 200, { ok: true })
+        case 'test': {
+          const status = await push.test(endpoint)
+          if (status === null) return json(res, 404, { error: 'unknown device' })
+          return json(res, 200, { ok: status >= 200 && status < 300, status })
+        }
       }
     }
 

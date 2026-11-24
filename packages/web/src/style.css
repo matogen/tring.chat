@@ -1208,3 +1208,16 @@ pre.card-body {
   }
   .inbox.beside { max-width: none; }
 }
+
+/* ---------- notifications on this device (notifications.ts) ---------- */
+
+.notify {
+  margin: 18px 0 10px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.notify-title { color: var(--text); font-size: 12.5px; font-weight: 600; margin-bottom: 4px; }
+.notify-state { margin: 0 0 10px; }
+.notify-body .field.toggle.notify-choice { margin: 6px 0; padding: 0; border: none; }
+.notify-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.notify-result { color: var(--muted); font-size: 12px; }
