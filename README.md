@@ -557,12 +557,33 @@ It works the tiles through tring's own MCP server, `tring`:
 
 | Tool | What it does | Asks you first |
 |---|---|---|
-| `list_sessions` | every project and tile: status, directory, git branch, whether it runs Claude, what it waits on, what it last said | no |
+| `list_sessions` | every project and tile: status, repository, worktree and branch, whether it runs Claude, what it waits on, what it last said | no |
+| `list_worktrees` | every worktree of each project's repository, its branch, and which tiles are in it | no |
+| `find_work` | which tiles have been working on a topic, ranked by name, branch, conversation title, prompts, answers and edited files | no |
+| `session_history` | a tile's Claude conversation: the prompts it was given, its answers, the files it edited | no |
 | `read_session` | the last lines of a tile's terminal | no |
-| `session_changes` | a tile's uncommitted git changes | no |
+| `session_changes` | the uncommitted changes in a tile's worktree | no |
 | `send_prompt` | a prompt to the Claude in a tile, as if you typed it there | no |
 | `wait_for` | waits until tiles finish, then reads their answers | no |
-| `create_session` | a new tile running Claude, with an optional first prompt | yes |
+| `create_session` | a new tile running Claude, optionally in a worktree for a branch, with an optional first prompt | yes |
+
+**Which tile?** Say what the work is, not where it is — *"make the reporting box
+green"* — and it goes to the tile that has been working on the reporting box, which
+already has the context. tring reads each tile's own Claude Code transcript (the path
+every hook reports) for Claude's title for the conversation, the prompts it was given and
+the files it edited, so a tile is found by what it has been doing even after its work is
+committed and its screen has moved on. When two tiles match about equally, or none
+clearly does, the agent asks you which rather than guessing.
+
+**Worktrees.** The agent works one branch, one worktree, one agent. A tile is placed
+where its *agent* is working — every Claude Code hook reports that directory — so a
+Claude that moved into a worktree (`claude --worktree`, or its own `cd`) is seen there,
+not in the directory its shell started in. Tiles sharing a worktree are flagged, and
+sending work to one while another agent is busy there comes back with a warning.
+`create_session` with a `branch` reuses the worktree that already has it checked out, or
+runs `git worktree add` (checking out the branch, or creating it from `base`). New
+worktrees go beside your existing ones; with none to copy, in `<repo>.worktrees/`
+next to the repository. Tell the agent otherwise in its `CLAUDE.md` (below).
 
 It talks to agents and nothing else. It never types into a plain shell, and never into a
 tile that is waiting on a permission prompt or a question — those stay yours, in the
@@ -571,8 +592,8 @@ own permissions.
 
 The agent lives in `~/.config/tring/orchestrator`, which tring rewrites on every start
 (`TRING.md` holds its instructions; add your own to `CLAUDE.md` there, which is kept).
-The first time it opens, Claude Code asks whether to trust that folder and lists the five
-tools it pre-approves; say yes. Its conversation survives a restart of tring. If you quit
+The first time it opens, Claude Code asks whether to trust that folder and lists the
+eight tools it pre-approves; say yes. Its conversation survives a restart of tring. If you quit
 its Claude, the panel offers *Start again* or *New conversation*. Untick **Agent** and the
 Orchestrator is the inbox it always was.
 
