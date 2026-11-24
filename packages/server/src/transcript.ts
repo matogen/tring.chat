@@ -182,11 +182,24 @@ export async function readTranscript(file: string): Promise<Transcript | null> {
  */
 export async function findTranscript(projectsDir: string, id: string): Promise<string | null> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null
+  // A conversation's file never moves, so once found it is checked, not searched for.
+  const known = located.get(id)
+  if (known) {
+    try { if ((await stat(known)).isFile()) return known } catch { /* gone; search again */ }
+    located.delete(id)
+  }
   let dirs: string[]
   try { dirs = await readdir(projectsDir) } catch { return null }
   for (const d of dirs) {
     const f = path.join(projectsDir, d, `${id}.jsonl`)
-    try { if ((await stat(f)).isFile()) return f } catch { /* not here */ }
+    try {
+      if ((await stat(f)).isFile()) {
+        located.set(id, f)
+        return f
+      }
+    } catch { /* not here */ }
   }
   return null
 }
+
+const located = new Map<string, string>()

@@ -125,6 +125,12 @@ to the next finished session and counts how many are waiting. Two more buttons d
 phone cannot do to a terminal by itself: paste from the clipboard, and copy from the screen —
 the links on it with a tap each, or the screen as text to select from.
 
+**A phone and a PC on the same session keep their own sizes.** A terminal has one size, so
+it follows the device you are using: open, tap or type on the phone and it is laid out for
+the phone; click, type or come back to the window on the PC and it is laid out for the PC
+again, redrawn cleanly. While the other device has it, a terminal is drawn at that
+device's size — narrower, or clipped — never garbled, with a note to click to fit it back.
+
 The daemon only listens on `127.0.0.1` by default. Reaching it from a phone means binding
 it to the network, and that traffic has to be encrypted — it carries the token, every
 keystroke you type into a shell and everything the shell prints back, which is exactly
@@ -548,8 +554,10 @@ button of its own in the bar under the tabs, with the count of cards waiting.
 
 Optional, off by default. Tick **Agent** in the Orchestrator's header and the centre
 becomes a Claude Code session of its own, with the cards in a column beside it. Drag
-the bar between them to make the column wider or narrower; the width is remembered. A
-long reply or plan on a card folds behind **Show all**. Instead of
+the bar between them to share the space: the terminal narrows or widens and refits as you
+drag, and each side keeps a minimum. On a phone the cards are a band above the terminal
+and the bar drags their height. The size is remembered per browser. A long reply or plan
+on a card folds behind **Show all**. Instead of
 typing into each tile, you tell it what you want:
 
 > *Which tiles are on which branch? Ask the api tile to run its tests, and start a new

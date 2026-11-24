@@ -1124,13 +1124,35 @@ pre.card-body {
   position: relative;
   inset: auto;
   z-index: auto;
-  /* The width is the handle's (flex-basis, set inline and saved); a smaller
-     window later must still leave the agent a quarter of the cell. */
-  flex: 0 0 420px;
+  /* The width is the handle's (flex-basis, set inline and saved). It may
+     shrink, never under its minimum, when the window does: the terminal's
+     minimum below is what it gives way to. Limits match split.ts. */
+  flex: 0 1 420px;
+  min-width: 240px;
   max-width: 75%;
-  min-width: 0;
   border-left: 1px solid var(--line);
 }
+/* The terminal shares the cell, never sits under the cards: it keeps a
+   minimum, and nothing of it paints past its own box. */
+.focus-cell.agent-view .term-host { min-width: 320px; }
+.term-host { overflow: hidden; }
+
+/* Over the terminal while another device owns its size (main.ts sizeNote). */
+.size-note {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 4;
+  padding: 4px 10px;
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font: 12px var(--sans);
+  cursor: pointer;
+}
+.size-note:hover { color: var(--text); border-color: var(--emerald); }
+.size-note[hidden] { display: none; }
 /* Between the agent's terminal and the cards; drag it like the diff panel's. */
 .inbox-handle {
   flex: 0 0 5px;
@@ -1165,16 +1187,24 @@ pre.card-body {
   .focus-cell.agent-view { flex-direction: column; }
   .focus-cell.agent-view .term-host { flex: 1 1 auto; min-height: 0; height: auto; }
   .inbox.beside {
-    order: -1;
-    flex: 0 1 auto;
-    max-height: 42%;
-    margin: 0 0 6px;
+    order: -2;
+    /* Its share of the height until dragged (split.ts limits). */
+    flex: 0 1 40%;
+    min-width: 0;
+    min-height: 90px;
     border-left: none;
     border-bottom: 1px solid var(--line);
   }
+  .focus-cell.agent-view .term-host { min-width: 0; min-height: 160px; }
   .inbox.beside .inbox-empty,
   .inbox.beside .inbox-history { display: none; }
-  /* Stacked, the column has no width to drag. */
-  .inbox-handle { display: none !important; }
+  /* Stacked, the handle sits between the band of cards and the terminal and
+     drags their heights (inbox-panel.ts bindResize). */
+  .inbox-handle.across {
+    order: -1;
+    flex: 0 0 6px;
+    margin: 3px 0;
+    cursor: row-resize;
+  }
   .inbox.beside { max-width: none; }
 }

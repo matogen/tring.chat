@@ -264,6 +264,15 @@ export class Session {
     this.pty.write(data)
   }
 
+  /** The PTY's size now: whichever client owns it (see size-owner.ts). */
+  get cols(): number {
+    return this.term.cols
+  }
+
+  get rows(): number {
+    return this.term.rows
+  }
+
   resize(cols: number, rows: number): void {
     if (this.disposed || cols < 1 || rows < 1) return
     this.pty.resize(cols, rows)

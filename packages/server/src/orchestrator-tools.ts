@@ -432,8 +432,23 @@ export class OrchestratorTools {
       read: readTranscript,
       find: (id: string) => findTranscript(defaultTranscriptDir(), id),
     }
-    const file = s.transcript ?? (s.claude ? await t.find(s.claude.id) : null)
-    return file ? t.read(file) : null
+    // The hook's path first, but not on trust: a conversation resumed from
+    // another directory (every tile after a tring restart, reopened in its
+    // shell's directory) gets a SessionStart whose transcript_path is built
+    // from the new directory, and no such file exists. Only the next prompt or
+    // tool call reports the real one, so an idle tile kept the dead path — and
+    // with it no title, prompts or workedIn — until someone typed there.
+    if (s.transcript) {
+      const talk = await t.read(s.transcript)
+      if (talk) return talk
+    }
+    // Then by conversation id, which tring persists across restarts: the file
+    // is `<id>.jsonl` under whichever project directory Claude filed it in.
+    const found = s.claude ? await t.find(s.claude.id) : null
+    if (!found || found === s.transcript) return null
+    const talk = await t.read(found)
+    if (talk) s.transcript = found
+    return talk
   }
 
   private async sessionHistory(s: ToolSession, count: number, search: string | undefined): Promise<string> {
@@ -478,6 +493,10 @@ export class OrchestratorTools {
         { why: 'title', text: talk?.title ?? '', weight: 4 },
         { why: 'worked in', text: worked.map((w) => w.root).join(' '), weight: 4 },
         { why: 'last message', text: p.s.lastMessage ?? '', weight: 1 },
+        // What is on its terminal. With no conversation to read — a shell, a
+        // Claude whose transcript cannot be found — it is the tile's only
+        // record of what it is doing, and counts for as much as a title.
+        { why: talk ? 'screen' : 'screen only', text: p.s.recentText(SCREEN_LINES), weight: talk ? 1 : 3 },
       ]
       const turns = talk?.turns ?? []
       turns.forEach((t, i) => {
@@ -744,7 +763,9 @@ function conversationSummary(t: Transcript | null): Record<string, unknown> {
 }
 
 /** Where a tile's purpose is recorded, as opposed to what its agent happened to say. */
-const STRONG = new Set(['name', 'branch', 'title', 'worked in', 'prompt', 'edited'])
+const STRONG = new Set(['name', 'branch', 'title', 'worked in', 'prompt', 'edited', 'screen only'])
+/** How much of a tile's terminal find_work reads. */
+const SCREEN_LINES = 200
 
 /** For list_sessions: the repositories the agent has been editing and reading in. */
 function workedSummary(w: Array<{ root: string; edits: number; reads: number }>): Record<string, unknown> {

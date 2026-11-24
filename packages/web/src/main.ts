@@ -111,6 +111,13 @@ let agent: AgentInfo = { enabled: false, id: null, status: null, error: null }
 /** The agent session the centre terminal is showing, or null for the focused tile. */
 let shownAgent: string | null = null
 const agentView = (): boolean => inboxPanel.isOpen && agent.enabled && agent.id !== null
+/**
+ * Whether this device owns the PTY size of the session in the centre. Set on
+ * focusing (a focus claims) and by the daemon's `size` messages after that.
+ */
+let sizeMine = true
+let sizeTimer: ReturnType<typeof setTimeout> | null = null
+let pendingSize: { cols: number; rows: number; claim: boolean } | null = null
 /** Whose output the centre terminal shows and whose PTY its keys go to. */
 const target = (): string | null => (agentView() ? agent.id : focusedId)
 
@@ -240,6 +247,18 @@ function handleMessage(msg: ServerMessage): void {
     }
     case 'screen':
       if (msg.id === target()) focusTerm.replay(msg.ansi)
+      break
+    case 'size':
+      if (msg.id !== target()) break
+      sizeMine = msg.mine
+      if (msg.mine) {
+        // Back to this panel's own size; if the panel moved meanwhile, say so.
+        const own = focusTerm.fitNow()
+        if (own.cols !== msg.cols || own.rows !== msg.rows) sendSize(own, false)
+      } else {
+        focusTerm.adopt(msg.cols, msg.rows)
+      }
+      paintSizeNote()
       break
     case 'snapshot': {
       lastShots.set(msg.id, msg.snapshot)
@@ -522,11 +541,91 @@ function copyFromButton(): void {
 
 /* ---------- actions ---------- */
 
-function fitTerminal(): void {
-  const { cols, rows } = focusTerm.fitNow()
-  if (focusedId) ws.send({ type: 'resize', cols, rows })
+/**
+ * Fits the centre terminal to its panel and tells the daemon, for whichever
+ * session it shows — a tile or the orchestrator agent. (It used to send only
+ * for a focused tile, so the agent's PTY never followed the card column's
+ * drag: the terminal kept its old width and the cards slid over it.)
+ *
+ * `claim` is a deliberate act on this device — a window resize, a click, the
+ * window coming back to the front — and takes the PTY's size for it. Without
+ * it, a device that does not own the size (see the daemon's size-owner.ts)
+ * stays drawn at the owner's size and only reports its own.
+ */
+function fitTerminal(claim = false): void {
+  const id = target()
+  if (!sizeMine && !claim) {
+    const own = focusTerm.proposed()
+    if (id && own) sendSize(own, false)
+    return
+  }
+  const size = focusTerm.fitNow()
+  if (id) sendSize(size, claim)
   for (const t of thumbs.values()) t.refresh()
 }
+
+/**
+ * Debounced: a drag fits xterm every frame, but the PTY gets one resize when
+ * the size settles — a resize per pixel makes Claude Code redraw per pixel.
+ * A claim is never lost to the debounce.
+ */
+function sendSize(size: { cols: number; rows: number }, claim: boolean): void {
+  pendingSize = { ...size, claim: claim || (pendingSize?.claim ?? false) }
+  if (sizeTimer) clearTimeout(sizeTimer)
+  const flush = (): void => {
+    sizeTimer = null
+    const p = pendingSize
+    pendingSize = null
+    if (p && target()) ws.send({ type: 'resize', cols: p.cols, rows: p.rows, ...(p.claim ? { claim: true } : {}) })
+  }
+  // A claim goes at once: the keystroke that made it is on its way too, and
+  // should land at this device's size.
+  if (claim) flush()
+  else sizeTimer = setTimeout(flush, 80)
+}
+
+/** Every focus carries this device's own size, and takes the PTY's size for it. */
+function sendFocus(id: string | null): void {
+  const { cols, rows } = focusTerm.fitNow()
+  sizeMine = true
+  paintSizeNote()
+  ws.send({ type: 'focus', id, cols, rows })
+}
+
+/**
+ * Over the terminal while another device owns its size: what is going on, and
+ * the way back. Any click or keystroke on the terminal claims it too.
+ */
+const sizeNote = document.createElement('button')
+sizeNote.className = 'size-note'
+sizeNote.type = 'button'
+sizeNote.hidden = true
+sizeNote.textContent = 'Sized for another screen \u00b7 click to fit here'
+sizeNote.onclick = (e) => { e.stopPropagation(); fitTerminal(true); focusTerm.focus() }
+focusCell.append(sizeNote)
+
+function paintSizeNote(): void {
+  sizeNote.hidden = sizeMine || !target()
+}
+
+// Using this device is claiming it: back to the front, or a press on its terminal.
+window.addEventListener('focus', () => fitTerminal(true))
+document.addEventListener('visibilitychange', () => { if (!document.hidden) fitTerminal(true) })
+termHost.addEventListener('pointerdown', () => { if (!sizeMine) fitTerminal(true) })
+// And typing or pasting into it. Listened for here, on real key and paste
+// events, not on what xterm sends the PTY: that also carries xterm's own
+// answers to a program's queries, which a redraw on this device would set off.
+termHost.addEventListener('keydown', () => { if (!sizeMine) fitTerminal(true) }, true)
+termHost.addEventListener('paste', () => { if (!sizeMine) fitTerminal(true) }, true)
+
+// Whatever changes the terminal's box — the card column's handle, cards
+// arriving above it on a phone, the diff panel, the window — refits it,
+// once per frame.
+let fitFrame = 0
+new ResizeObserver(() => {
+  if (fitFrame) return
+  fitFrame = requestAnimationFrame(() => { fitFrame = 0; fitTerminal() })
+}).observe(termHost)
 
 function focusSession(id: string | null, keepInbox = false): void {
   showRing()
@@ -578,8 +677,7 @@ function applyCentre(): void {
   focusTerm.clear()
   // After layout: the cards beside the terminal take width it must not count.
   requestAnimationFrame(() => {
-    const { cols, rows } = focusTerm.fitNow()
-    ws.send({ type: 'focus', id: target(), cols, rows })
+    sendFocus(target())
     for (const t of thumbs.values()) t.refresh()
     if (want) focusTerm.focus()
   })
@@ -635,8 +733,7 @@ function attachSession(id: string | null): void {
     return
   }
   lastFocused.set(s.projectId, s.id)
-  const { cols, rows } = focusTerm.fitNow()
-  ws.send({ type: 'focus', id: s.id, cols, rows })
+  sendFocus(s.id)
   focusTerm.focus()
   paintStatuses()
 }
@@ -657,8 +754,7 @@ function attachSession(id: string | null): void {
 function reattach(): void {
   const id = target()
   if (!id) return
-  const { cols, rows } = focusTerm.fitNow()
-  ws.send({ type: 'focus', id, cols, rows })
+  sendFocus(id)
 }
 
 /** Follows the focus into whatever now holds its slot (see focus-target.ts). */
@@ -1018,12 +1114,15 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch(() => { /* still a web page */ })
 }
 
-window.addEventListener('resize', () => fitTerminal())
+window.addEventListener('resize', () => fitTerminal(true))
 // Crossing the phone breakpoint swaps ring for switcher, and the terminal
 // changes size with it, so both are redone together.
 mobile.addEventListener('change', () => {
   paintSwitcher()
-  requestAnimationFrame(() => fitTerminal())
+  // The card column turns into a band above the terminal, or back: its size
+  // is a width in one layout and a height in the other.
+  inboxPanel.setBeside(agentView())
+  requestAnimationFrame(() => fitTerminal(true))
 })
 if (InboxPanel.wanted()) openInbox()
 ws.connect()

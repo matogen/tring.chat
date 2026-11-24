@@ -9,6 +9,7 @@ import type { Inbox } from './inbox.ts'
 import type { AutoAnswerer } from './auto-answer.ts'
 import type { OrchestratorAgent } from './orchestrator-agent.ts'
 import { cleanPrompt, typePrompt } from './type-prompt.ts'
+import { SizeOwners } from './size-owner.ts'
 
 export interface HubOptions {
   pm: ProjectManager
@@ -29,12 +30,22 @@ interface Client {
   /** Each socket views its own project, so two tabs can sit in different ones. */
   projectId: string | null
   focusedId: string | null
+  /** This client's terminal size for its focused session, from focus and resize. */
+  size: { cols: number; rows: number } | null
+}
+
+/** A size a PTY can take; anything else is ignored rather than passed to it. */
+function validSize(cols: unknown, rows: unknown): { cols: number; rows: number } | null {
+  const ok = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 2000
+  return ok(cols) && ok(rows) ? { cols, rows } : null
 }
 
 export class Hub {
   private readonly clients = new Set<Client>()
   private readonly timer: NodeJS.Timeout
   private update: UpdateInfo | null = null
+  /** Which client each session's PTY is sized for. */
+  private readonly sizes = new SizeOwners<Client>()
 
   constructor(private readonly opts: HubOptions) {
     const pm = opts.pm
@@ -94,9 +105,12 @@ export class Hub {
   }
 
   private accept(ws: WebSocket): void {
-    const client: Client = { ws, authed: false, projectId: null, focusedId: null }
+    const client: Client = { ws, authed: false, projectId: null, focusedId: null, size: null }
     this.clients.add(client)
-    ws.on('close', () => this.clients.delete(client))
+    ws.on('close', () => {
+      this.clients.delete(client)
+      this.sizes.release(client)
+    })
     ws.on('message', (raw, isBinary) => {
       if (isBinary) return
       let msg: ClientMessage
@@ -173,20 +187,33 @@ export class Hub {
         })
         break
       case 'focus': {
+        // Looking away from a session gives up its size: the next device to
+        // touch it takes it without a fight.
+        if (c.focusedId && c.focusedId !== msg.id) this.sizes.release(c, c.focusedId)
         c.focusedId = msg.id
+        c.size = validSize(msg.cols, msg.rows)
         if (!msg.id) break
         const s = this.find(msg.id)
         if (!s) break
-        s.resize(msg.cols, msg.rows)
+        // Focusing is using: this device takes the size. Its own replay comes
+        // just below, after the resize, so it is drawn at the new size.
+        this.take(c, s, false)
         this.send(c, { type: 'screen', id: s.id, ansi: s.serialize() })
         break
       }
       case 'input': {
+        // Input never claims the size by itself: xterm answers a program's
+        // terminal queries on the same channel as keystrokes, so a redraw on
+        // the device that just lost the size would take it straight back. The
+        // browser claims on a real key press instead (main.ts).
         this.find(msg.id)?.write(msg.data)
         break
       }
       case 'resize': {
-        if (c.focusedId) this.find(c.focusedId)?.resize(msg.cols, msg.rows)
+        c.size = validSize(msg.cols, msg.rows)
+        const s = c.focusedId ? this.find(c.focusedId) : undefined
+        if (!s) break
+        if (msg.claim === true || this.sizes.mayResize(s.id, c)) this.take(c, s, true)
         break
       }
       case 'agent': {
@@ -317,6 +344,29 @@ export class Hub {
    */
   private keepFocus(c: Client): string | null {
     return c.focusedId && this.opts.agent?.find(c.focusedId) ? c.focusedId : null
+  }
+
+  /**
+   * Sizes `s`'s PTY for `c` and makes `c` its owner (see size-owner.ts).
+   *
+   * Every client watching `s` is told the size and whether it is theirs; the
+   * ones that are not draw at exactly that size. When the size really changed,
+   * the others are sent a fresh screen at it, and so is `c` when `replay` —
+   * a device taking the size back had been drawing at another device's size,
+   * and a clean copy from the daemon's mirror is what stops it staying
+   * garbled. The program's own redraw (it gets SIGWINCH) follows as output.
+   */
+  private take(c: Client, s: Session, replay: boolean): void {
+    if (!c.size) return
+    const newOwner = this.sizes.claim(s.id, c)
+    const changed = s.cols !== c.size.cols || s.rows !== c.size.rows
+    if (changed) s.resize(c.size.cols, c.size.rows)
+    if (!newOwner && !changed) return
+    for (const o of this.clients) {
+      if (!o.authed || o.focusedId !== s.id) continue
+      this.send(o, { type: 'size', id: s.id, cols: s.cols, rows: s.rows, mine: o === c })
+      if (changed && (o !== c || replay)) this.send(o, { type: 'screen', id: s.id, ansi: s.serialize() })
+    }
   }
 
   /** A tile, or the orchestrator agent's own terminal. */
