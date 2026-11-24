@@ -650,7 +650,10 @@ body.tile-dragging, body.tile-dragging .tile { cursor: grabbing; }
 .uproject .tag { color: var(--text); text-align: right; }
 
 /* Pinned rather than a project: no badge, no context menu, never reordered. */
-.tab.pinned { min-width: 0; color: var(--dim); }
+/* Never shrinks: with min-width 0 a crowded bar (any phone) squeezed the label
+   to nothing and left a blank button where "Orchestrator" should be. The bar
+   scrolls sideways instead. */
+.tab.pinned { min-width: 0; flex-shrink: 0; color: var(--dim); }
 .tab.pinned.active { color: var(--text); border-bottom-color: var(--emerald); }
 
 .field.toggle {
@@ -709,6 +712,11 @@ body.tile-dragging, body.tile-dragging .tile { cursor: grabbing; }
 #switcher .current .tag { color: var(--status, var(--dim)); font-size: 11px; }
 #switcher .current .chev { display: grid; color: var(--muted); }
 #switcher .next { flex: 0 0 64px; }
+/* The phone's way into orchestrator mode; mint while it is the view. */
+#switcher .inbox-btn { flex: 0 0 64px; }
+#switcher .inbox-btn.on { border-color: var(--emerald); color: var(--text); }
+#switcher .inbox-btn .badge.asking { min-width: 17px; }
+#switcher .inbox-btn,
 #switcher .next,
 #switcher .tools button {
   display: flex;
@@ -1058,4 +1066,87 @@ pre.card-body {
   .inbox-history-list li { grid-template-columns: 70px 1fr auto; }
   .hist-who { display: none; }
   .hist-reason { grid-column: 2 / 3; }
+}
+
+/* ---------- Markdown in cards (markdown.ts) ---------- */
+
+/* Rendered prose wraps like prose: the pre-wrap the plain-text card body used
+   would double every line break the paragraphs already make. */
+.md { white-space: normal; word-break: break-word; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p, .md ul, .md ol, .md blockquote, .md pre, .md .md-table { margin: 0 0 8px; }
+.md h3, .md h4, .md h5, .md h6 { margin: 10px 0 6px; font-weight: 600; color: var(--text); }
+.md h3 { font-size: 14px; }
+.md h4, .md h5, .md h6 { font-size: 13px; }
+.md ul, .md ol { padding-left: 1.4em; }
+.md li + li { margin-top: 2px; }
+.md strong { font-weight: 600; color: var(--text); }
+.md em { font-style: italic; }
+.md del { color: var(--dim); }
+.md a { color: var(--emerald); text-decoration: underline; text-underline-offset: 2px; }
+.md code {
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--bg-2);
+  font: 12px var(--mono);
+}
+.md pre {
+  padding: 8px;
+  border-radius: 4px;
+  background: var(--bg-2);
+  overflow: auto;
+  white-space: pre;
+}
+.md pre code { padding: 0; background: none; }
+.md blockquote {
+  padding-left: 10px;
+  border-left: 3px solid var(--line-2);
+  color: var(--muted);
+}
+.md hr { border: none; border-top: 1px solid var(--line); margin: 10px 0; }
+.md .md-table { overflow-x: auto; }
+.md table { border-collapse: collapse; font-size: 12px; }
+.md th, .md td { padding: 3px 8px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+.md th { background: var(--bg-2); font-weight: 600; }
+.card-ask.md p { font-weight: 600; }
+
+/* ---------- orchestrator agent (main.ts applyCentre) ---------- */
+
+/*
+ * The agent's terminal takes the centre and the cards move beside it. The
+ * diff panel describes the focused tile, which is not on screen here.
+ */
+.focus-cell.agent-view .diff-panel,
+.focus-cell.agent-view .diff-handle,
+.focus-cell.agent-view .diff-toggle { display: none !important; }
+.inbox.beside {
+  position: relative;
+  inset: auto;
+  z-index: auto;
+  flex: 0 0 min(420px, 42%);
+  min-width: 0;
+  margin-left: 6px;
+  border-left: 1px solid var(--line);
+}
+.inbox.beside .inbox-hint { display: none; }
+.inbox.beside .inbox-head { flex-wrap: wrap; row-gap: 4px; }
+.inbox-agent { margin-left: auto; }
+.inbox-agent + .inbox-auto { margin-left: 0; }
+.agent-note[hidden] { display: none; }
+
+@media (max-width: 720px) {
+  /* Stacked on a phone: the cards on top, kept short, the agent below. */
+  .focus-cell.agent-view { flex-direction: column; }
+  .focus-cell.agent-view .term-host { flex: 1 1 auto; min-height: 0; height: auto; }
+  .inbox.beside {
+    order: -1;
+    flex: 0 1 auto;
+    max-height: 42%;
+    margin: 0 0 6px;
+    border-left: none;
+    border-bottom: 1px solid var(--line);
+  }
+  .inbox.beside .inbox-empty,
+  .inbox.beside .inbox-history { display: none; }
 }

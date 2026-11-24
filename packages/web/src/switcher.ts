@@ -27,6 +27,13 @@ export interface SwitcherState {
   done: number
   /** The mic is on (see dictation.ts). */
   listening: boolean
+  /** Orchestrator mode: whether it is the view, and how many cards wait. */
+  inbox?: { open: boolean; count: number }
+  /**
+   * What the centre terminal shows when it is not a tile: the orchestrator
+   * agent. Its tools (Esc, paste, mic, copy) work as they do on a tile.
+   */
+  override?: SessionLabel | null
 }
 
 export interface SwitcherCallbacks {
@@ -42,6 +49,8 @@ export interface SwitcherCallbacks {
   onMic?: () => void
   /** Opens the copy sheet; a finger cannot select text off a canvas. */
   onCopy: () => void
+  /** Opens or leaves orchestrator mode; the bar's tab is easy to miss on a phone. */
+  onInbox?: () => void
 }
 
 /**
@@ -51,8 +60,10 @@ export interface SwitcherCallbacks {
  * session's name was squeezed out entirely.
  */
 export function renderSwitcher(container: HTMLElement, state: SwitcherState, cb: SwitcherCallbacks): void {
-  const { focused, done, listening } = state
-  const label = describeSession(focused)
+  const { done, listening } = state
+  const label = state.override ?? describeSession(state.focused)
+  // Something is in the centre to type into: a tile, or the orchestrator agent.
+  const focused = state.focused !== null || !!state.override
 
   const nav = row('nav')
   const current = document.createElement('button')
@@ -75,6 +86,25 @@ export function renderSwitcher(container: HTMLElement, state: SwitcherState, cb:
   if (done > 0) next.append(span('badge', String(done)))
   next.onclick = () => cb.onNext()
   nav.append(next)
+
+  if (cb.onInbox) {
+    const onInbox = cb.onInbox
+    const inbox = state.inbox ?? { open: false, count: 0 }
+    const b = document.createElement('button')
+    b.className = 'inbox-btn' + (inbox.open ? ' on' : '')
+    b.title = inbox.open
+      ? 'Leave orchestrator mode'
+      : `Orchestrator${inbox.count ? ` (${inbox.count} waiting)` : ''}`
+    b.setAttribute('aria-label', b.title)
+    b.setAttribute('aria-pressed', String(inbox.open))
+    b.innerHTML = icon(
+      '<path d="M2 9.5l1.6-5.2a1 1 0 0 1 1-.7h6.8a1 1 0 0 1 1 .7L14 9.5V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"/>' +
+      '<path d="M2 9.5h3.5l1 1.5h3l1-1.5H14"/>',
+    )
+    if (inbox.count > 0) b.append(span('badge asking', String(inbox.count)))
+    b.onclick = () => onInbox()
+    nav.append(b)
+  }
 
   const tools = row('tools')
   const esc = tool('esc', 'Escape', focused ? 'Send Escape' : 'Focus a session to send Escape', !focused)

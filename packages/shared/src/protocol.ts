@@ -80,6 +80,11 @@ export type ClientMessage =
   | { type: 'reply'; itemId: string; text: string }
   /** Turns the supervisor that approves routine permission prompts on or off. */
   | { type: 'autoAnswer'; enabled: boolean }
+  /**
+   * The orchestrator agent: switch it on or off, or start its Claude again —
+   * in the same conversation after it was quit, or in a fresh one.
+   */
+  | { type: 'agent'; enabled?: boolean; restart?: 'resume' | 'fresh' }
 
 export type ServerMessage =
   | {
@@ -105,6 +110,8 @@ export type ServerMessage =
   | { type: 'inbox'; items: InboxItem[] }
   /** The supervisor's switch and what it decided, newest first. */
   | { type: 'autoAnswer'; enabled: boolean; history: AutoDecision[] }
+  /** The orchestrator agent's switch and session, whenever either changes. */
+  | { type: 'agent'; agent: AgentInfo }
 
 /**
  * Output travels as a binary frame — a UTF-8 session id, a 0x00 separator,
@@ -181,6 +188,20 @@ export interface InboxItem {
   questions?: InboxQuestion[]
   /** reply: the agent's last message before it stopped. */
   message?: string
+}
+
+/**
+ * The orchestrator agent: a Claude Code session of its own, outside every
+ * ring, that you type to and that drives the tiles through tring's MCP tools.
+ * Its terminal is addressed by `id` like any session's (focus, input, resize).
+ */
+export interface AgentInfo {
+  enabled: boolean
+  /** Null while it is off, or could not start. */
+  id: string | null
+  status: SessionStatus | null
+  /** Why it could not start, in words for the user. */
+  error: string | null
 }
 
 /** One permission prompt the supervisor looked at. */

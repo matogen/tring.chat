@@ -8,6 +8,10 @@ export interface HookSession {
   hook(): void
   /** Records (or, with null, forgets) the Claude conversation running here. */
   setClaude(conv: { id: string; cwd: string } | null): void
+  /** The agent stopped with this message (read by the orchestrator agent). */
+  said?(text: string): void
+  /** A prompt was submitted, so a later Stop answers it. */
+  prompted?(): void
 }
 
 /**
@@ -58,6 +62,7 @@ export function routeHook(req: HookRequest): Promise<Record<string, unknown> | n
     case 'Stop': {
       session.hook()
       const said = payload.last_assistant_message?.trim()
+      session.said?.(said ?? '')
       if (said) inbox.reply(session.id, said)
       return Promise.resolve(null)
     }
@@ -79,6 +84,7 @@ export function routeHook(req: HookRequest): Promise<Record<string, unknown> | n
     // The user typed into this session's own terminal: whatever its cards
     // were asking has been dealt with there.
     case 'UserPromptSubmit':
+      session.prompted?.()
       inbox.dropSession(session.id)
       return Promise.resolve(null)
 

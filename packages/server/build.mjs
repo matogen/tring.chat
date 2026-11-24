@@ -39,6 +39,18 @@ await build({
 })
 await chmod('dist/tring-hook.js', 0o755)
 
+// The orchestrator agent's MCP server (mcp-cli.ts): a stdio relay to the
+// daemon, started by that agent's Claude Code. Standalone for the same reason.
+await build({
+  entryPoints: ['src/mcp-cli.ts'],
+  bundle: true,
+  platform: 'node',
+  format: 'esm',
+  target: 'node20',
+  outfile: 'dist/tring-mcp.js',
+  banner: { js: '#!/usr/bin/env node' },
+})
+
 // The same spawn-helper repair the daemon runs at startup, as a script the
 // postinstall hook can run at install time — where it is still whoever owns
 // the install, and can therefore fix a global one owned by root. One source,

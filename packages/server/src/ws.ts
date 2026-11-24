@@ -7,6 +7,8 @@ import { secretEquals } from './security.ts'
 import type { Session } from './session.ts'
 import type { Inbox } from './inbox.ts'
 import type { AutoAnswerer } from './auto-answer.ts'
+import type { OrchestratorAgent } from './orchestrator-agent.ts'
+import { cleanPrompt, typePrompt } from './type-prompt.ts'
 
 export interface HubOptions {
   pm: ProjectManager
@@ -17,16 +19,9 @@ export interface HubOptions {
   inbox?: Inbox | null
   /** The supervisor; its switch and history are pushed to every client. */
   auto?: AutoAnswerer | null
+  /** The orchestrator agent; its terminal is reachable by id like any session's. */
+  agent?: OrchestratorAgent | null
 }
-
-/**
- * A follow-up typed into a session that has stopped and is waiting.
- *
- * Sent as a bracketed paste so a multi-line reply arrives as one prompt
- * rather than as several Enters, then Enter on its own a beat later: some
- * TUIs drop a CR that lands in the same read as the paste's end marker.
- */
-const PASTE_SETTLE_MS = 60
 
 interface Client {
   ws: WebSocket
@@ -64,11 +59,16 @@ export class Hub {
     }
     if (opts.inbox) opts.inbox.onChange = () => this.broadcastInbox()
     if (opts.auto) opts.auto.onChange = () => this.broadcastAuto()
-    pm.onSessionData = (s, data) => {
+    const output = (s: Session, data: string): void => {
       const frame = encodeOutput(s.id, Buffer.from(data, 'utf8'))
       for (const c of this.clients) {
         if (c.authed && c.focusedId === s.id) c.ws.send(frame, { binary: true })
       }
+    }
+    pm.onSessionData = output
+    if (opts.agent) {
+      opts.agent.onData = output
+      opts.agent.onChange = () => this.broadcastAgent()
     }
 
     // One loop for the whole hub rather than one per socket: takeSnapshot()
@@ -131,6 +131,7 @@ export class Hub {
       this.sendSnapshots(c)
       if (this.opts.inbox) this.send(c, { type: 'inbox', items: this.opts.inbox.list() })
       if (this.opts.auto) this.send(c, this.autoMessage(this.opts.auto))
+      if (this.opts.agent) this.send(c, { type: 'agent', agent: this.opts.agent.info() })
       return
     }
     if (!c.authed) return this.send(c, { type: 'error', message: 'expected hello' })
@@ -170,18 +171,25 @@ export class Hub {
       case 'focus': {
         c.focusedId = msg.id
         if (!msg.id) break
-        const s = pm.findSession(msg.id)
+        const s = this.find(msg.id)
         if (!s) break
         s.resize(msg.cols, msg.rows)
         this.send(c, { type: 'screen', id: s.id, ansi: s.serialize() })
         break
       }
       case 'input': {
-        pm.findSession(msg.id)?.write(msg.data)
+        this.find(msg.id)?.write(msg.data)
         break
       }
       case 'resize': {
-        if (c.focusedId) pm.findSession(c.focusedId)?.resize(msg.cols, msg.rows)
+        if (c.focusedId) this.find(c.focusedId)?.resize(msg.cols, msg.rows)
+        break
+      }
+      case 'agent': {
+        const agent = this.opts.agent
+        if (!agent) break
+        if (typeof msg.enabled === 'boolean') void agent.setEnabled(msg.enabled)
+        else if (msg.restart === 'resume' || msg.restart === 'fresh') void agent.restart(msg.restart === 'fresh')
         break
       }
       case 'kill':
@@ -226,13 +234,13 @@ export class Hub {
         const item = inbox?.get(msg.itemId)
         if (!inbox || !item || item.kind !== 'reply') break
         const s = pm.findSession(item.sessionId)
-        const text = String(msg.text ?? '').replace(/\x1b\[20[01]~/g, '').trimEnd()
+        const text = cleanPrompt(msg.text)
         // Never typed into a session that has started working again: the
         // prompt this reply was written for is no longer the one on screen.
         if (!s || s.tracker.status === 'busy' || s.tracker.status === 'exited' || !text) break
         inbox.answer(item.id, { decision: 'allow' })
-        s.write(`\x1b[200~${text}\x1b[201~`)
-        setTimeout(() => s.write('\r'), PASTE_SETTLE_MS).unref?.()
+        // A follow-up typed into a session that has stopped and is waiting.
+        typePrompt(s, text)
         break
       }
     }
@@ -297,6 +305,15 @@ export class Hub {
 
   private broadcastAuto(): void {
     if (this.opts.auto) this.broadcast(this.autoMessage(this.opts.auto))
+  }
+
+  /** A tile, or the orchestrator agent's own terminal. */
+  private find(id: string): Session | undefined {
+    return this.opts.pm.findSession(id) ?? this.opts.agent?.find(id)
+  }
+
+  private broadcastAgent(): void {
+    if (this.opts.agent) this.broadcast({ type: 'agent', agent: this.opts.agent.info() })
   }
 
   private broadcastInbox(): void {
