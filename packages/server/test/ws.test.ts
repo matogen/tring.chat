@@ -8,6 +8,7 @@ import { decodeOutput, type ServerMessage } from '@tring/shared/protocol'
 import { ProjectManager } from '../src/project-manager.ts'
 import { createOriginCheck, upgradeGuard } from '../src/security.ts'
 import { Hub } from '../src/ws.ts'
+import { Inbox } from '../src/inbox.ts'
 
 /** The daemon puts this on the upgrade; the rig has to as well to be honest. */
 const sameOrigin = createOriginCheck()
@@ -29,14 +30,14 @@ afterEach(async () => {
   }
 })
 
-async function rig(opts: { token?: string } = {}): Promise<Rig> {
+async function rig(opts: { token?: string; inbox?: Inbox } = {}): Promise<Rig> {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'tring-ws-'))
   const pm = await ProjectManager.open({
     url: 'http://127.0.0.1:0', scrollback: 200, idleMs: 200,
     statePath: path.join(dir, 'projects.json'), tickMs: 50,
   })
   const server = createServer()
-  const hub = new Hub({ pm, snapshotMs: 60, token: opts.token ?? null })
+  const hub = new Hub({ pm, snapshotMs: 60, token: opts.token ?? null, inbox: opts.inbox ?? null })
   hub.attach(new WebSocketServer({ server, verifyClient: upgradeGuard(sameOrigin) }))
   await new Promise<void>((res) => server.listen(0, '127.0.0.1', res))
   const port = (server.address() as { port: number }).port
@@ -220,6 +221,28 @@ describe('WebSocket hub', () => {
     expect(pick(got, 'snapshot').filter((m) => m.id === bgSession.id)).toHaveLength(0)
     expect(pick(got, 'snapshot').filter((m) => m.id === fgSession.id).length).toBeGreaterThan(0)
 
+    ws.close()
+  })
+
+  it('marks a tile seen once its card is settled from the orchestrator', async () => {
+    const inbox = new Inbox()
+    const r = await rig({ inbox })
+    const p = r.pm.createProject('p', r.dir)
+    const s = r.pm.create(p, {})!
+    const { ws, got } = await connect(r.port)
+    await waitFor(() => pick(got, 'state').length > 0)
+
+    // Each kind of card, answered from the inbox, leaves the tile `done`
+    // (green, counted in the tab badge) unless the hub says it was seen.
+    for (const [kind, decision] of [['permission', 'allow'], ['question', 'deny'], ['reply', 'terminal']] as const) {
+      s.tracker.commandStart(Date.now())
+      s.hook()
+      expect(s.tracker.status).toBe('done')
+      const item = inbox.open({ sessionId: s.id, kind, tool: 'Bash', input: {} }, () => {})
+      ws.send(JSON.stringify({ type: 'answer', itemId: item.id, decision }))
+      await waitFor(() => !inbox.get(item.id))
+      await waitFor(() => s.tracker.status === 'idle')
+    }
     ws.close()
   })
 

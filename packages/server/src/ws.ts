@@ -255,6 +255,10 @@ export class Hub {
           ...(msg.answers ? { answers: msg.answers } : {}),
           ...(typeof msg.message === 'string' ? { message: msg.message } : {}),
         })
+        // Answering a card is looking at that tile, as much as typing into it
+        // would be: without this it stays green and in the tab badge until
+        // someone presses a key in its terminal.
+        pm.findSession(item.sessionId)?.ack()
         break
       }
       case 'autoAnswer':
