@@ -1221,3 +1221,25 @@ pre.card-body {
 .notify-body .field.toggle.notify-choice { margin: 6px 0; padding: 0; border: none; }
 .notify-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
 .notify-result { color: var(--muted); font-size: 12px; }
+
+/* ---------- choice buttons on finished cards (choices.ts) ---------- */
+
+/* The same option buttons as Claude Code's own questions (.card-options .option
+   above); they wrap like them, on a phone too. */
+.card-choices { margin-top: 10px; }
+.card-choices + .card-choices { margin-top: 12px; }
+.card-choice-q { margin: 0 0 6px; font-weight: 600; }
+.option.recommended { border-color: var(--emerald); }
+.option-tag {
+  justify-self: start;
+  margin-top: 3px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--deep);
+  color: var(--emerald);
+  font: 600 10.5px/1.6 var(--mono);
+}
+.option.yes { border-style: dashed; }
+.option.yes span { font-weight: 600; }
+.option.other span { color: var(--muted); }
+.option span { overflow-wrap: anywhere; }

@@ -1,6 +1,7 @@
 import type { AgentInfo, AutoDecision, InboxDecision, InboxItem } from '@tring/shared/protocol'
 import { age, answersFor, describe } from './inbox-view.ts'
 import { renderMarkdown } from './markdown.ts'
+import { answerText, parseChoices } from './choices.ts'
 import {
   clampSplit, MIN_CARDS_HEIGHT, MIN_CARDS_WIDTH, MIN_TERMINAL_HEIGHT, MIN_TERMINAL_WIDTH,
 } from './split.ts'
@@ -557,6 +558,10 @@ export class InboxPanel {
         const v = box.value.trim()
         if (v) this.cb.onReply(item.id, v)
       }
+      // A plain-text multiple choice at the end of its turn (the grilling
+      // skill's rounds): one button per option, outside the folded message so
+      // they show whether it is folded or not. See choices.ts.
+      const choiceKeys = this.choiceButtons(item, root, box)
       box.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); send() }
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); root.focus() }
@@ -569,6 +574,7 @@ export class InboxPanel {
       root.append(box, actions)
       key = (e) => {
         if (e.target !== root) return false
+        if (choiceKeys(e)) return true
         if (e.key === 'Enter' || e.key === 'r') { box.focus(); return true }
         if (e.key === 'x') { answer('terminal'); return true }
         if (e.key === 'o') { open(); return true }
@@ -577,5 +583,81 @@ export class InboxPanel {
     }
 
     return { item, root, paintHeader, key }
+  }
+
+  /**
+   * The option buttons for a finished card whose message ends in a choice,
+   * styled like Claude Code's own questions (AskUserQuestion) above.
+   *
+   * One question: a button sends at once — "(a) <option text>", which the
+   * agent cannot misread even if it scrolled, or "yes" for its recommendation.
+   * Several (a grilling round): sending on the first click would answer only
+   * Q1, so each click fills that question's line in the reply box instead
+   * ("Q1: yes", "Q2: (b) One day") and Send goes once they are done.
+   * "Something else" and "Other" open the reply box rather than sending.
+   *
+   * Returns the card's extra keys: 1–9 for an option and y for yes, when there
+   * is a single question.
+   */
+  private choiceButtons(item: InboxItem, root: HTMLElement, box: HTMLTextAreaElement): (e: KeyboardEvent) => boolean {
+    const questions = parseChoices(item.message ?? '')
+    if (!questions.length) return () => false
+    const single = questions.length === 1
+    const picks = new Map<string, string>()
+    const compose = (): void => {
+      box.value = questions.filter((q) => picks.has(q.id!)).map((q) => `${q.id}: ${picks.get(q.id!)}`).join('\n')
+    }
+    const focusEnd = (): void => {
+      box.focus()
+      box.setSelectionRange(box.value.length, box.value.length)
+    }
+    const numbered: HTMLButtonElement[] = []
+    let yesButton: HTMLButtonElement | null = null
+
+    for (const q of questions) {
+      const block = el('div', 'card-choices')
+      if (!single) block.append(el('p', 'card-choice-q', `${q.id} · ${q.title}`))
+      const opts = el('div', 'card-options')
+      const choose = (b: HTMLButtonElement, answerFor: string): void => {
+        if (single) { this.cb.onReply(item.id, answerFor); return }
+        picks.set(q.id!, answerFor)
+        compose()
+        for (const sib of Array.from(opts.querySelectorAll('.option'))) sib.classList.toggle('picked', sib === b)
+      }
+      const rec = q.options.find((o) => o.recommended)
+      if (q.acceptsYes && rec) {
+        const b = el('button', 'option yes')
+        b.type = 'button'
+        b.append(el('b', undefined, 'y'), el('span', undefined, 'Yes'), el('small', undefined, `Go with the recommendation, (${rec.key})`))
+        b.onclick = (e) => { e.stopPropagation(); choose(b, 'yes') }
+        opts.append(b)
+        if (single) yesButton = b
+      }
+      for (const o of q.options) {
+        const b = el('button', `option${o.recommended ? ' recommended' : ''}${o.other ? ' other' : ''}`)
+        b.type = 'button'
+        b.append(el('b', undefined, o.key), el('span', undefined, o.label))
+        if (o.recommended) b.append(el('small', 'option-tag', 'Recommended'))
+        b.onclick = (e) => {
+          e.stopPropagation()
+          if (!o.other) { choose(b, answerText(o)); return }
+          // "Something else": the reply box, ready for it.
+          if (!single) { picks.set(q.id!, ''); compose() }
+          focusEnd()
+        }
+        opts.append(b)
+        if (single) numbered.push(b)
+      }
+      block.append(opts)
+      root.append(block)
+    }
+
+    return (e) => {
+      if (!single) return false
+      const n = Number(e.key)
+      if (n >= 1 && n <= 9 && numbered[n - 1]) { numbered[n - 1]!.click(); return true }
+      if (e.key === 'y' && yesButton) { yesButton.click(); return true }
+      return false
+    }
   }
 }
