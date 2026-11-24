@@ -96,6 +96,7 @@ const inboxPanel = new InboxPanel(focusCell, {
   installHooks: async () => { await apiPost('/api/hooks') },
   onAuto: (enabled) => ws.send({ type: 'autoAnswer', enabled }),
   onAgent: (change) => ws.send({ type: 'agent', ...change }),
+  onLayout: () => fitTerminal(),
 })
 /** The first `inbox` after connecting is the backlog, not news worth a chime. */
 let inboxSeen = false

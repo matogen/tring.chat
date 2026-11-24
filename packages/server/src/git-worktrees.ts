@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { stat } from 'node:fs/promises'
 import path from 'node:path'
 import { promisify } from 'node:util'
 
@@ -40,6 +41,8 @@ export interface Worktree {
 
 export interface GitOps {
   place(dir: string): Promise<GitPlace | null>
+  /** The worktree a file or directory is in, without running git; see worktreeRootOf. */
+  rootOf(p: string): Promise<string | null>
   worktrees(dir: string): Promise<Worktree[]>
   branchExists(dir: string, branch: string): Promise<boolean>
   /** Null when the name is valid; otherwise why not. */
@@ -121,7 +124,40 @@ export function defaultWorktreePath(commonDir: string, existing: Worktree[], bra
   return path.join(path.dirname(repoDir), `${repoName(commonDir)}.worktrees`, slug)
 }
 
+const roots = new Map<string, Promise<string | null>>()
+
+/**
+ * The worktree a path is in, by walking up to the nearest `.git` (a
+ * directory in a main checkout, a file in a linked worktree) — no git process,
+ * because one transcript names dozens of paths. Remembered per directory for
+ * the life of the daemon; a repository appearing later is a rare enough case
+ * to cost only a restart.
+ */
+export function worktreeRootOf(p: string): Promise<string | null> {
+  const start = path.resolve(p)
+  const k = normal(start)
+  let hit = roots.get(k)
+  if (!hit) {
+    hit = (async () => {
+      let dir = start
+      for (let i = 0; i < 64; i++) {
+        try {
+          await stat(path.join(dir, '.git'))
+          return dir
+        } catch { /* keep climbing */ }
+        const up = path.dirname(dir)
+        if (up === dir) return null
+        dir = up
+      }
+      return null
+    })()
+    roots.set(k, hit)
+  }
+  return hit
+}
+
 export const realGit: GitOps = {
+  rootOf: worktreeRootOf,
   async place(dir) {
     const out = await git(dir, ['rev-parse', '--path-format=absolute', '--show-toplevel', '--git-dir', '--git-common-dir'])
     const [root, gitDir, commonDir] = out?.trim().split(/\r?\n/) ?? []

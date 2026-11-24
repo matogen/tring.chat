@@ -37,6 +37,31 @@ describe('parseTranscript', () => {
   })
 })
 
+describe('what counts as a prompt', () => {
+  it('keeps a person\'s message that starts with a tag (a paste), drops Claude Code\'s own', () => {
+    const t = parseTranscript([
+      line({ type: 'user', origin: { kind: 'human' }, message: { content: '<pasted_content>edit tring</pasted_content> please' } }),
+      line({ type: 'user', origin: { kind: 'human' }, message: { content: '<local-command-stdout>ok</local-command-stdout>' } }),
+      line({ type: 'user', origin: { kind: 'human' }, message: { content: '<system-reminder>x</system-reminder>' } }),
+    ])
+    expect(t.turns.map((x) => x.text)).toEqual(['<pasted_content>edit tring</pasted_content> please'])
+  })
+
+  it('records what the agent read and ran, not only what it edited', () => {
+    const t = parseTranscript([
+      line({ type: 'assistant', message: { content: [
+        { type: 'tool_use', name: 'Read', input: { file_path: '/src/app/a.ts' } },
+        { type: 'tool_use', name: 'Grep', input: { pattern: 'x', path: '/src/app' } },
+        { type: 'tool_use', name: 'Bash', input: { command: 'cd "/src/app" && npm test' } },
+      ] } }),
+    ])
+    expect(t.turns).toEqual([{
+      role: 'assistant', text: '', at: null,
+      paths: ['/src/app/a.ts', '/src/app'], commands: ['cd "/src/app" && npm test'],
+    }])
+  })
+})
+
 describe('reading transcripts from disk', () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'tring-tx-'))
   afterAll(() => rmSync(dir, { recursive: true, force: true }))

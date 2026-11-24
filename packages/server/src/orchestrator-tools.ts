@@ -319,6 +319,7 @@ export class OrchestratorTools {
     const placed = await this.placeAll()
     const byId = new Map(placed.map((p) => [p.s.id, p]))
     const talks = new Map(await Promise.all(placed.map(async (p) => [p.s.id, await this.history(p.s)] as const)))
+    const worked = new Map(await Promise.all(placed.map(async (p) => [p.s.id, await this.workedIn(talks.get(p.s.id) ?? null)] as const)))
     const out = projects.map((p) => ({
       project: p.name,
       id: p.id,
@@ -342,6 +343,7 @@ export class OrchestratorTools {
           ...(shared.length ? { sameWorktreeAs: shared } : {}),
           agent: s?.claude ? 'claude' : null,
           ...conversationSummary(talks.get(info.id) ?? null),
+          ...workedSummary(worked.get(info.id) ?? []),
           ...(waiting.length ? { waitingOnUser: waiting.map(summary) } : {}),
           ...(s?.lastMessage ? { lastMessage: clip(s.lastMessage, MAX_LAST_MESSAGE) } : {}),
         }
@@ -396,6 +398,34 @@ export class OrchestratorTools {
     return JSON.stringify({ repos: out }, null, 2)
   }
 
+  /**
+   * The worktrees an agent has really been working in, by the files it edited
+   * and read and the paths in the commands it ran — not where its shell sits.
+   * A Claude started in the home directory that spends the day editing one
+   * repository is working in that repository.
+   */
+  private async workedIn(talk: Transcript | null): Promise<Array<{ root: string; edits: number; reads: number }>> {
+    if (!talk) return []
+    const tally = new Map<string, { root: string; edits: number; reads: number }>()
+    const count = async (p: string, kind: 'edits' | 'reads'): Promise<void> => {
+      if (!path.isAbsolute(p)) return
+      const root = await this.git.rootOf(p)
+      if (!root) return
+      const k = normal(root)
+      const t = tally.get(k) ?? { root, edits: 0, reads: 0 }
+      t[kind]++
+      tally.set(k, t)
+    }
+    const jobs: Array<Promise<void>> = []
+    for (const t of talk.turns) {
+      for (const f of t.files ?? []) jobs.push(count(f, 'edits'))
+      for (const p of t.paths ?? []) jobs.push(count(p, 'reads'))
+      for (const c of t.commands ?? []) for (const p of pathsIn(c)) jobs.push(count(p, 'reads'))
+    }
+    await Promise.all(jobs)
+    return [...tally.values()].sort((a, b) => b.edits * 3 + b.reads - (a.edits * 3 + a.reads)).slice(0, 5)
+  }
+
   /** The tile's conversation, from the transcript its hooks named, or found by id. */
   private async history(s: ToolSession): Promise<Transcript | null> {
     const t = this.d.transcripts ?? {
@@ -441,10 +471,12 @@ export class OrchestratorTools {
     const placed = await this.placeAll()
     const docs = await Promise.all(placed.map(async (p) => {
       const talk = await this.history(p.s)
+      const worked = await this.workedIn(talk)
       const fields: Array<{ why: string; text: string; weight: number }> = [
         { why: 'name', text: [p.s.name, p.s.title].filter(Boolean).join(' '), weight: 4 },
         { why: 'branch', text: [p.place?.branch, p.place?.root].filter(Boolean).join(' '), weight: 4 },
         { why: 'title', text: talk?.title ?? '', weight: 4 },
+        { why: 'worked in', text: worked.map((w) => w.root).join(' '), weight: 4 },
         { why: 'last message', text: p.s.lastMessage ?? '', weight: 1 },
       ]
       const turns = talk?.turns ?? []
@@ -453,11 +485,16 @@ export class OrchestratorTools {
         if (t.role === 'user') fields.push({ why: 'prompt', text: t.text, weight: 3 * recent })
         else fields.push({ why: 'agent said', text: t.text, weight: recent })
         if (t.files?.length) fields.push({ why: 'edited', text: t.files.join(' '), weight: 3 * recent })
+        if (t.paths?.length) fields.push({ why: 'read', text: t.paths.join(' '), weight: recent })
+        if (t.commands?.length) fields.push({ why: 'ran', text: t.commands.join(' '), weight: recent })
       })
       return { p, fields }
     }))
     // How many tiles mention each word, for its weight.
     const df = new Map(ws.map((w) => [w, docs.filter((d) => d.fields.some((f) => f.text.toLowerCase().includes(w))).length]))
+    // Words no tile mentions say nothing either way. "Edit tring since it cuts
+    // off characters on cards" is one word of signal and five of description.
+    const known = ws.filter((w) => df.get(w)! > 0)
     const ranked = docs.map(({ p, fields }) => {
       let score = 0
       const why = new Set<string>()
@@ -466,7 +503,8 @@ export class OrchestratorTools {
       // the tile whose agent once wrote "login page". Confident means every
       // word in one place, or at least half of them where the tile's purpose
       // is recorded — its name, branch, title, prompts or edits.
-      let confident = false
+      let whole = false
+      const strong = new Set<string>()
       for (const f of fields) {
         const low = f.text.toLowerCase()
         const hit = ws.filter((w) => low.includes(w))
@@ -475,8 +513,14 @@ export class OrchestratorTools {
         score += s
         why.add(f.why)
         if (!best || s > best.score) best = { score: s, text: snippet(f.text, hit[0]!) }
-        if (hit.length === ws.length || (STRONG.has(f.why) && hit.length >= ws.length / 2)) confident = true
+        if (hit.length === ws.length) whole = true
+        if (STRONG.has(f.why)) for (const w of hit) strong.add(w)
       }
+      // Confident when: every word in one place; or, across the places a
+      // tile's purpose is recorded, half the words any tile knows; or a word
+      // only this tile knows, there — "tring" in the repos its agent edited.
+      const confident = whole || strong.size >= Math.max(1, known.length / 2) ||
+        [...strong].some((w) => df.get(w) === 1)
       return { p, score, confident, why: [...why], snippet: best?.text ?? '' }
     }).filter((r) => r.score > 0).sort((a, b) => b.score - a.score)
 
@@ -700,13 +744,41 @@ function conversationSummary(t: Transcript | null): Record<string, unknown> {
 }
 
 /** Where a tile's purpose is recorded, as opposed to what its agent happened to say. */
-const STRONG = new Set(['name', 'branch', 'title', 'prompt', 'edited'])
+const STRONG = new Set(['name', 'branch', 'title', 'worked in', 'prompt', 'edited'])
+
+/** For list_sessions: the repositories the agent has been editing and reading in. */
+function workedSummary(w: Array<{ root: string; edits: number; reads: number }>): Record<string, unknown> {
+  if (!w.length) return {}
+  return { workedIn: w.map((x) => `${x.root} (${x.edits} edits, ${x.reads} reads)`) }
+}
+
+/**
+ * Absolute paths named in a shell command: quoted ones (which may hold
+ * spaces, as Windows paths do) and bare ones. Enough to see which repository
+ * a `cd "C:/src/app" && npm test` was about.
+ */
+export function pathsIn(command: string): string[] {
+  const out = new Set<string>()
+  const abs = /^(?:[A-Za-z]:[\\/]|\/(?!\/))/
+  for (const m of command.matchAll(/"([^"\n]+)"|'([^'\n]+)'/g)) {
+    const p = (m[1] ?? m[2] ?? '').trim()
+    if (abs.test(p)) out.add(p)
+  }
+  for (const m of command.replace(/"[^"\n]*"|'[^'\n]*'/g, ' ').matchAll(/(?:^|[\s=(])((?:[A-Za-z]:[\\/]|\/)[^\s"'`;|&<>()]+)/g)) {
+    if (abs.test(m[1]!) && m[1] !== '/') out.add(m[1]!)
+  }
+  return [...out].slice(0, 10)
+}
 
 const STOP = new Set([
   'the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'onto', 'then', 'than', 'please', 'can', 'could',
   'would', 'should', 'you', 'your', 'our', 'its', 'are', 'was', 'were', 'has', 'have', 'had', 'not', 'but', 'all',
   'any', 'some', 'one', 'out', 'make', 'change', 'update', 'fix', 'add', 'set', 'get', 'put', 'use', 'now', 'also',
   'just', 'like', 'want', 'need', 'tile', 'terminal', 'session', 'agent', 'work', 'working', 'thing', 'there',
+  'since', 'because', 'when', 'where', 'what', 'which', 'while', 'about', 'after', 'before', 'still', 'very',
+  'really', 'only', 'even', 'more', 'most', 'much', 'many', 'other', 'over', 'under', 'again', 'seems', 'look',
+  'looks', 'see', 'show', 'shows', 'does', 'doesn', 'don', 'did', 'will', 'won', 'cannot', 'edit', 'sure',
+  'should', 'here', 'they', 'them', 'their', 'what', 'who', 'how', 'why', 'yes', 'okay',
 ])
 
 /**

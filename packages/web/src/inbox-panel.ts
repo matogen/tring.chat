@@ -1,6 +1,11 @@
 import type { AgentInfo, AutoDecision, InboxDecision, InboxItem } from '@tring/shared/protocol'
 import { age, answersFor, describe } from './inbox-view.ts'
 import { renderMarkdown } from './markdown.ts'
+import { clampWidth } from './diff-rows.ts'
+
+const WIDTH_KEY = 'tring.inboxWidth'
+/** Beside the agent: wide enough for a card's buttons on one row. */
+const DEFAULT_WIDTH = 420
 
 const STORAGE_KEY = 'tring.orchestrator'
 /**
@@ -30,6 +35,8 @@ export interface InboxCallbacks {
   onAuto: (enabled: boolean) => void
   /** The orchestrator agent: on or off, or start its Claude again. */
   onAgent: (change: { enabled: boolean } | { restart: 'resume' | 'fresh' }) => void
+  /** The column beside the agent was resized: the terminal must refit. */
+  onLayout?: () => void
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -45,6 +52,31 @@ function button(label: string, cls: string, onClick: () => void, title?: string)
   if (title) b.title = title
   b.onclick = (e) => { e.stopPropagation(); onClick() }
   return b
+}
+
+/**
+ * A card body that is taller than its box gets a "Show all" that lets it grow
+ * to its full height, and "Show less" to fold it again. Measured once it is on
+ * screen, since only then does it have a height; re-measured when the panel
+ * changes width, which changes how much the text wraps.
+ */
+function expandable(body: HTMLElement): [HTMLElement, HTMLButtonElement] {
+  const toggle = el('button', 'card-more', 'Show all')
+  toggle.type = 'button'
+  toggle.hidden = true
+  const measure = (): void => {
+    if (body.classList.contains('expanded')) return
+    toggle.hidden = body.scrollHeight <= body.clientHeight + 2
+  }
+  toggle.onclick = (e) => {
+    e.stopPropagation()
+    const open = body.classList.toggle('expanded')
+    toggle.textContent = open ? 'Show less' : 'Show all'
+    if (!open) measure()
+  }
+  requestAnimationFrame(measure)
+  new ResizeObserver(measure).observe(body)
+  return [body, toggle]
 }
 
 interface Card {
@@ -72,6 +104,9 @@ export class InboxPanel {
   private readonly agentBox = el('input')
   /** Says why the agent is not running, with the way to start it again. */
   private readonly agentNote = el('div', 'inbox-banner agent-note')
+  /** Drags the column beside the agent wider or narrower, like the diff panel's. */
+  private readonly handle = el('div', 'inbox-handle')
+  private width = InboxPanel.savedWidth()
   private readonly history = el('details', 'inbox-history')
   private readonly historyList = el('ol', 'inbox-history-list')
   private readonly historySummary = el('summary')
@@ -81,7 +116,7 @@ export class InboxPanel {
   private armedAt = 0
   private ticker: ReturnType<typeof setInterval> | null = null
 
-  constructor(cell: HTMLElement, private readonly cb: InboxCallbacks) {
+  constructor(private readonly cell: HTMLElement, private readonly cb: InboxCallbacks) {
     this.el.hidden = true
     this.el.tabIndex = -1
     const head = el('div', 'inbox-head')
@@ -111,7 +146,10 @@ export class InboxPanel {
     this.agentNote.hidden = true
     this.el.append(head, this.agentNote, this.banner, this.history, this.list, this.empty)
     this.el.addEventListener('keydown', (e) => this.onKey(e))
-    cell.append(this.el)
+    this.handle.hidden = true
+    this.handle.title = 'Drag to resize'
+    cell.append(this.handle, this.el)
+    this.bindResize()
   }
 
   get isOpen(): boolean {
@@ -140,6 +178,48 @@ export class InboxPanel {
    */
   setBeside(beside: boolean): void {
     this.el.classList.toggle('beside', beside)
+    this.handle.hidden = !beside
+    if (beside) this.el.style.flexBasis = `${this.width}px`
+    else this.el.style.removeProperty('flex-basis')
+  }
+
+  /** Per browser, like the diff panel's width. */
+  private static savedWidth(): number {
+    try {
+      const v = Number(localStorage.getItem(WIDTH_KEY))
+      return Number.isFinite(v) && v > 0 ? v : DEFAULT_WIDTH
+    } catch {
+      return DEFAULT_WIDTH
+    }
+  }
+
+  /**
+   * Drag the handle to resize the column beside the agent. The terminal is
+   * refitted once, on release: fitting on every move would send the PTY a
+   * resize per pixel.
+   */
+  private bindResize(): void {
+    let right = 0
+    this.handle.addEventListener('pointerdown', (e) => {
+      e.preventDefault()
+      right = this.el.getBoundingClientRect().right
+      this.handle.setPointerCapture(e.pointerId)
+      this.handle.classList.add('dragging')
+    })
+    this.handle.addEventListener('pointermove', (e) => {
+      if (!this.handle.hasPointerCapture(e.pointerId)) return
+      this.width = clampWidth(right - e.clientX, this.cell.clientWidth)
+      this.el.style.flexBasis = `${this.width}px`
+    })
+    const end = (e: PointerEvent): void => {
+      if (!this.handle.hasPointerCapture(e.pointerId)) return
+      this.handle.releasePointerCapture(e.pointerId)
+      this.handle.classList.remove('dragging')
+      try { localStorage.setItem(WIDTH_KEY, String(this.width)) } catch { /* private mode */ }
+      this.cb.onLayout?.()
+    }
+    this.handle.addEventListener('pointerup', end)
+    this.handle.addEventListener('pointercancel', end)
   }
 
   /** Mirrors the daemon's agent state: the switch, and a note when it is down. */
@@ -332,7 +412,7 @@ export class InboxPanel {
     if (item.kind === 'permission') {
       if (text.note) root.append(el('p', 'card-note', text.note))
       // Commands and diffs stay verbatim; a plan is prose, written in Markdown.
-      root.append(text.mono ? el('pre', 'card-body', text.body) : renderMarkdown(text.body, 'card-body md'))
+      root.append(...expandable(text.mono ? el('pre', 'card-body', text.body) : renderMarkdown(text.body, 'card-body md')))
       if (text.tool) root.append(el('div', 'card-tool', text.tool))
 
       const reason = el('input', 'card-reason')
@@ -431,7 +511,7 @@ export class InboxPanel {
 
     if (item.kind === 'reply') {
       // What the agent said, as it meant it to read: **bold** is bold.
-      root.append(renderMarkdown(text.body, 'card-message md'))
+      root.append(...expandable(renderMarkdown(text.body, 'card-message md')))
       const box = el('textarea', 'card-reply')
       box.rows = 2
       box.placeholder = 'Reply… (Enter sends, Shift+Enter for a new line)'

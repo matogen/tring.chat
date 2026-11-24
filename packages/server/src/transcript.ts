@@ -19,6 +19,10 @@ export interface Turn {
   at: string | null
   /** Files the agent edited or wrote in this turn. */
   files?: string[]
+  /** Files and directories it read or searched: where it has been working. */
+  paths?: string[]
+  /** Shell commands it ran, cut short: they name directories and repos too. */
+  commands?: string[]
 }
 
 export interface Transcript {
@@ -29,7 +33,23 @@ export interface Transcript {
   partial: boolean
 }
 
+/**
+ * What Claude Code itself files as a user message: slash-command echoes and
+ * their output, task notifications, reminders. Only these: a person's own
+ * message can start with a tag too (a paste, some HTML), and is a prompt.
+ */
+const SYSTEM_TAG = /^<(command-|local-command-|task-notification|system-reminder|user-prompt-submit-hook)/
+
 const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit'])
+const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS', 'NotebookRead'])
+const SHELL_TOOLS = new Set(['Bash', 'PowerShell'])
+/** Per turn, so one long turn cannot swamp the rest. */
+const MAX_PER_TURN = 40
+const MAX_COMMAND = 300
+
+const addCapped = (list: string[], v: string): void => {
+  if (list.length < MAX_PER_TURN && !list.includes(v)) list.push(v)
+}
 
 /** Read whole up to this; past it, the head (first prompt, title) and the tail. */
 const WHOLE_BYTES = 8 << 20
@@ -54,7 +74,7 @@ function humanPrompt(j: Record<string, unknown>): string | null {
     text = blocks.filter((b) => b.type === 'text' && typeof b.text === 'string').map((b) => b.text).join('\n') || null
   }
   text = text?.trim() ?? null
-  if (!text || text.startsWith('<')) return null
+  if (!text || SYSTEM_TAG.test(text)) return null
   return text
 }
 
@@ -78,23 +98,34 @@ export function parseTranscript(lines: string[]): Omit<Transcript, 'partial'> {
     if (!Array.isArray(blocks)) continue
     const texts: string[] = []
     const files: string[] = []
+    const paths: string[] = []
+    const commands: string[] = []
     for (const b of blocks as Array<{ type?: string; text?: string; name?: string; input?: Record<string, unknown> }>) {
       if (b.type === 'text' && b.text?.trim()) texts.push(b.text.trim())
-      if (b.type === 'tool_use' && b.name && EDIT_TOOLS.has(b.name)) {
-        const f = b.input?.['file_path'] ?? b.input?.['notebook_path']
+      if (b.type !== 'tool_use' || !b.name) continue
+      const input = b.input ?? {}
+      if (EDIT_TOOLS.has(b.name)) {
+        const f = input['file_path'] ?? input['notebook_path']
         if (typeof f === 'string') files.push(f)
+      } else if (READ_TOOLS.has(b.name)) {
+        const p = input['file_path'] ?? input['path'] ?? input['notebook_path']
+        if (typeof p === 'string' && p) addCapped(paths, p)
+      } else if (SHELL_TOOLS.has(b.name) && typeof input['command'] === 'string') {
+        addCapped(commands, input['command'].slice(0, MAX_COMMAND))
       }
     }
-    if (!texts.length && !files.length) continue
+    if (!texts.length && !files.length && !paths.length && !commands.length) continue
     // One assistant turn is many transcript lines (text, tools, more text):
     // they are folded together until the next prompt.
-    const last = turns[turns.length - 1]
-    if (last?.role === 'assistant') {
-      if (texts.length) last.text = [last.text, ...texts].filter(Boolean).join('\n\n')
-      if (files.length) last.files = [...new Set([...(last.files ?? []), ...files])]
-    } else {
-      turns.push({ role: 'assistant', text: texts.join('\n\n'), at, ...(files.length ? { files: [...new Set(files)] } : {}) })
+    let last = turns[turns.length - 1]
+    if (last?.role !== 'assistant') {
+      last = { role: 'assistant', text: '', at }
+      turns.push(last)
     }
+    if (texts.length) last.text = [last.text, ...texts].filter(Boolean).join('\n\n')
+    if (files.length) last.files = [...new Set([...(last.files ?? []), ...files])]
+    for (const p of paths) addCapped(last.paths ??= [], p)
+    for (const c of commands) addCapped(last.commands ??= [], c)
   }
   return { title, turns }
 }

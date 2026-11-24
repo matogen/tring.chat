@@ -6,8 +6,12 @@ import type { InboxItem, InboxQuestion } from '@tring/shared/protocol'
  * panel puts it on screen through textContent only.
  */
 
-/** Long inputs are cut, not hidden: the card says how much is left out. */
-export const MAX_BODY = 4000
+/**
+ * A ceiling against a runaway input (a Write of a whole bundle), not a reading
+ * limit: an agent's reply or plan is shown whole, and a long one folds behind
+ * "Show all" on its card. At 4000 replies were cut mid-sentence.
+ */
+export const MAX_BODY = 100_000
 
 export interface CardText {
   /** "Run a command", "Edit a file", "Question", "Finished" … */
