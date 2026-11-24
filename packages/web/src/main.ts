@@ -28,7 +28,7 @@ import { renderBar } from './project-bar.ts'
 import { MOBILE_QUERY, renderSwitcher } from './switcher.ts'
 import * as usage from './usage-panel.ts'
 import * as ui from './overlay.ts'
-import { notificationsSection } from './notifications.ts'
+import { detectPhone, dropDesktopSubscription, notificationsSection } from './notifications.ts'
 import { tring } from './sound.ts'
 
 const barEl = document.getElementById('bar') as HTMLElement
@@ -823,7 +823,8 @@ function openSettings(): void {
     }
     if (v.ring !== ringSize()) changeRingSize(v.ring)
     else { paintBar(); void refreshUsage() }
-  }, [notificationsSection()])
+    // Notifications are a phone's: a desktop is not offered them at all.
+  }, detectPhone() ? [notificationsSection()] : [])
 }
 
 function changeRingSize(size: RingSize): void {
@@ -1162,4 +1163,6 @@ navigator.serviceWorker?.addEventListener('message', (e: MessageEvent<{ type?: s
 })
 
 if (fromNotification || InboxPanel.wanted()) openInbox()
+// A desktop that subscribed while 0.1.24 offered it there lets go now.
+void dropDesktopSubscription()
 ws.connect()

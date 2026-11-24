@@ -1,6 +1,8 @@
 import type { AgentInfo, AutoDecision, InboxDecision, InboxItem } from '@tring/shared/protocol'
 import { age, answersFor, describe } from './inbox-view.ts'
 import { renderMarkdown } from './markdown.ts'
+import { answerText, parseChoices } from './choices.ts'
+import { MOBILE_QUERY as PHONE } from './switcher.ts'
 import {
   clampSplit, MIN_CARDS_HEIGHT, MIN_CARDS_WIDTH, MIN_TERMINAL_HEIGHT, MIN_TERMINAL_WIDTH,
 } from './split.ts'
@@ -151,6 +153,8 @@ export class InboxPanel {
     this.agentNote.hidden = true
     this.el.append(head, this.agentNote, this.banner, this.history, this.list, this.empty)
     this.el.addEventListener('keydown', (e) => this.onKey(e))
+    // The phone's back gesture, while a card is full screen.
+    window.addEventListener('popstate', () => { if (this.fullId) this.closeFull(true) })
     this.handle.hidden = true
     this.handle.title = 'Drag to resize'
     cell.append(this.handle, this.el)
@@ -280,11 +284,117 @@ export class InboxPanel {
   }
 
   close(): void {
+    this.closeFull()
     this.shown = false
     this.el.hidden = true
     try { localStorage.setItem(STORAGE_KEY, '0') } catch { /* private mode */ }
     if (this.ticker) clearInterval(this.ticker)
     this.ticker = null
+  }
+
+  /* ---- one card, full screen (on a phone) ---- */
+
+  private fullId: string | null = null
+  private fullSession: string | null = null
+  /** A history entry is ours while full screen is open, for the back gesture. */
+  private fullPushed = false
+  private fullTimer: ReturnType<typeof setTimeout> | null = null
+  /** Cards answered from this panel, so full screen can tell "you answered" from "it went away". */
+  private readonly answeredHere = new Set<string>()
+
+  private answered(id: string): void {
+    this.answeredHere.add(id)
+  }
+
+  private reply(id: string, text: string): void {
+    this.answered(id)
+    this.cb.onReply(id, text)
+  }
+
+  /**
+   * Shows one card over the whole screen: the same element, so a half-typed
+   * reply or picked choices come along, and it keeps updating in place. The
+   * message scrolls; choices, the reply box and the buttons stay pinned at
+   * the bottom, sized to the visible viewport so an open keyboard does not
+   * cover them.
+   */
+  openFull(id: string): void {
+    const card = this.cards.get(id)
+    if (!card) return
+    if (this.fullTimer) { clearTimeout(this.fullTimer); this.fullTimer = null }
+    const switching = this.fullId !== null
+    if (switching && this.fullId !== id) this.unstyleFull(this.cards.get(this.fullId!)?.root)
+    this.fullId = id
+    this.fullSession = card.item.sessionId
+    card.root.classList.add('full')
+    document.body.classList.add('card-full-open')
+    // One history entry while it is open: the phone's back gesture closes it
+    // instead of leaving tring.
+    if (!switching) {
+      history.pushState({ tringCard: true }, '')
+      this.fullPushed = true
+      window.visualViewport?.addEventListener('resize', this.fitFull)
+      window.visualViewport?.addEventListener('scroll', this.fitFull)
+    }
+    this.fitFull()
+    card.root.focus({ preventScroll: true })
+  }
+
+  /** `fromBack`: the back gesture already took our history entry. */
+  closeFull(fromBack = false): void {
+    if (this.fullTimer) { clearTimeout(this.fullTimer); this.fullTimer = null }
+    if (!this.fullId) return
+    this.unstyleFull(this.cards.get(this.fullId)?.root)
+    this.fullId = null
+    this.fullSession = null
+    document.body.classList.remove('card-full-open')
+    window.visualViewport?.removeEventListener('resize', this.fitFull)
+    window.visualViewport?.removeEventListener('scroll', this.fitFull)
+    const pushed = this.fullPushed
+    this.fullPushed = false
+    if (pushed && !fromBack && (history.state as { tringCard?: boolean } | null)?.tringCard) history.back()
+  }
+
+  private unstyleFull(root: HTMLElement | undefined): void {
+    if (!root) return
+    root.classList.remove('full')
+    root.style.removeProperty('height')
+    root.style.removeProperty('top')
+  }
+
+  /**
+   * Fits the full-screen card to the part of the screen that is visible. With
+   * the keyboard up, iOS shrinks only the visual viewport, and a card sized to
+   * the layout viewport would have its reply box under the keyboard.
+   */
+  private readonly fitFull = (): void => {
+    const vv = window.visualViewport
+    const root = this.fullId ? this.cards.get(this.fullId)?.root : undefined
+    if (!vv || !root) return
+    root.style.height = `${vv.height}px`
+    root.style.top = `${vv.offsetTop}px`
+  }
+
+  /**
+   * The full-screen card left the list. Answered here: close — nothing is
+   * left to do there until the agent finishes, and other cards may need you.
+   * Gone otherwise (answered on another device, or replaced: a finished card
+   * is dropped, then its successor arrives): follow the tile's newer card if
+   * one comes within a moment, else close.
+   */
+  private fullGone(): void {
+    const was = this.fullId!
+    const session = this.fullSession
+    if (this.answeredHere.has(was)) { this.closeFull(); return }
+    const next = this.items.find((i) => i.sessionId === session)
+    if (next) { this.openFull(next.id); return }
+    this.fullTimer ??= setTimeout(() => {
+      this.fullTimer = null
+      if (this.fullId !== was) return
+      const later = this.items.find((i) => i.sessionId === session)
+      if (later) this.openFull(later.id)
+      else this.closeFull()
+    }, 1500)
   }
 
   /** The cards for one session, so its tile can show it is asking. */
@@ -357,6 +467,8 @@ export class InboxPanel {
       prev = card.root
     }
     if (typing && typing.isConnected && document.activeElement !== typing) typing.focus({ preventScroll: true })
+    for (const id of this.answeredHere) if (!keep.has(id) && id !== this.fullId) this.answeredHere.delete(id)
+    if (this.fullId && !this.cards.has(this.fullId)) this.fullGone()
     this.empty.hidden = this.items.length > 0
     this.empty.textContent = 'Nothing is waiting on you. Cards appear here when an agent asks for permission, asks a question, or finishes.'
   }
@@ -404,6 +516,7 @@ export class InboxPanel {
     if (e.ctrlKey || e.metaKey || e.altKey) return
     const target = e.target as HTMLElement
     const typing = target.tagName === 'TEXTAREA' || target.tagName === 'INPUT'
+    if (e.key === 'Escape' && this.fullId && !typing) { e.preventDefault(); this.closeFull(); return }
     const ids = [...this.cards.keys()]
     const at = ids.indexOf(this.focusedCardId() ?? '')
 
@@ -430,6 +543,26 @@ export class InboxPanel {
     const heading = el('span', 'card-heading', text.heading)
     const when = el('span', 'card-age', age(Date.now() - item.createdAt))
     head.append(slot, name, where, heading, when)
+    // Full screen on a phone (see openFull): a large expand button, and the
+    // title too. Close and the back gesture leave it.
+    const expand = el('button', 'card-expand')
+    expand.type = 'button'
+    expand.title = 'Open full screen'
+    expand.setAttribute('aria-label', 'Open full screen')
+    expand.textContent = '\u2922'
+    expand.onclick = (e) => { e.stopPropagation(); this.openFull(item.id) }
+    const shut = el('button', 'card-close', 'Close')
+    shut.type = 'button'
+    shut.setAttribute('aria-label', 'Close full screen')
+    shut.onclick = (e) => { e.stopPropagation(); this.closeFull() }
+    head.append(expand, shut)
+    for (const t of [name, heading]) {
+      t.addEventListener('click', (e) => {
+        if (!window.matchMedia(PHONE).matches || root.classList.contains('full')) return
+        e.stopPropagation()
+        this.openFull(item.id)
+      })
+    }
     const paintHeader = (): void => {
       const l = this.cb.label(item.sessionId)
       slot.textContent = l ? String(l.slot) : '?'
@@ -439,19 +572,23 @@ export class InboxPanel {
       else root.style.removeProperty('--tint')
     }
     paintHeader()
-    root.append(head)
+    const main = el('div', 'card-main')
+    const foot = el('div', 'card-foot')
+    root.append(head, main, foot)
 
-    const answer = (d: InboxDecision, extra?: { answers?: Record<string, string>; message?: string }): void =>
+    const answer = (d: InboxDecision, extra?: { answers?: Record<string, string>; message?: string }): void => {
+      this.answered(item.id)
       this.cb.onAnswer(item.id, d, extra)
+    }
     const open = (): void => this.cb.onOpen(item.sessionId)
     const actions = el('div', 'card-actions')
     let key: (e: KeyboardEvent) => boolean = () => false
 
     if (item.kind === 'permission') {
-      if (text.note) root.append(el('p', 'card-note', text.note))
+      if (text.note) main.append(el('p', 'card-note', text.note))
       // Commands and diffs stay verbatim; a plan is prose, written in Markdown.
-      root.append(...expandable(text.mono ? el('pre', 'card-body', text.body) : renderMarkdown(text.body, 'card-body md')))
-      if (text.tool) root.append(el('div', 'card-tool', text.tool))
+      main.append(...expandable(text.mono ? el('pre', 'card-body', text.body) : renderMarkdown(text.body, 'card-body md')))
+      if (text.tool) main.append(el('div', 'card-tool', text.tool))
 
       const reason = el('input', 'card-reason')
       reason.placeholder = 'Why not? (optional, Enter to deny)'
@@ -470,7 +607,7 @@ export class InboxPanel {
         button('Answer in terminal', '', () => answer('terminal'), 't'),
         button('Open', '', open, 'o'),
       )
-      root.append(actions, reason)
+      foot.append(actions, reason)
       key = (e) => {
         if (e.target !== root) return false
         if (e.key === 'a') { answer('allow'); return true }
@@ -527,7 +664,7 @@ export class InboxPanel {
           if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); root.focus() }
         })
         block.append(opts, typed)
-        root.append(block)
+        main.append(block)
       }
       refresh()
       actions.append(
@@ -535,7 +672,7 @@ export class InboxPanel {
         button('Answer in terminal', '', () => answer('terminal'), 't'),
         button('Open', '', open, 'o'),
       )
-      root.append(actions)
+      foot.append(actions)
       key = (e) => {
         if (e.target !== root) return false
         const n = Number(e.key)
@@ -549,14 +686,18 @@ export class InboxPanel {
 
     if (item.kind === 'reply') {
       // What the agent said, as it meant it to read: **bold** is bold.
-      root.append(...expandable(renderMarkdown(text.body, 'card-message md')))
+      main.append(...expandable(renderMarkdown(text.body, 'card-message md')))
       const box = el('textarea', 'card-reply')
       box.rows = 2
       box.placeholder = 'Reply… (Enter sends, Shift+Enter for a new line)'
       const send = (): void => {
         const v = box.value.trim()
-        if (v) this.cb.onReply(item.id, v)
+        if (v) this.reply(item.id, v)
       }
+      // A plain-text multiple choice at the end of its turn (the grilling
+      // skill's rounds): one button per option, outside the folded message so
+      // they show whether it is folded or not. See choices.ts.
+      const choiceKeys = this.choiceButtons(item, foot, box)
       box.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); send() }
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); root.focus() }
@@ -566,9 +707,10 @@ export class InboxPanel {
         button('Dismiss', '', () => answer('terminal'), 'x'),
         button('Open', '', open, 'o'),
       )
-      root.append(box, actions)
+      foot.append(box, actions)
       key = (e) => {
         if (e.target !== root) return false
+        if (choiceKeys(e)) return true
         if (e.key === 'Enter' || e.key === 'r') { box.focus(); return true }
         if (e.key === 'x') { answer('terminal'); return true }
         if (e.key === 'o') { open(); return true }
@@ -577,5 +719,81 @@ export class InboxPanel {
     }
 
     return { item, root, paintHeader, key }
+  }
+
+  /**
+   * The option buttons for a finished card whose message ends in a choice,
+   * styled like Claude Code's own questions (AskUserQuestion) above.
+   *
+   * One question: a button sends at once — "(a) <option text>", which the
+   * agent cannot misread even if it scrolled, or "yes" for its recommendation.
+   * Several (a grilling round): sending on the first click would answer only
+   * Q1, so each click fills that question's line in the reply box instead
+   * ("Q1: yes", "Q2: (b) One day") and Send goes once they are done.
+   * "Something else" and "Other" open the reply box rather than sending.
+   *
+   * Returns the card's extra keys: 1–9 for an option and y for yes, when there
+   * is a single question.
+   */
+  private choiceButtons(item: InboxItem, into: HTMLElement, box: HTMLTextAreaElement): (e: KeyboardEvent) => boolean {
+    const questions = parseChoices(item.message ?? '')
+    if (!questions.length) return () => false
+    const single = questions.length === 1
+    const picks = new Map<string, string>()
+    const compose = (): void => {
+      box.value = questions.filter((q) => picks.has(q.id!)).map((q) => `${q.id}: ${picks.get(q.id!)}`).join('\n')
+    }
+    const focusEnd = (): void => {
+      box.focus()
+      box.setSelectionRange(box.value.length, box.value.length)
+    }
+    const numbered: HTMLButtonElement[] = []
+    let yesButton: HTMLButtonElement | null = null
+
+    for (const q of questions) {
+      const block = el('div', 'card-choices')
+      if (!single) block.append(el('p', 'card-choice-q', `${q.id} · ${q.title}`))
+      const opts = el('div', 'card-options')
+      const choose = (b: HTMLButtonElement, answerFor: string): void => {
+        if (single) { this.reply(item.id, answerFor); return }
+        picks.set(q.id!, answerFor)
+        compose()
+        for (const sib of Array.from(opts.querySelectorAll('.option'))) sib.classList.toggle('picked', sib === b)
+      }
+      const rec = q.options.find((o) => o.recommended)
+      if (q.acceptsYes && rec) {
+        const b = el('button', 'option yes')
+        b.type = 'button'
+        b.append(el('b', undefined, 'y'), el('span', undefined, 'Yes'), el('small', undefined, `Go with the recommendation, (${rec.key})`))
+        b.onclick = (e) => { e.stopPropagation(); choose(b, 'yes') }
+        opts.append(b)
+        if (single) yesButton = b
+      }
+      for (const o of q.options) {
+        const b = el('button', `option${o.recommended ? ' recommended' : ''}${o.other ? ' other' : ''}`)
+        b.type = 'button'
+        b.append(el('b', undefined, o.key), el('span', undefined, o.label))
+        if (o.recommended) b.append(el('small', 'option-tag', 'Recommended'))
+        b.onclick = (e) => {
+          e.stopPropagation()
+          if (!o.other) { choose(b, answerText(o)); return }
+          // "Something else": the reply box, ready for it.
+          if (!single) { picks.set(q.id!, ''); compose() }
+          focusEnd()
+        }
+        opts.append(b)
+        if (single) numbered.push(b)
+      }
+      block.append(opts)
+      into.append(block)
+    }
+
+    return (e) => {
+      if (!single) return false
+      const n = Number(e.key)
+      if (n >= 1 && n <= 9 && numbered[n - 1]) { numbered[n - 1]!.click(); return true }
+      if (e.key === 'y' && yesButton) { yesButton.click(); return true }
+      return false
+    }
   }
 }

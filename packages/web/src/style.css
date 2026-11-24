@@ -1221,3 +1221,119 @@ pre.card-body {
 .notify-body .field.toggle.notify-choice { margin: 6px 0; padding: 0; border: none; }
 .notify-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
 .notify-result { color: var(--muted); font-size: 12px; }
+
+/* ---------- choice buttons on finished cards (choices.ts) ---------- */
+
+/* The same option buttons as Claude Code's own questions (.card-options .option
+   above); they wrap like them, on a phone too. */
+.card-choices { margin-top: 10px; }
+.card-choices + .card-choices { margin-top: 12px; }
+.card-choice-q { margin: 0 0 6px; font-weight: 600; }
+.option.recommended { border-color: var(--emerald); }
+.option-tag {
+  justify-self: start;
+  margin-top: 3px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--deep);
+  color: var(--emerald);
+  font: 600 10.5px/1.6 var(--mono);
+}
+.option.yes { border-style: dashed; }
+.option.yes span { font-weight: 600; }
+.option.other span { color: var(--muted); }
+.option span { overflow-wrap: anywhere; }
+
+/* ---------- one card full screen, on a phone (inbox-panel.ts openFull) ---------- */
+
+/* Desktop is unchanged: the expand control is a phone's. */
+.card-expand, .card-close { display: none; }
+@media (max-width: 720px) {
+  .card-expand {
+    display: grid;
+    place-items: center;
+    flex: 0 0 44px;
+    width: 44px;
+    height: 44px;
+    margin: -12px -10px -12px 2px;
+    border: none;
+    border-radius: 8px;
+    background: none;
+    color: var(--muted);
+    font-size: 20px;
+    cursor: pointer;
+  }
+  .card-expand:active { background: var(--panel-2); color: var(--text); }
+  .card-name, .card-heading { cursor: pointer; }
+}
+
+/* The same card element, over everything: header on top, the message
+   scrolling, choices / reply / buttons pinned below. Its height follows the
+   visible viewport (fitFull), so the keyboard never covers the reply box. */
+.card.full {
+  position: fixed;
+  inset: 0 auto auto 0;
+  width: 100vw;
+  height: 100dvh;
+  z-index: 60;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  font-size: 15.5px;
+}
+.card.full:focus, .card.full:focus-within { border: none; background: var(--bg); }
+.card.full .card-head {
+  flex: none;
+  align-items: center;
+  margin: 0;
+  padding: max(8px, env(safe-area-inset-top)) 12px 8px 14px;
+  border-bottom: 1px solid var(--line);
+  border-left: 3px solid var(--tint, var(--emerald));
+}
+.card.full .card-expand { display: none; }
+.card.full .card-close {
+  display: block;
+  flex: none;
+  min-height: 44px;
+  margin-left: 6px;
+  padding: 0 16px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font: 600 14px var(--sans);
+  cursor: pointer;
+}
+.card.full .card-main {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px 14px;
+}
+.card.full .card-body, .card.full .card-message { max-height: none; font-size: 15.5px; line-height: 1.55; }
+.card.full pre.card-body { font-size: 13.5px; }
+.card.full .card-more { display: none; }
+/* Only the choices scroll: the reply box and the buttons below them always
+   show, even with the keyboard up and five options above them. */
+.card.full .card-foot {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  max-height: 62%;
+  overflow: hidden;
+  padding: 10px 14px max(10px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--line);
+  background: var(--panel);
+}
+.card.full .card-foot .card-choices:first-child { margin-top: 0; }
+.card.full .card-foot > .card-choices { flex: 0 1 auto; min-height: 48px; overflow-y: auto; overscroll-behavior: contain; }
+.card.full .card-foot > .card-reply, .card.full .card-foot > .card-actions, .card.full .card-foot > .card-reason { flex: none; }
+.card.full .option { padding: 10px 12px; font-size: 15px; }
+/* iOS zooms the page into an input under 16px. */
+.card.full .card-reply, .card.full .card-reason, .card.full .card-other { font-size: 16px; }
+.card.full .card-actions .btn { flex: 1 1 auto; min-height: 44px; }

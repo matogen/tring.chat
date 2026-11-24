@@ -1,5 +1,5 @@
 import type { InboxItem } from '@tring/shared/protocol'
-import type { Device } from './push-store.ts'
+import { legacyDesktop, type Device } from './push-store.ts'
 import type { PushOptions } from './web-push.ts'
 
 /**
@@ -107,6 +107,8 @@ export class Notifier {
     if (!msg) return
     const away = !this.o.anyoneActive()
     for (const d of this.o.devices()) {
+      // Never a desktop: notifications are a phone's (see push-store.ts).
+      if (d.phone === false || legacyDesktop(d)) continue
       if (!d.prefs[item.kind]) continue
       if (d.prefs.onlyWhenAway && !away) continue
       const key = `${d.sub.endpoint}|${item.sessionId}`

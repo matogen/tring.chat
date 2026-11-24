@@ -38,7 +38,18 @@ export interface Device {
   /** What the browser said it is, for the device list: "iPhone · Safari". */
   label: string
   createdAt: number
+  /**
+   * Notifications are a phone's. Set by the browser when it subscribes; absent
+   * on devices from 0.1.24, which offered them on the desktop too.
+   */
+  phone?: boolean
 }
+
+/**
+ * A 0.1.24 device that is surely a desktop, by its label. Not "Mac": iPadOS
+ * labels itself one. A Mac desktop lets go from its own browser instead.
+ */
+export const legacyDesktop = (d: Device): boolean => d.phone === undefined && /^(Windows|Linux) · /.test(d.label)
 
 interface Saved {
   vapid?: Vapid
@@ -67,12 +78,17 @@ export class PushStore {
     const v = saved.vapid
     const ok = v && typeof v.publicKey === 'string' && typeof v.privateKey === 'string'
     this.keys = ok ? v : generateVapid()
-    this.list = (Array.isArray(saved.devices) ? saved.devices : []).flatMap((d) => {
+    const loaded: Device[] = (Array.isArray(saved.devices) ? saved.devices : []).flatMap((d) => {
       const sub = validSubscription(d?.sub)
-      return sub ? [{ sub, prefs: cleanPrefs(d.prefs), label: String(d.label ?? '').slice(0, 80), createdAt: Number(d.createdAt) || 0 }] : []
+      if (!sub) return []
+      const device: Device = { sub, prefs: cleanPrefs(d.prefs), label: String(d.label ?? '').slice(0, 80), createdAt: Number(d.createdAt) || 0 }
+      if (typeof d.phone === 'boolean') device.phone = d.phone
+      return [device]
     })
+    // Desktops that subscribed while 0.1.24 offered it there are let go.
+    this.list = loaded.filter((d) => !legacyDesktop(d))
     // A new key must be kept: subscriptions are made against it.
-    if (!ok) await this.save()
+    if (!ok || this.list.length !== loaded.length) await this.save()
   }
 
   devices(): Device[] {
@@ -84,10 +100,10 @@ export class PushStore {
   }
 
   /** Adds the device, or updates it when the same browser subscribes again. */
-  async upsert(sub: Subscription, prefs: NotifyPrefs, label: string, now = Date.now()): Promise<void> {
+  async upsert(sub: Subscription, prefs: NotifyPrefs, label: string, now = Date.now(), phone = true): Promise<void> {
     const kept = this.get(sub.endpoint)
     this.list = this.list.filter((d) => d.sub.endpoint !== sub.endpoint)
-    this.list.push({ sub, prefs, label: label.slice(0, 80), createdAt: kept?.createdAt ?? now })
+    this.list.push({ sub, prefs, label: label.slice(0, 80), createdAt: kept?.createdAt ?? now, phone })
     await this.save()
   }
 

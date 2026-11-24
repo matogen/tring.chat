@@ -1,5 +1,7 @@
 import { api, apiPost } from './ws-client.ts'
-import { DEFAULT_PREFS, detectEnv, deviceLabel, support, type Prefs } from './notify-env.ts'
+import { DEFAULT_PREFS, detectEnv, detectPhone, deviceLabel, support, type Prefs } from './notify-env.ts'
+
+export { detectPhone }
 
 /**
  * "Notifications on this device", in tring's settings: phone notifications
@@ -54,7 +56,7 @@ async function enable(prefs: Prefs): Promise<'on' | 'blocked' | 'off'> {
     sub = null
   }
   sub ??= await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(publicKey) })
-  await apiPost('/api/push/subscribe', { subscription: sub.toJSON(), prefs, label: deviceLabel(navigator.userAgent) })
+  await apiPost('/api/push/subscribe', { subscription: sub.toJSON(), prefs, label: deviceLabel(navigator.userAgent), phone: true })
   return 'on'
 }
 
@@ -64,6 +66,20 @@ async function disable(): Promise<void> {
   if (!sub) return
   await apiPost('/api/push/unsubscribe', { endpoint: sub.endpoint }).catch(() => { /* forgotten on its next failure */ })
   await sub.unsubscribe()
+}
+
+/**
+ * Notifications are a phone's. A desktop browser that subscribed while 0.1.24
+ * offered it there is unsubscribed when it next opens tring — in the browser
+ * and on the daemon — quietly, and without ever asking for permission.
+ */
+export async function dropDesktopSubscription(): Promise<void> {
+  if (detectPhone() || !('serviceWorker' in navigator) || !('PushManager' in window)) return
+  try {
+    await disable()
+  } catch {
+    // The daemon never sends to it anyway (see the daemon's notifier.ts).
+  }
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {

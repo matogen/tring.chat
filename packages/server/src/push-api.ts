@@ -10,7 +10,8 @@ import { validSubscription } from './web-push.ts'
 export interface PushApi {
   publicKey(): string
   status(endpoint: string): { subscribed: boolean; prefs?: NotifyPrefs }
-  subscribe(subscription: unknown, prefs: unknown, label: unknown): Promise<boolean>
+  /** False for a bad subscription, or a browser that says it is not a phone. */
+  subscribe(subscription: unknown, prefs: unknown, label: unknown, phone: unknown): Promise<boolean>
   setPrefs(endpoint: string, prefs: unknown): Promise<boolean>
   unsubscribe(endpoint: string): Promise<boolean>
   /** The push service's status, or null for a device this daemon does not know. */
@@ -24,10 +25,11 @@ export function pushApi(store: PushStore, notifier: Notifier): PushApi {
       const d = store.get(endpoint)
       return d ? { subscribed: true, prefs: d.prefs } : { subscribed: false }
     },
-    subscribe: async (subscription, prefs, label) => {
+    subscribe: async (subscription, prefs, label, phone) => {
       const sub = validSubscription(subscription)
-      if (!sub) return false
-      await store.upsert(sub, cleanPrefs(prefs), typeof label === 'string' ? label : '')
+      // Notifications are a phone's; a desktop is not offered them, and is refused if it asks.
+      if (!sub || phone === false) return false
+      await store.upsert(sub, cleanPrefs(prefs), typeof label === 'string' ? label : '', Date.now(), true)
       return true
     },
     setPrefs: (endpoint, prefs) => store.setPrefs(endpoint, cleanPrefs(prefs)),
