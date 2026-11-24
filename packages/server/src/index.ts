@@ -28,6 +28,8 @@ import { PushStore } from './push-store.ts'
 import { Notifier } from './notifier.ts'
 import { pushApi } from './push-api.ts'
 import { sendPush } from './web-push.ts'
+import { vocabulary, Whisper } from './whisper.ts'
+import { realGit } from './git-worktrees.ts'
 
 interface Auth {
   token: string | null
@@ -252,12 +254,39 @@ async function main(): Promise<void> {
     send: (device, payload, opts) => sendPush(device.sub, payload, pushStore.vapid, 'https://tring.chat', opts),
   })
   inbox.onAdded = (item) => notifier.onCard(item)
+  // The desktop microphone's optional local Whisper (off until installed from
+  // Settings). Its vocabulary hint is what tring knows: projects, tile names,
+  // and the branches they are on, with the ticket numbers in them.
+  const whisper = new Whisper(path.join(configDir, 'whisper'), path.join(configDir, 'whisper.json'))
+  await whisper.load()
+  let vocab = { at: 0, text: '' }
+  const voiceVocabulary = async (): Promise<string> => {
+    if (Date.now() - vocab.at < 60_000) return vocab.text
+    const names: string[] = []
+    for (const p of pm.list()) {
+      names.push(p.name)
+      for (const s of p.sessions) {
+        if (s.name) names.push(s.name)
+        if (s.title) names.push(s.title)
+        const place = await realGit.place(pm.findSession(s.id)?.agentCwd ?? s.cwd).catch(() => null)
+        if (place?.branch) names.push(place.branch)
+      }
+    }
+    vocab = { at: Date.now(), text: vocabulary(names) }
+    return vocab.text
+  }
   const handle = createHandler({
     pm, webRoot, token, sameOrigin, fsRoots: args.fsRoot, uploads, inbox,
     onPermission: (item) => { void auto.offer(item) },
     tools,
     agentSession: (id) => agent.find(id),
     push: pushApi(pushStore, notifier),
+    voice: {
+      status: () => whisper.status(),
+      install: (model) => whisper.install(model),
+      setEnabled: (on) => whisper.setEnabled(on),
+      transcribe: async (wav) => whisper.transcribe(wav, await voiceVocabulary()),
+    },
   })
   const listener: RequestListener = (req, res) => {
     void handle(req, res).catch(() => {
@@ -318,6 +347,7 @@ async function main(): Promise<void> {
   const shutdown = async (): Promise<void> => {
     hub.dispose()
     agent.dispose()
+    whisper.stopServer()
     await uploads.dispose()
     await pm.dispose()
     server.close(() => process.exit(0))

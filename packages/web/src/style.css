@@ -129,7 +129,7 @@ body {
 
 /* The diff panel shares the focus cell with the terminal (diff-panel.ts). */
 .focus-cell { display: flex; }
-.term-host { flex: 1 1 auto; min-width: 0; height: 100%; }
+.term-host { flex: 1 1 auto; min-width: 0; height: 100%; position: relative; }
 
 .diff-handle {
   flex: 0 0 5px;
@@ -1337,3 +1337,42 @@ pre.card-body {
 /* iOS zooms the page into an input under 16px. */
 .card.full .card-reply, .card.full .card-reason, .card.full .card-other { font-size: 16px; }
 .card.full .card-actions .btn { flex: 1 1 auto; min-height: 44px; }
+
+/* ---------- the desktop microphone (voice.ts) ---------- */
+
+/* The same mic as the phone's bar: round on the terminal, a small button on a
+   card's reply row; red and pulsing while it records, as there. */
+.voice-btn { display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.term-voice {
+  position: absolute;
+  right: 22px;
+  bottom: 12px;
+  z-index: 4;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line-2);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--muted);
+  opacity: .75;
+}
+.term-voice:hover { opacity: 1; color: var(--text); border-color: var(--emerald); }
+.card-voice { padding: 0 10px; color: var(--muted); }
+.voice-btn.listening {
+  opacity: 1;
+  border-color: var(--red);
+  color: var(--red);
+  animation: listening 1.2s ease-in-out infinite;
+}
+.voice-btn.transcribing { opacity: 1; border-color: var(--amber); color: var(--amber); cursor: progress; }
+/* The phone has its own: the bar's mic, and the keyboard's dictation in boxes. */
+@media (max-width: 720px) { .term-voice, .card-voice { display: none !important; } }
+/* No engine (Firefox, without local Whisper): no button promising one. */
+body.no-voice .voice-btn { display: none !important; }
+/* The full-screen card hides the terminal's mic under it. */
+body.card-full-open .term-voice { display: none; }
+
+.voice-rec { display: grid; gap: 6px; margin-top: 4px; }
+.voice-rec .btn { justify-self: start; }
+.voice-pick { margin: 0; color: var(--text); font-weight: 600; }
+.voice-error { color: var(--amber); }

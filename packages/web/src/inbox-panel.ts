@@ -13,6 +13,8 @@ const HEIGHT_KEY = 'tring.inboxHeight'
 const DEFAULT_WIDTH = 420
 
 const STORAGE_KEY = 'tring.orchestrator'
+/** The same microphone as the phone's bar (switcher.ts). */
+const MIC_ICON = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5"/><path d="M3 7.5a5 5 0 0 0 10 0M8 12.5V15"/></svg>'
 /**
  * A card that moves under the keyboard on its own — the one you were on was
  * answered elsewhere, or a new one arrived first in line — ignores keys for
@@ -42,6 +44,8 @@ export interface InboxCallbacks {
   onAgent: (change: { enabled: boolean } | { restart: 'resume' | 'fresh' }) => void
   /** The column beside the agent was resized: the terminal must refit. */
   onLayout?: () => void
+  /** The reply box's microphone (voice.ts): start or stop talking into `box`. */
+  onVoice?: (box: HTMLTextAreaElement, button: HTMLButtonElement) => void
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -707,6 +711,17 @@ export class InboxPanel {
         button('Dismiss', '', () => answer('terminal'), 'x'),
         button('Open', '', open, 'o'),
       )
+      // Talk instead of typing (desktop; a phone has its keyboard's dictation).
+      if (this.cb.onVoice) {
+        const onVoice = this.cb.onVoice
+        const mic = el('button', 'btn voice-btn card-voice')
+        mic.type = 'button'
+        mic.title = 'Talk: the words go into the reply box, to edit before sending'
+        mic.setAttribute('aria-label', 'Voice input')
+        mic.innerHTML = MIC_ICON
+        mic.onclick = (e) => { e.stopPropagation(); onVoice(box, mic) }
+        actions.append(mic)
+      }
       foot.append(box, actions)
       key = (e) => {
         if (e.target !== root) return false
