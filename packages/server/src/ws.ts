@@ -65,8 +65,9 @@ export class Hub {
       // it is working again that is over. Typing a prompt into its terminal
       // ends it too, through the UserPromptSubmit hook; idle is not enough on
       // its own, since a reply short enough never to have looked busy leaves
-      // the session idle from start to finish.
-      if (s.tracker.status === 'busy') opts.inbox?.dropSession(s.id, 'reply')
+      // the session idle from start to finish. (Not a card restored after a
+      // restart: see Inbox.working.)
+      if (s.tracker.status === 'busy') opts.inbox?.working(s.id)
       this.broadcastStatus(s)
     }
     pm.onSessionExit = (s, code) => {

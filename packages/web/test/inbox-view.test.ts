@@ -51,3 +51,15 @@ group('age', () => {
     expect([age(4000), age(125_000), age(7_300_000)]).toEqual(['4s', '2m', '2h'])
   })
 })
+
+group('a card cut off by a restart', () => {
+  const card = (interrupted?: InboxItem['interrupted']): InboxItem =>
+    ({ id: 'i', sessionId: 's', kind: 'reply', createdAt: 0, message: 'It was asking…', ...(interrupted ? { interrupted } : {}) })
+
+  it('says what was cut off rather than that the agent finished', () => {
+    expect(describe(card('question')).heading).toBe('Question cut off by a restart')
+    expect(describe(card('permission')).heading).toBe('Permission cut off by a restart')
+    expect(describe(card()).heading).toBe('Finished — waiting for you')
+    expect(describe(card('question')).body).toBe('It was asking…')
+  })
+})

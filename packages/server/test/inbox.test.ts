@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { hookOutput, Inbox, questionsOf, sameInput, type Settlement } from '../src/inbox.ts'
 import { routeHook, type HookSession } from '../src/hook-route.ts'
+import type { InboxItem } from '@tring/shared/protocol'
 
 const mkInbox = () => {
   let n = 0
@@ -59,6 +60,42 @@ describe('Inbox', () => {
     inbox.answer(a.id, { decision: 'allow' })
     inbox.dropSession('nobody')
     expect(changes).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('Inbox after a restart', () => {
+  const saved = (id: string, sessionId: string): InboxItem =>
+    ({ id, sessionId, kind: 'reply', createdAt: 10, message: 'Done.' })
+
+  it('restores cards under their old ids, once, without announcing them as new', () => {
+    const inbox = mkInbox()
+    const changes = vi.fn()
+    const added = vi.fn()
+    inbox.onChange = changes
+    inbox.onAdded = added
+    inbox.restore([saved('c1', 's1'), saved('c2', 's2')])
+    inbox.restore([saved('c1', 's1')])
+    expect(inbox.list().map((i) => i.id)).toEqual(['c1', 'c2'])
+    expect(changes).toHaveBeenCalledTimes(1)
+    expect(added).not.toHaveBeenCalled()
+  })
+
+  it('keeps a restored card while its tile repaints the reopened conversation', () => {
+    const inbox = mkInbox()
+    inbox.restore([saved('c1', 's1')])
+    inbox.reply('s2', 'live one')
+    expect(inbox.working('s1')).toBe(0)
+    expect(inbox.working('s2')).toBe(1)
+    expect(inbox.list().map((i) => i.id)).toEqual(['c1'])
+  })
+
+  it('ends a restored card the ways every card ends: a prompt, a newer reply, a dismissal', async () => {
+    const inbox = mkInbox()
+    inbox.restore([saved('c1', 's1'), saved('c2', 's2'), saved('c3', 's3')])
+    await routeHook({ inbox, session: session('s1'), event: 'UserPromptSubmit', payload: {}, signal: new AbortController().signal })
+    await routeHook({ inbox, session: session('s2'), event: 'Stop', payload: { last_assistant_message: 'newer' }, signal: new AbortController().signal })
+    expect(inbox.answer('c3', { decision: 'terminal' })).toBe(true)
+    expect(inbox.list().map((i) => [i.sessionId, i.message])).toEqual([['s2', 'newer']])
   })
 })
 

@@ -165,3 +165,29 @@ describe('PushStore', () => {
     expect(cleanPrefs(null)).toEqual(DEFAULT_PREFS)
   })
 })
+
+describe('notifications across a restart', () => {
+  it('tags by tile, so a card after a restart replaces the notification from before it', async () => {
+    const sent: Payload[] = []
+    const n = new Notifier({
+      devices: () => [dev('phone')],
+      forget: () => {},
+      stillOpen: () => true,
+      anyoneActive: () => false,
+      label: () => 'tring.chat/3 api',
+      // The same tile before and after: its session id changed, its place did not.
+      tile: (id) => (id === 'old' || id === 'new' ? 'project-1/3' : null),
+      send: async (_d, payload) => { sent.push(payload); return 201 },
+      now: () => 0,
+    })
+    await n.fire({ ...card('reply'), sessionId: 'old' })
+    expect(sent.map((p) => p.tag)).toEqual(['project-1/3'])
+    // And one per tile per minute still holds across the new id.
+    await n.fire({ ...card('permission'), sessionId: 'new' })
+    expect(sent).toHaveLength(1)
+  })
+
+  it('falls back to the session id without a tile', () => {
+    expect(message(card('reply'), 'x')!.payload.tag).toBe('s-1')
+  })
+})

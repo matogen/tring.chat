@@ -18,6 +18,7 @@ import { fixSpawnHelper } from './spawn-helper.ts'
 import { UploadStore } from './uploads.ts'
 import { checkForUpdate, currentVersion } from './update-check.ts'
 import { Inbox } from './inbox.ts'
+import { CardStore, restoreCards } from './card-store.ts'
 import { AutoAnswerer } from './auto-answer.ts'
 import { hooksStatus, installHooks, uninstallHooks } from './hooks-install.ts'
 import { prependPath, writeHookShim } from './hook-shim.ts'
@@ -235,6 +236,14 @@ async function main(): Promise<void> {
     node: process.execPath,
   })
   const tools = new OrchestratorTools({ pm, inbox })
+  // The cards survive a restart (card-store.ts). Brought back before the hub
+  // exists, so the first inbox any screen sees already has them, and before
+  // anything is listening for new cards, so none of them buzzes a phone twice.
+  const cards = new CardStore(path.join(configDir, 'inbox.json'), (id) => {
+    const s = pm.findSession(id)
+    return s?.claude ? { projectId: s.projectId, slot: s.slot, claudeId: s.claude.id } : null
+  })
+  inbox.restore(restoreCards(await cards.load(), (projectId, claudeId) => pm.tilesWith(projectId, claudeId)))
   // Phone notifications for orchestrator cards: off until a device turns
   // them on in settings. The VAPID key is made on first run and kept.
   const pushStore = new PushStore(path.join(configDir, 'push.json'))
@@ -250,6 +259,10 @@ async function main(): Promise<void> {
       if (!s) return null
       const project = pm.list().find((p) => p.id === s.projectId)
       return `${project?.name ?? 'tring'}/${s.slot}${s.name ? ` ${s.name}` : ''}`
+    },
+    tile: (sessionId) => {
+      const s = pm.findSession(sessionId)
+      return s ? `${s.projectId}/${s.slot}` : null
     },
     send: (device, payload, opts) => sendPush(device.sub, payload, pushStore.vapid, 'https://tring.chat', opts),
   })
@@ -301,6 +314,15 @@ async function main(): Promise<void> {
   const hub = new Hub({ pm, token, inbox, auto, agent })
   hubRef = hub
   hub.attach(wss)
+  // The hub owns both change callbacks; saving the cards rides along. Tiles
+  // count too: a moved tile or a new conversation changes where a card goes.
+  // Once now as well, which drops the cards that found no tile to come back to.
+  const saveCards = (): void => { void cards.save(inbox.list()) }
+  const onInbox = inbox.onChange
+  inbox.onChange = () => { onInbox?.(); saveCards() }
+  const onProjects = pm.onChange
+  pm.onChange = () => { onProjects?.(); saveCards() }
+  saveCards()
   // After the hub, so its first state change reaches the sockets.
   await agent.load()
 
@@ -345,6 +367,8 @@ async function main(): Promise<void> {
   })
 
   const shutdown = async (): Promise<void> => {
+    // First: ending the tiles below drops their cards, which must not be saved.
+    await cards.close()
     hub.dispose()
     agent.dispose()
     whisper.stopServer()
