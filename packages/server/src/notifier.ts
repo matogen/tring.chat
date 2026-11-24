@@ -44,6 +44,12 @@ export interface NotifierOptions {
   anyoneActive: () => boolean
   /** "tring.chat/3 api", or null for a session that is gone. */
   label: (sessionId: string) => string | null
+  /**
+   * The tile, in a form that outlives its session id: a restart gives every
+   * tile a new one, and a card after it should still replace the notification
+   * from before. The session id when not given.
+   */
+  tile?: (sessionId: string) => string | null
   send: (device: Device, payload: Payload, opts: PushOptions) => Promise<number>
   delayMs?: number
   now?: () => number
@@ -51,7 +57,7 @@ export interface NotifierOptions {
 }
 
 /** The tool as a short phrase, with nothing from its input. */
-function toolPhrase(tool: string | undefined): string {
+export function toolPhrase(tool: string | undefined): string {
   switch (tool) {
     case 'Bash': case 'PowerShell': return 'run a command'
     case 'Edit': case 'MultiEdit': return 'edit a file'
@@ -66,8 +72,8 @@ function toolPhrase(tool: string | undefined): string {
 }
 
 /** What the notification says. Null for a card kind that never notifies. */
-export function message(item: InboxItem, label: string): { payload: Payload; urgency: PushOptions['urgency'] } | null {
-  const base = { tag: item.sessionId, url: '/?inbox=1' }
+export function message(item: InboxItem, label: string, tag = item.sessionId): { payload: Payload; urgency: PushOptions['urgency'] } | null {
+  const base = { tag, url: '/?inbox=1' }
   if (item.kind === 'permission') {
     return { payload: { ...base, title: `${label} needs permission`, body: `It wants to ${toolPhrase(item.tool)}.` }, urgency: 'high' }
   }
@@ -103,7 +109,8 @@ export class Notifier {
     if (!this.o.stillOpen(item.id)) return
     const label = this.o.label(item.sessionId)
     if (!label) return
-    const msg = message(item, label)
+    const tile = this.o.tile?.(item.sessionId) ?? item.sessionId
+    const msg = message(item, label, tile)
     if (!msg) return
     const away = !this.o.anyoneActive()
     for (const d of this.o.devices()) {
@@ -111,7 +118,7 @@ export class Notifier {
       if (d.phone === false || legacyDesktop(d)) continue
       if (!d.prefs[item.kind]) continue
       if (d.prefs.onlyWhenAway && !away) continue
-      const key = `${d.sub.endpoint}|${item.sessionId}`
+      const key = `${d.sub.endpoint}|${tile}`
       if (this.now - (this.last.get(key) ?? -Infinity) < PER_TILE_MS) continue
       this.last.set(key, this.now)
       await this.deliver(d, msg.payload, msg.urgency, item.sessionId)

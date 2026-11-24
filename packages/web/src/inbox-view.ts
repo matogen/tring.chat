@@ -35,7 +35,12 @@ export function clip(text: string, max = MAX_BODY): string {
 
 export function describe(item: InboxItem): CardText {
   if (item.kind === 'reply') {
-    return { heading: 'Finished — waiting for you', body: clip(item.message ?? ''), mono: false }
+    // A prompt that a restart cut off (see card-store.ts on the server): the
+    // agent did not finish, it stopped where it was asking.
+    const heading = item.interrupted === 'question' ? 'Question cut off by a restart'
+      : item.interrupted === 'permission' ? 'Permission cut off by a restart'
+      : 'Finished — waiting for you'
+    return { heading, body: clip(item.message ?? ''), mono: false }
   }
   if (item.kind === 'question') {
     return { heading: 'Question', body: '', mono: false }
