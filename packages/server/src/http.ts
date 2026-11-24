@@ -326,7 +326,7 @@ export function createHandler(opts: HttpOptions) {
       if (!push) return json(res, 503, { error: 'notifications are not available' })
       const raw = await readBody(req)
       if (raw === null) return tooLarge(req, res, 'body too large')
-      let body: { endpoint?: unknown; subscription?: unknown; prefs?: unknown; label?: unknown }
+      let body: { endpoint?: unknown; subscription?: unknown; prefs?: unknown; label?: unknown; phone?: unknown }
       try {
         body = JSON.parse(raw || '{}') as typeof body
       } catch {
@@ -336,7 +336,7 @@ export function createHandler(opts: HttpOptions) {
       switch (pushRoute[1]) {
         case 'status': return json(res, 200, push.status(endpoint))
         case 'subscribe':
-          return await push.subscribe(body.subscription, body.prefs, body.label)
+          return await push.subscribe(body.subscription, body.prefs, body.label, body.phone)
             ? json(res, 200, { ok: true })
             : json(res, 400, { error: 'not a push subscription' })
         case 'prefs':

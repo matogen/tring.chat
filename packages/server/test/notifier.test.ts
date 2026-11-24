@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -105,6 +105,12 @@ describe('Notifier', () => {
     expect(devices).toEqual([])
   })
 
+  it('never sends to a desktop, marked as one or a 0.1.24 Windows or Linux device', async () => {
+    devices = [{ ...dev('pc'), phone: false }, { ...dev('old pc'), label: 'Windows · Chrome' }, { ...dev('old ipad'), label: 'Mac · Safari' }, dev('phone')]
+    await n.fire(card('permission'))
+    expect(sent.map((s) => s.to)).toEqual(['Mac · Safari', 'phone'])
+  })
+
   it('never sends for a tile that has gone', async () => {
     await n.fire({ ...card('permission'), sessionId: 's-gone' })
     expect(sent).toEqual([])
@@ -129,10 +135,29 @@ describe('PushStore', () => {
     const b = new PushStore(file)
     await b.load()
     expect(b.vapid.publicKey).toBe(key)
-    expect(b.devices()).toEqual([{ sub, prefs: { ...DEFAULT_PREFS, question: false }, label: 'iPhone · Safari', createdAt: 5 }])
+    expect(b.devices()).toEqual([{ sub, prefs: { ...DEFAULT_PREFS, question: false }, label: 'iPhone · Safari', createdAt: 5, phone: true }])
     expect(await b.remove(sub.endpoint)).toBe(true)
     expect(await b.remove(sub.endpoint)).toBe(false)
     expect(JSON.parse(readFileSync(file, 'utf8')).devices).toEqual([])
+  })
+
+  it('lets go of 0.1.24 desktop devices when it loads, and keeps phones and Macs (an iPad says Mac)', async () => {
+    dir = mkdtempSync(path.join(os.tmpdir(), 'tring-push-'))
+    const file = path.join(dir, 'push.json')
+    const sub = (n: string) => ({ endpoint: `https://push.example/${n}`, keys: { p256dh: Buffer.concat([Buffer.from([4]), Buffer.alloc(64, 1)]).toString('base64url'), auth: Buffer.alloc(16, 2).toString('base64url') } })
+    const a = new PushStore(file)
+    await a.load()
+    const vapid = a.vapid
+    writeFileSync(file, JSON.stringify({ vapid, devices: [
+      { sub: sub('w'), prefs: DEFAULT_PREFS, label: 'Windows · Chrome', createdAt: 1 },
+      { sub: sub('l'), prefs: DEFAULT_PREFS, label: 'Linux · Firefox', createdAt: 1 },
+      { sub: sub('i'), prefs: DEFAULT_PREFS, label: 'iPhone · Safari', createdAt: 1 },
+      { sub: sub('m'), prefs: DEFAULT_PREFS, label: 'Mac · Safari', createdAt: 1 },
+    ] }))
+    const b = new PushStore(file)
+    await b.load()
+    expect(b.devices().map((d) => d.label)).toEqual(['iPhone · Safari', 'Mac · Safari'])
+    expect(JSON.parse(readFileSync(file, 'utf8')).devices).toHaveLength(2)
   })
 
   it('reads anything odd in a stored choice as the default', () => {

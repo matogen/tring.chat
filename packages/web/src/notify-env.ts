@@ -35,6 +35,29 @@ export function support(e: Env): Support {
   return 'ok'
 }
 
+/**
+ * Whether this is a phone or tablet: notifications are offered only there.
+ *
+ * A phone or tablet's user agent, or iPadOS (which says Macintosh but has a
+ * touch screen), or else a primary input that is touch with no hover. Not the
+ * screen's width (a narrow desktop window is not a phone) and not "installed
+ * as an app" (a desktop install is one too). A touch-screen laptop's primary
+ * pointer is its trackpad, so it counts as a desktop.
+ */
+export function isPhone(e: { ua: string; maxTouchPoints: number; touchOnly: boolean }): boolean {
+  if (/Android|iPhone|iPad|iPod/.test(e.ua)) return true
+  if (/Macintosh/.test(e.ua) && e.maxTouchPoints > 1) return true
+  return e.touchOnly
+}
+
+export function detectPhone(): boolean {
+  return isPhone({
+    ua: navigator.userAgent,
+    maxTouchPoints: navigator.maxTouchPoints ?? 0,
+    touchOnly: window.matchMedia('(hover: none) and (pointer: coarse)').matches,
+  })
+}
+
 export function detectEnv(): Env {
   const ua = navigator.userAgent
   // iPadOS reports itself as a Mac; a Mac has no touch screen.
