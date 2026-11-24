@@ -39,6 +39,8 @@ export interface HookPayload {
   notification_type?: string
   message?: string
   session_id?: string
+  /** Where Claude Code records the conversation; sent with every event. */
+  transcript_path?: string
   cwd?: string
   /** SessionStart: startup | resume | clear | compact. */
   source?: string

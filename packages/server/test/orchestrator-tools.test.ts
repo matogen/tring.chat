@@ -2,14 +2,48 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import type { InboxItem, ProjectInfo, SessionStatus } from '@tring/shared/protocol'
 import { OrchestratorTools, ToolError, TOOLS, type ToolDeps, type ToolSession } from '../src/orchestrator-tools.ts'
 import { cleanPrompt } from '../src/type-prompt.ts'
+import type { GitOps, GitPlace, Worktree } from '../src/git-worktrees.ts'
+import type { Transcript } from '../src/transcript.ts'
+
+/** Conversations by transcript file; a tile points at one through `transcript`. */
+let talks: Record<string, Transcript>
 
 interface Stub extends ToolSession {
   typed: string[]
 }
 
+/**
+ * One repository at /repo (main worktree on `main`) with a linked worktree at
+ * /wt/feat-a on `feat/a`; /other is not a repository. Paths are compared
+ * without a drive letter so the same test reads the same on Windows.
+ */
+const bare = (p: string): string => p.replace(/\\/g, '/').replace(/^[A-Z]:/i, '')
+let trees: Worktree[]
+let branches: Set<string>
+let added: Array<{ path: string; branch: string; create: boolean; base?: string }>
+const wt = (path: string, branch: string): Worktree =>
+  ({ path, branch, head: 'abc', bare: false, detached: false, locked: false, prunable: false })
+const fakeGit: GitOps = {
+  async place(dir) {
+    const d = bare(dir)
+    const tree = [...trees].reverse().find((w) => d === bare(w.path) || d.startsWith(`${bare(w.path)}/`))
+    if (!tree) return null
+    return { root: tree.path, commonDir: '/repo/.git', linked: bare(tree.path) !== '/repo', branch: tree.branch, detached: false } satisfies GitPlace
+  },
+  async worktrees() { return trees },
+  async branchExists(_dir, b) { return branches.has(b) },
+  async checkBranch(_dir, b) { return /\s|^-/.test(b) ? `"${b}" is not a valid branch name` : null },
+  async addWorktree(_dir, spec) {
+    added.push(spec)
+    trees.push(wt(spec.path, spec.branch))
+    branches.add(spec.branch)
+    return null
+  },
+}
+
 function stub(over: Partial<ToolSession> & { id: string; slot: number; projectId: string }): Stub {
   const s: Stub = {
-    name: null, title: null, cwd: '/repo', command: null, claude: null,
+    name: null, title: null, cwd: '/repo', agentCwd: null, transcript: null, command: null, claude: null,
     lastMessage: null, stoppedAt: 0, promptedAt: 0,
     tracker: { status: 'idle' as SessionStatus },
     recentText: (n: number) => `line count ${n}`,
@@ -51,10 +85,15 @@ function deps(over: Partial<ToolDeps> = {}): ToolDeps {
       },
     },
     inbox: { list: () => inbox },
-    branch: async (cwd) => (cwd === '/repo' ? 'main' : null),
+    git: fakeGit,
+    transcripts: {
+      read: async (f) => talks[f] ?? null,
+      find: async (id) => (talks[`/t/${id}.jsonl`] ? `/t/${id}.jsonl` : null),
+    },
     diff: async (cwd) => ({ cwd, files: [{ path: 'a.ts', added: 2, removed: 1, patch: '@@ -1 +1 @@\n-x\n+y' }], truncated: false }),
-    // path.resolve gives C:\repo\... on Windows and /repo/... elsewhere.
-    isDir: async (p) => /^([A-Z]:)?[\\/]repo([\\/]|$)/i.test(p),
+    // Existing directories: the repo and its worktrees. path.resolve gives
+    // C:\repo\... on Windows and /repo/... elsewhere, hence `bare`.
+    isDir: async (p) => /^\/(repo|other|wt\/feat-a)(\/|$)/.test(bare(p)),
     sleep: async (ms) => { clock.t += ms },
     now: () => clock.t,
     type: (s, text) => { (s as Stub).typed.push(text) },
@@ -66,6 +105,10 @@ beforeEach(() => {
   clock.t = 1000
   inbox = []
   created = []
+  trees = [wt('/repo', 'main'), wt('/wt/feat-a', 'feat/a')]
+  branches = new Set(['main', 'feat/a', 'feat/old'])
+  added = []
+  talks = {}
   sessions = [
     stub({ id: 'a', slot: 1, projectId: 'p1', name: 'api', claude: { id: 'c1', cwd: '/repo' }, lastMessage: 'Tests pass.' }),
     stub({ id: 'b', slot: 2, projectId: 'p1' }),
@@ -106,7 +149,10 @@ describe('list_sessions', () => {
     const out = JSON.parse(await tools.call('list_sessions', {})) as { projects: Array<{ project: string; viewing: boolean; sessions: Array<Record<string, unknown>> }> }
     expect(out.projects.map((p) => [p.project, p.viewing])).toEqual([['tring.chat', true], ['Other', false]])
     const a = out.projects[0]!.sessions[0]!
-    expect(a).toMatchObject({ ref: 'tring.chat/1', branch: 'main', agent: 'claude', lastMessage: 'Tests pass.' })
+    expect(a).toMatchObject({
+      ref: 'tring.chat/1', agent: 'claude', lastMessage: 'Tests pass.',
+      git: { repo: 'repo', branch: 'main', worktree: '/repo', linkedWorktree: false },
+    })
     expect(a['waitingOnUser']).toEqual(['permission for Bash: npm test'])
     expect(out.projects[0]!.sessions[1]).toMatchObject({ agent: null })
   })
@@ -215,6 +261,179 @@ describe('session_changes and read_session', () => {
   })
   it('caps the lines read', async () => {
     expect(await tools.call('read_session', { session: 'a', lines: 10_000 })).toMatch(/line count 400$/)
+  })
+})
+
+describe('worktrees', () => {
+  type Listed = { projects: Array<{ sessions: Array<Record<string, unknown>> }> }
+  const listed = async (t = tools): Promise<Listed> => JSON.parse(await t.call('list_sessions', {})) as Listed
+
+  it('places a tile where its agent is working, not where its shell started', async () => {
+    sessions[0]!.agentCwd = '/wt/feat-a/src'
+    const a = (await listed()).projects[0]!.sessions[0]!
+    expect(a).toMatchObject({
+      cwd: '/repo', agentCwd: '/wt/feat-a/src',
+      git: { repo: 'repo', branch: 'feat/a', worktree: '/wt/feat-a', linkedWorktree: true },
+    })
+  })
+
+  it('flags tiles that share a worktree, and stops once they do not', async () => {
+    let [a, b] = (await listed()).projects[0]!.sessions
+    expect(a!['sameWorktreeAs']).toEqual(['tring.chat/2'])
+    expect(b!['sameWorktreeAs']).toEqual(['tring.chat/1'])
+    sessions[0]!.agentCwd = '/wt/feat-a'
+    ;[a, b] = (await listed()).projects[0]!.sessions
+    expect(a!['sameWorktreeAs']).toBeUndefined()
+    expect(b!['sameWorktreeAs']).toBeUndefined()
+  })
+
+  it('lists every worktree of the repository with the tiles in it', async () => {
+    sessions[0]!.agentCwd = '/wt/feat-a'
+    const out = JSON.parse(await tools.call('list_worktrees', {})) as { repos: Array<{ repo: string; projects: string[]; worktrees: unknown[] }> }
+    expect(out.repos).toHaveLength(1)
+    expect(out.repos[0]).toMatchObject({ repo: 'repo', projects: ['tring.chat'] })
+    expect(out.repos[0]!.worktrees).toEqual([
+      { path: '/repo', branch: 'main', main: true, tiles: ['tring.chat/2 idle'] },
+      { path: '/wt/feat-a', branch: 'feat/a', main: false, tiles: ['tring.chat/1 idle claude'] },
+    ])
+  })
+
+  it('reuses the worktree that already has the branch checked out', async () => {
+    const msg = await tools.call('create_session', { branch: 'feat/a' })
+    expect(added).toEqual([])
+    expect(created[0]).toMatchObject({ cwd: '/wt/feat-a', name: 'feat/a', command: 'claude' })
+    expect(msg).toMatch(/Reused the existing worktree \/wt\/feat-a/)
+    expect(msg).not.toMatch(/Warning/)
+  })
+
+  it('warns when the reused worktree already has a tile in it', async () => {
+    sessions[0]!.agentCwd = '/wt/feat-a'
+    expect(await tools.call('create_session', { branch: 'feat/a' })).toMatch(/Warning: tring.chat\/1 is already in that worktree/)
+  })
+
+  it('checks an existing branch out into a new worktree beside the others', async () => {
+    const msg = await tools.call('create_session', { branch: 'feat/old' })
+    expect(added).toHaveLength(1)
+    expect(added[0]).toMatchObject({ branch: 'feat/old', create: false })
+    expect(bare(added[0]!.path)).toBe('/wt/feat-old')
+    expect(bare(created[0]!.cwd!)).toBe('/wt/feat-old')
+    expect(msg).toMatch(/checked out the existing branch feat\/old/)
+  })
+
+  it('creates a new branch from a base', async () => {
+    const msg = await tools.call('create_session', { branch: 'feat/CHV-12-login', base: 'main', prompt: '' })
+    expect(added[0]).toMatchObject({ branch: 'feat/CHV-12-login', create: true, base: 'main' })
+    expect(bare(added[0]!.path)).toBe('/wt/feat-CHV-12-login')
+    expect(msg).toMatch(/created feat\/CHV-12-login from main/)
+  })
+
+  it('honours an explicit worktree_path and refuses one that exists', async () => {
+    await tools.call('create_session', { branch: 'feat/x', worktree_path: '/elsewhere/x' })
+    expect(bare(added[0]!.path)).toBe('/elsewhere/x')
+    await expect(tools.call('create_session', { branch: 'feat/y', worktree_path: '/wt/feat-a' })).rejects.toThrow(/already exists/)
+  })
+
+  it('refuses bad branch names and option-like bases before running git', async () => {
+    await expect(tools.call('create_session', { branch: 'has space' })).rejects.toThrow(/not a valid branch/)
+    await expect(tools.call('create_session', { branch: 'feat/z', base: '--upload-pack=x' })).rejects.toThrow(/not a usable base/)
+    expect(added).toEqual([])
+    expect(created).toEqual([])
+  })
+
+  it('refuses a branch outside a repository', async () => {
+    await expect(tools.call('create_session', { project: 'Other', branch: 'feat/q' })).rejects.toThrow(/not inside a git repository/)
+  })
+
+  it('warns when another agent is busy in the same worktree', async () => {
+    sessions[1]!.claude = { id: 'c3', cwd: '/repo' }
+    sessions[1]!.tracker.status = 'busy'
+    expect(await tools.call('send_prompt', { session: 'a', text: 'go' })).toMatch(/Warning: tring.chat\/2 is also working in/)
+    sessions[0]!.agentCwd = '/wt/feat-a'
+    expect(await tools.call('send_prompt', { session: 'a', text: 'go' })).not.toMatch(/Warning/)
+  })
+
+  it('reads changes from the worktree the agent is in', async () => {
+    sessions[0]!.agentCwd = '/wt/feat-a'
+    expect(await tools.call('session_changes', { session: 'a' })).toMatch(/in \/wt\/feat-a/)
+  })
+})
+
+describe('knowing what each tile is working on', () => {
+  const talk = (title: string, turns: Transcript['turns']): Transcript => ({ title, turns, partial: false })
+
+  beforeEach(() => {
+    // Tile a has been on the reporting box, though its last message is about
+    // something else and its screen is clear; tile c has been on login.
+    sessions[0]!.transcript = '/t/a.jsonl'
+    sessions[0]!.lastMessage = 'Committed. Anything else?'
+    talks['/t/a.jsonl'] = talk('Reporting box export', [
+      { role: 'user', text: 'Add a CSV export button to the reporting box', at: '2026-11-24T08:00:00Z' },
+      { role: 'assistant', text: 'Added the button to ReportBox.', at: null, files: ['/repo/src/ReportBox.tsx'] },
+      { role: 'user', text: 'Commit it', at: '2026-11-24T09:00:00Z' },
+      { role: 'assistant', text: 'Committed. Anything else?', at: null },
+    ])
+    // Tile c's transcript is found by its conversation id: no hook has named it yet.
+    talks['/t/c2.jsonl'] = talk('Login redirect fix', [
+      { role: 'user', text: 'Fix the login redirect loop', at: null },
+      { role: 'assistant', text: 'Fixed the redirect in auth middleware.', at: null, files: ['/other/auth.ts'] },
+    ])
+  })
+
+  it('lists what each tile was asked and what Claude titled it', async () => {
+    const out = JSON.parse(await tools.call('list_sessions', {})) as { projects: Array<{ sessions: Array<Record<string, unknown>> }> }
+    expect(out.projects[0]!.sessions[0]!['conversation']).toEqual({
+      title: 'Reporting box export',
+      firstPrompt: 'Add a CSV export button to the reporting box',
+      recentPrompts: ['Add a CSV export button to the reporting box', 'Commit it'],
+    })
+    expect(out.projects[1]!.sessions[0]!['conversation']).toMatchObject({ title: 'Login redirect fix' })
+    expect(out.projects[0]!.sessions[1]!['conversation']).toBeUndefined()
+  })
+
+  it('routes a request by topic to the tile that has been doing it', async () => {
+    const out = await tools.call('find_work', { query: 'Change the colour for the reporting box to green' })
+    expect(out).toMatch(/^Best match: tring.chat\/1 \(api\)/)
+    expect(out).toMatch(/matched [^)]*title/)
+    expect(out).toMatch(/matched [^)]*prompt/)
+    expect(out).not.toMatch(/Other\/3/)
+    expect(await tools.call('find_work', { query: 'the login redirect' })).toMatch(/^Best match: Other\/3/)
+  })
+
+  it('does not call a word in passing a match', async () => {
+    // Found in the live test: "payments page" landed on the tile whose agent
+    // had written "the login page".
+    talks['/t/c2.jsonl']!.turns.push({ role: 'assistant', text: 'It sends you back to the login page.', at: null })
+    const out = await tools.call('find_work', { query: 'payments page' })
+    expect(out).toMatch(/^No tile clearly matches "payments page"/)
+    expect(out).toMatch(/Only passing mentions:\n- Other\/3/)
+  })
+
+  it('matches files the agent edited', async () => {
+    expect(await tools.call('find_work', { query: 'ReportBox.tsx' })).toMatch(/^Best match: tring.chat\/1[^\n]*\n\n[^\n]*matched [^)]*edited/)
+  })
+
+  it('says when tiles tie, and when nothing matches, instead of picking one', async () => {
+    talks['/t/c2.jsonl'] = talk('Reporting box export', [{ role: 'user', text: 'Add a CSV export button to the reporting box', at: null }])
+    sessions[0]!.lastMessage = null
+    talks['/t/a.jsonl'] = talk('Reporting box export', [{ role: 'user', text: 'Add a CSV export button to the reporting box', at: null }])
+    expect(await tools.call('find_work', { query: 'reporting box' })).toMatch(/^Two or more tiles match about equally: ask the user/)
+    expect(await tools.call('find_work', { query: 'kubernetes ingress' })).toMatch(/^No tile clearly matches/)
+    await expect(tools.call('find_work', { query: 'the and for' })).rejects.toThrow(/say what the work is about/)
+  })
+
+  it('reads a tile\'s conversation, or only the turns about something', async () => {
+    const all = await tools.call('session_history', { session: 'a' })
+    expect(all).toMatch(/^tring.chat\/1 \(api\) — "Reporting box export": 4 of 4 turn\(s\)/)
+    expect(all).toMatch(/\[PROMPT 2026-11-24 08:00\]\nAdd a CSV export button/)
+    expect(all).toMatch(/\(edited: \/repo\/src\/ReportBox.tsx\)/)
+    const some = await tools.call('session_history', { session: 'a', search: 'commit' })
+    expect(some).toMatch(/2 of 2 matching turn/)
+    expect(await tools.call('session_history', { session: 'b' })).toMatch(/not running Claude Code/)
+  })
+
+  it('stems words so "reporting" finds "reports"', async () => {
+    const { words } = await import('../src/orchestrator-tools.ts')
+    expect(words('Change the colour for the reporting box to green')).toEqual(['colour', 'report', 'box', 'green'])
   })
 })
 

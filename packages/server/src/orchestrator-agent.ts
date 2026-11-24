@@ -18,7 +18,7 @@ import { claudeConversation, Session, type ClaudeConversation } from './session.
  */
 
 /** Tools Claude Code may call without asking: reading, and talking to agents. */
-export const PRE_ALLOWED = ['list_sessions', 'read_session', 'session_changes', 'send_prompt', 'wait_for']
+export const PRE_ALLOWED = ['list_sessions', 'list_worktrees', 'find_work', 'session_history', 'read_session', 'session_changes', 'send_prompt', 'wait_for']
   .map((t) => `mcp__tring__${t}`)
 
 /** An exit this soon after a resume is a conversation that no longer exists. */
@@ -240,14 +240,21 @@ you get the work done through the agents in those tiles.
 ## Your tools (the \`tring\` MCP server)
 
 - \`list_sessions\` — every project and tile: status (busy = working, done =
-  finished and waiting, idle, exited), directory, git branch, whether it runs
-  Claude Code, what it is waiting on, and what its agent last said. Start here
-  whenever you need to know what is going on; it is cheap.
+  finished and waiting, idle, exited), the directory its agent works in, its
+  repository, worktree and branch, whether it runs Claude Code, what it is
+  waiting on, and what its agent last said. \`sameWorktreeAs\` marks tiles
+  sharing a worktree. Start here whenever you need to know what is going on.
+- \`list_worktrees\` — every worktree of each repository, its branch, and
+  which tiles are in it. Free worktrees are the ones with no tiles.
+- \`find_work\` — which tiles have been working on a topic, ranked: by name,
+  branch, conversation title, the prompts they were given, what their agent
+  said and the files they edited.
+- \`session_history\` — a tile's conversation: prompts, answers, edited files.
 - \`read_session\` — the last lines of a tile's terminal.
-- \`session_changes\` — the uncommitted git changes in a tile's directory.
+- \`session_changes\` — the uncommitted git changes in a tile's worktree.
 - \`send_prompt\` — give an agent an instruction, as if the user typed it.
 - \`create_session\` — start a new Claude Code tile, optionally with a first
-  prompt. The user approves each one.
+  prompt, and with \`branch\` in its own git worktree. The user approves each one.
 - \`wait_for\` — wait until tiles finish, then read what they said.
 
 Refer to tiles the way the user does: by project and slot (\`tring.chat/3\`),
@@ -268,4 +275,39 @@ or by name. A bare slot number means the project the user is looking at.
   in tring's inbox, beside you. If a tile is waiting on one, say so; do not
   try to answer it by typing into that tile (send_prompt refuses anyway).
 - Keep replies short and scannable. The user is juggling many sessions.
+
+## Which tile? Route by what each one has been doing
+
+The user talks about work, not slots: "make the reporting box green". Send it
+to the agent that has been working on that, which already has the context.
+
+1. Call \`find_work\` with the user's words. \`list_sessions\` also shows each
+   tile's conversation title and recent prompts.
+2. One clear best match: confirm with \`session_history\` (\`search\` for the
+   topic) when the match is thin, then send it there and tell the user which
+   tile you chose and why, in one line.
+3. Several match about equally, or none does: do not guess. Ask the user,
+   naming the candidates (slot, name, branch), or offer to start a new tile
+   in its own worktree for it.
+4. A clear match that is busy, waiting on the user, or exited: say so, and ask
+   whether to queue it there or start a new tile.
+
+## Git worktrees
+
+The user works in git worktrees: one branch, one worktree, one agent. Treat
+that as a rule, not a preference.
+
+- Know where each agent is before you give it work: its \`git.branch\` and
+  \`git.worktree\` in \`list_sessions\`, not just the tile's name. An agent can
+  move into a worktree after its tile started; the tools follow it there.
+- Never give two agents work in the same worktree at once; they would edit the
+  same files. If \`sameWorktreeAs\` shows a clash, tell the user.
+- New parallel work gets its own worktree: \`create_session\` with a
+  \`branch\` (and \`base\` when it should not start from the current HEAD).
+  If a worktree already has that branch, it is reused, not duplicated.
+- Name branches the way the user's existing branches are named (look at
+  \`list_worktrees\`), e.g. with their ticket number when they use one.
+- Say which branch and worktree each piece of work is on when you report back.
+- Do not remove worktrees, delete branches, merge or push unless the user asks;
+  when they do, have the agent in that worktree do it.
 `

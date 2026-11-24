@@ -113,6 +113,15 @@ export class Session {
   stoppedAt = 0
   /** When it was last given a prompt, typed or sent by the orchestrator; 0 for never. */
   promptedAt = 0
+  /**
+   * Where the agent in this tile is working, from the `cwd` every Claude Code
+   * hook reports. Not the shell's directory: an agent that has moved into a
+   * git worktree (`claude --worktree`, or its own `cd`) is there, while the
+   * shell that started it never moved. Null when no agent has reported.
+   */
+  agentCwd: string | null = null
+  /** The conversation's transcript (`transcript_path` in every hook); null until one reports. */
+  transcript: string | null = null
 
   readonly tracker: ActivityTracker
 
@@ -328,6 +337,16 @@ export class Session {
   /** A prompt went in; see `promptedAt`. */
   prompted(): void {
     this.promptedAt = Date.now()
+  }
+
+  /** The agent reported where it is; null when it has ended. See `agentCwd`. */
+  agentAt(dir: string | null): void {
+    this.agentCwd = dir && path.isAbsolute(dir) ? dir : null
+  }
+
+  /** Where the running conversation is recorded. Only an absolute .jsonl is kept. */
+  transcriptAt(file: string): void {
+    if (path.isAbsolute(file) && file.endsWith('.jsonl')) this.transcript = file
   }
 
   /** Only when the screen actually changed, which is what keeps 16 tiles cheap. */

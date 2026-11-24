@@ -12,6 +12,10 @@ export interface HookSession {
   said?(text: string): void
   /** A prompt was submitted, so a later Stop answers it. */
   prompted?(): void
+  /** Where the agent is working now (hook `cwd`); null once it has ended. */
+  agentAt?(dir: string | null): void
+  /** Where its conversation is recorded (hook `transcript_path`). */
+  transcriptAt?(file: string): void
 }
 
 /**
@@ -45,6 +49,12 @@ export function routeHook(req: HookRequest): Promise<Record<string, unknown> | n
   const { inbox, session, event, payload } = req
   const tool = payload.tool_name
   const input = payload.tool_input
+
+  // Every event says where the agent is, so a move into a worktree is seen on
+  // its next tool call. Ending forgets it: the shell's directory is back in charge.
+  if (event === 'SessionEnd') session.agentAt?.(null)
+  else if (typeof payload.cwd === 'string' && payload.cwd) session.agentAt?.(payload.cwd)
+  if (typeof payload.transcript_path === 'string' && payload.transcript_path) session.transcriptAt?.(payload.transcript_path)
 
   switch (event) {
     case 'PermissionRequest':
