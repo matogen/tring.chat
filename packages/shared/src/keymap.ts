@@ -48,6 +48,8 @@ export const PICKER_ACTIONS = {
   KeyX: 'kill',
   KeyM: 'mark-seen',
   KeyO: 'orchestrator',
+  /** Voice input into the centre terminal: start, and again to stop. */
+  KeyV: 'voice',
   Escape: 'close',
 } as const
 

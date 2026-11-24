@@ -91,6 +91,12 @@ export type ClientMessage =
    * in the same conversation after it was quit, or in a fresh one.
    */
   | { type: 'agent'; enabled?: boolean; restart?: 'resume' | 'fresh' }
+  /**
+   * Whether this screen has tring in front of someone: visible, and touched
+   * in the last couple of minutes. Repeated while true, so a screen that goes
+   * quiet without saying so expires. Phone notifications wait for nobody.
+   */
+  | { type: 'presence'; active: boolean }
 
 export type ServerMessage =
   | {
@@ -200,6 +206,13 @@ export interface InboxItem {
   questions?: InboxQuestion[]
   /** reply: the agent's last message before it stopped. */
   message?: string
+  /**
+   * reply: a permission prompt or question that tring restarted in the middle
+   * of. Its hook died with the old daemon, so it can no longer be answered as
+   * one; the agent reopens waiting for a prompt, and `message` says what it
+   * was asking.
+   */
+  interrupted?: 'permission' | 'question'
 }
 
 /**

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { ProjectManager, type PersistedState } from '../src/project-manager.ts'
@@ -195,5 +195,37 @@ describe('ProjectManager', () => {
     pm.deleteProject(a)
     expect(pm.activeProjectId).toBeNull()
     expect(pm.list()).toEqual([])
+  })
+})
+
+describe('ProjectManager.tilesWith', () => {
+  const CONV = '0b9f3c1e-6a2d-4f3b-9c8e-1d2e3f4a5b6c'
+
+  it('opens a project waiting to be opened only when a tile in it reopens the conversation', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'tring-'))
+    const statePath = path.join(dir, 'projects.json')
+    const state: PersistedState = {
+      version: 1,
+      activeProjectId: 'a',
+      projects: [
+        { id: 'a', name: 'A', root: dir, sessions: [] },
+        { id: 'b', name: 'B', root: dir, sessions: [
+          { slot: 4, name: 'agent', cwd: dir, command: null, claude: { id: CONV, cwd: dir } },
+        ] },
+      ],
+    }
+    await writeFile(statePath, JSON.stringify(state))
+    const pm = await open(statePath, dir)
+    live.push(pm)
+
+    expect(pm.tilesWith('b', 'ffffffff-ffff-4fff-8fff-ffffffffffff')).toEqual([])
+    expect(pm.tilesWith('gone', CONV)).toEqual([])
+    expect(pm.managerFor('b')).toBeNull()
+
+    const tiles = pm.tilesWith('b', CONV)
+    expect(tiles.map((t) => [t.slot, t.claude?.id])).toEqual([[4, CONV]])
+    expect(pm.activeProjectId).toBe('a') // Opened behind the scenes, not switched to.
+    // Before the resume is typed: the real `claude` may be on this PATH.
+    await pm.dispose()
   })
 })

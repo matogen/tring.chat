@@ -413,7 +413,11 @@ export interface Settings {
   usage: boolean
 }
 
-export function openSettingsDialog(current: Settings, onApply: (next: Settings) => void): void {
+/**
+ * `extra` sections act on their own (phone notifications: the browser's
+ * permission prompt must come from the tap itself), not on Save.
+ */
+export function openSettingsDialog(current: Settings, onApply: (next: Settings) => void, extra: HTMLElement[] = []): void {
   const panel = el('div', 'panel')
   panel.append(el('h2', undefined, 'Settings'))
 
@@ -453,6 +457,8 @@ export function openSettingsDialog(current: Settings, onApply: (next: Settings) 
     'The tab asks Claude Code for the real numbers with `claude -p /usage`, which it ' +
     'answers locally and bills nothing. Nothing is read from your credentials, and ' +
     'nothing leaves this machine.'))
+
+  for (const section of extra) panel.append(section)
 
   const actions = el('div', 'actions')
   const cancel = el('button', 'btn', 'Cancel') as HTMLButtonElement

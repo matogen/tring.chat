@@ -28,6 +28,8 @@ interface Entry {
   item: InboxItem
   /** Null for a reply card: nothing is waiting on it but the user. */
   settle: Settle | null
+  /** Brought back from before a restart (see restore). */
+  restored?: boolean
 }
 
 /** The fields a hook event carries that the inbox reads. Everything is optional. */
@@ -51,6 +53,8 @@ export interface HookPayload {
 export class Inbox {
   private readonly entries = new Map<string, Entry>()
   onChange: (() => void) | null = null
+  /** A new card, every kind; phone notifications start here (notifier.ts). */
+  onAdded: ((item: InboxItem) => void) | null = null
 
   constructor(
     private readonly now: () => number = Date.now,
@@ -72,6 +76,7 @@ export class Inbox {
     const item: InboxItem = { ...fields, id: this.newId(), createdAt: this.now() }
     this.entries.set(item.id, { item, settle })
     this.onChange?.()
+    this.onAdded?.(item)
     return item
   }
 
@@ -79,6 +84,33 @@ export class Inbox {
   reply(sessionId: string, message: string): InboxItem {
     this.drop((i) => i.sessionId === sessionId && i.kind === 'reply')
     return this.open({ sessionId, kind: 'reply', message }, null)
+  }
+
+  /**
+   * Cards saved before a restart (card-store.ts), already re-pointed at their
+   * tiles' new session ids. Ids are kept. Not announced through `onAdded`:
+   * whoever was to be told about them was told before the restart.
+   */
+  restore(items: InboxItem[]): void {
+    let n = 0
+    for (const item of items) {
+      if (this.entries.has(item.id)) continue
+      this.entries.set(item.id, { item, settle: null, restored: true })
+      n++
+    }
+    if (n) this.onChange?.()
+  }
+
+  /**
+   * The session started working, so its "finished, waiting for you" card is
+   * over. Not a restored one: a tile that reopens its conversation after a
+   * restart repaints the whole of it, which looks exactly like work. Those end
+   * the way every card does otherwise — a prompt typed into the tile
+   * (UserPromptSubmit), a newer reply, a dismissal, or the tile going away.
+   */
+  working(sessionId: string): number {
+    return this.drop((i) => i.sessionId === sessionId && i.kind === 'reply' &&
+      !this.entries.get(i.id)?.restored)
   }
 
   /** Settles and removes a card. False when it is already gone. */

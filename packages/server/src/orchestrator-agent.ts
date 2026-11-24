@@ -21,6 +21,27 @@ import { claudeConversation, Session, type ClaudeConversation } from './session.
 export const PRE_ALLOWED = ['list_sessions', 'list_worktrees', 'find_work', 'session_history', 'read_session', 'session_changes', 'send_prompt', 'wait_for']
   .map((t) => `mcp__tring__${t}`)
 
+/**
+ * The orchestrator allocates work and looks things up. It never does the work:
+ * caught testing in the browser itself after "use the browser to test", in
+ * auto mode, where nothing asked first. Instructions alone did not hold, so
+ * the tools that do work are taken away here, in the workspace settings tring
+ * rewrites on every start — a deny holds whatever mode the session is in.
+ *
+ * Its shell is not denied: lookups the user allows (a ticket tool) need it.
+ * Instead the workspace runs in the default permission mode, so any command
+ * not allowed in `.claude/settings.local.json` — the user's file — asks first.
+ */
+export const DENIED = [
+  // Changing files is the tiles' job. (No MultiEdit: Claude Code 2.1 warns it
+  // matches no tool, and Edit covers it.)
+  'Edit', 'Write', 'NotebookEdit',
+  // So is testing in a browser.
+  'mcp__claude-in-chrome', 'mcp__computer-use', 'mcp__Claude_Browser',
+  // Research and subagents would be work done here rather than in a tile.
+  'WebFetch', 'WebSearch', 'Agent', 'Task',
+]
+
 /** An exit this soon after a resume is a conversation that no longer exists. */
 const RESUME_FAIL_MS = 10_000
 
@@ -141,7 +162,9 @@ export class OrchestratorAgent {
     // Only fixed words and a UUID go into the command: the workspace is the
     // cwd, so no path needs quoting for whichever shell this is.
     const resume = this.conversation ? ` --resume ${this.conversation.id}` : ''
-    const command = `claude --mcp-config tring-mcp.json${resume}`
+    // --strict-mcp-config: tring's server and no other. The user's own
+    // connectors (deploys, mail, browsers) are for the tiles, not for this.
+    const command = `claude --strict-mcp-config --mcp-config tring-mcp.json${resume}`
     const s = (this.opts.spawn ?? ((o) => new Session(o)))({
       id: randomUUID(),
       projectId: '',
@@ -217,9 +240,7 @@ export class OrchestratorAgent {
       },
     }
     await writeFile(path.join(dir, 'tring-mcp.json'), JSON.stringify(mcp, null, 2) + '\n', 'utf8')
-    await writeFile(path.join(dir, '.claude', 'settings.json'), JSON.stringify({
-      permissions: { allow: PRE_ALLOWED },
-    }, null, 2) + '\n', 'utf8')
+    await writeFile(path.join(dir, '.claude', 'settings.json'), JSON.stringify(workspaceSettings(), null, 2) + '\n', 'utf8')
     await writeFile(path.join(dir, 'TRING.md'), INSTRUCTIONS, 'utf8')
     const claudeMd = path.join(dir, 'CLAUDE.md')
     try {
@@ -228,6 +249,15 @@ export class OrchestratorAgent {
       await writeFile(claudeMd, '@TRING.md\n\n# Your own instructions for the orchestrator go below.\n', 'utf8')
     }
   }
+}
+
+/**
+ * The orchestrator workspace's `.claude/settings.json`. The default mode beats
+ * a global auto mode (project settings win over user settings), so anything
+ * neither allowed here nor in the user's settings.local.json asks first.
+ */
+export function workspaceSettings(): Record<string, unknown> {
+  return { permissions: { defaultMode: 'default', allow: PRE_ALLOWED, deny: DENIED } }
 }
 
 export const INSTRUCTIONS = `# You are the tring orchestrator
@@ -261,10 +291,27 @@ you get the work done through the agents in those tiles.
 Refer to tiles the way the user does: by project and slot (\`tring.chat/3\`),
 or by name. A bare slot number means the project the user is looking at.
 
+## You never do the work yourself
+
+You do two things: allocate work to the agents in the tiles, and look things
+up (the tiles, and tickets with the lookup tools the user allows). Everything
+else is a tile's job, even when the user's words sound like an order to you:
+
+- "Test it", "use the browser to test", "run the tests", "check it on the test
+  site": choose the tile that owns that work and \`send_prompt\` it the
+  instruction, with what you know (URL, ticket, what to check). Then
+  \`wait_for\` it and report.
+- Editing files, running builds or tests, browsing, deploying, investigating
+  code or logs: the same. Never do them here, even if a tool would let you.
+  Editing and browser tools are switched off in this workspace for that reason.
+- If no tile fits, offer to start one (\`create_session\`) rather than doing it.
+- Your shell is for ticket lookups only. A command that would change or
+  test anything is never yours to run; send it to a tile.
+
 ## How to work
 
 - Delegate. You coordinate; the agents in the tiles do the coding, in their
-  own repositories. Do not edit project files yourself unless the user asks.
+  own repositories.
 - The agents cannot see this conversation. Every prompt you send must stand
   on its own: the goal, the context they need, and what "done" looks like.
 - Pick the tile whose directory and branch fit the task. If none fits, or the

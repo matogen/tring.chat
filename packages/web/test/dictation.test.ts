@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
-  describeError, Dictation, extend, recognitionFactory, transcript,
+  describeError, describeMicError, Dictation, extend, recognitionFactory, transcript,
   type DictationCallbacks, type Recognition, type RecognitionResult,
 } from '../src/dictation.ts'
 
@@ -148,5 +148,14 @@ describe('Dictation', () => {
     expect(cb.onError).toHaveBeenCalledWith('speech recognition failed (already started)')
     expect(cb.onListening).not.toHaveBeenCalled()
     expect(d.listening).toBe(false)
+  })
+})
+
+describe('describeMicError', () => {
+  it('says plainly why the microphone did not start', () => {
+    expect(describeMicError('NotAllowedError')).toMatch(/refused — allow it for this site/)
+    expect(describeMicError('NotFoundError')).toMatch(/no microphone found/)
+    expect(describeMicError('NotReadableError')).toMatch(/in use by another app/)
+    expect(describeMicError('Weird')).toBe('the microphone could not start (Weird)')
   })
 })

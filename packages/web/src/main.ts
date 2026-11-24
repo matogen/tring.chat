@@ -17,6 +17,8 @@ import { DiffPanel } from './diff-panel.ts'
 import { followFocus } from './focus-target.ts'
 import { attachFileDrop, filePicker, insertFiles, refuseStrayDrops } from './drop.ts'
 import { Dictation, recognitionFactory } from './dictation.ts'
+import { Voice, type VoiceTarget } from './voice.ts'
+import { voiceSection } from './voice-settings.ts'
 import { attachTileDrag } from './tile-drag.ts'
 import { attachImagePaste, pasteFromClipboard, type PasteOptions } from './paste.ts'
 import { copyToClipboard, recentLinks, screenText } from './copy.ts'
@@ -28,6 +30,7 @@ import { renderBar } from './project-bar.ts'
 import { MOBILE_QUERY, renderSwitcher } from './switcher.ts'
 import * as usage from './usage-panel.ts'
 import * as ui from './overlay.ts'
+import { detectPhone, dropDesktopSubscription, notificationsSection } from './notifications.ts'
 import { tring } from './sound.ts'
 
 const barEl = document.getElementById('bar') as HTMLElement
@@ -97,6 +100,7 @@ const inboxPanel = new InboxPanel(focusCell, {
   onAuto: (enabled) => ws.send({ type: 'autoAnswer', enabled }),
   onAgent: (change) => ws.send({ type: 'agent', ...change }),
   onLayout: () => fitTerminal(),
+  onVoice: detectPhone() ? undefined : (box, button) => cardVoice(box, button),
 })
 /** The first `inbox` after connecting is the backlog, not news worth a chime. */
 let inboxSeen = false
@@ -122,7 +126,8 @@ let pendingSize: { cols: number; rows: number; claim: boolean } | null = null
 const target = (): string | null => (agentView() ? agent.id : focusedId)
 
 const ws = new WsClient({
-  onOpen: () => { hideToast(); reattach() },
+  // Presence too: a daemon that restarted has forgotten every screen.
+  onOpen: () => { hideToast(); reattach(); sayPresence(true) },
   onClose: () => showToast('daemon disconnected — reconnecting'),
   onOutput: (id, data) => { if (id === target()) focusTerm.write(data) },
   onMessage: handleMessage,
@@ -177,6 +182,77 @@ const dictation = makeRecognition && new Dictation(makeRecognition, {
   onText: (text) => { if (target()) focusTerm.paste(text + ' ') },
   onError: showToast,
 }, navigator.language)
+
+/*
+ * The desktop's microphone (voice.ts): a button on the centre terminal — a
+ * tile, or the orchestrator agent — and on each card's reply box. Local
+ * Whisper when it is on in Settings, else the browser's recognizer. The words
+ * go in as text to edit; nothing is sent. The phone keeps its own mic in the
+ * bar below the tabs, and its keyboard's dictation in the reply boxes.
+ */
+const MIC_SVG = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" ' +
+  'stroke-linecap="round" stroke-linejoin="round"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5"/>' +
+  '<path d="M3 7.5a5 5 0 0 0 10 0M8 12.5V15"/></svg>'
+const termVoiceBtn = document.createElement('button')
+termVoiceBtn.className = 'voice-btn term-voice'
+termVoiceBtn.type = 'button'
+termVoiceBtn.innerHTML = MIC_SVG
+termVoiceBtn.title = 'Talk (Ctrl+Space, then v): the words go into the prompt'
+termVoiceBtn.setAttribute('aria-label', 'Voice input')
+// On the terminal's own box, not the cell: beside the agent the cell holds the cards too.
+if (!detectPhone()) termHost.append(termVoiceBtn)
+const termTarget: VoiceTarget = {
+  // A trailing space, as on the phone, so the next words do not run on.
+  insert: (text) => {
+    if (!target()) { showToast('the centre terminal closed, so the words were not used'); return }
+    focusTerm.paste(text + ' ')
+    focusTerm.focus()
+  },
+  button: termVoiceBtn,
+}
+const voice = new Voice({
+  onState: (state, at) => {
+    for (const b of Array.from(document.querySelectorAll('.voice-btn'))) b.classList.remove('listening', 'transcribing')
+    at?.button?.classList.add(state === 'transcribing' ? 'transcribing' : 'listening')
+    const onTerminal = at === termTarget
+    heardEl.hidden = !(onTerminal && state !== 'idle')
+    heardEl.textContent = state === 'transcribing' ? 'transcribing on this PC…' : 'listening… click the mic again to finish'
+  },
+  onHeard: (text) => { if (voice.isFor(termTarget)) heardEl.textContent = text || 'listening… click the mic again to finish' },
+  onError: showToast,
+})
+termVoiceBtn.onmousedown = (e) => e.preventDefault() // the terminal keeps the keyboard
+termVoiceBtn.onclick = (e) => { e.stopPropagation(); termVoice() }
+/** Talk into the centre terminal, if there is one to talk into. */
+function termVoice(): void {
+  if (!voice.busy && !target()) { showToast('open a terminal in the centre first, then talk into it'); return }
+  void voice.toggle(termTarget)
+}
+// No engine at all (Firefox without local Whisper): no buttons to promise one.
+void voice.engine().then((engine) => document.body.classList.toggle('no-voice', engine === null))
+/** One target per reply box, so a second click on its button stops it. */
+const boxTargets = new WeakMap<HTMLTextAreaElement, VoiceTarget>()
+function cardVoice(box: HTMLTextAreaElement, button: HTMLButtonElement): void {
+  let t = boxTargets.get(box)
+  if (!t) {
+    t = {
+      button,
+      insert: (text) => {
+        if (!box.isConnected) { showToast('that card was answered meanwhile, so the words were not used'); return }
+        const at = box.selectionStart ?? box.value.length
+        const end = box.selectionEnd ?? at
+        const before = box.value.slice(0, at)
+        const sep = before && !/\s$/.test(before) ? ' ' : ''
+        box.value = `${before}${sep}${text}${box.value.slice(end)}`
+        box.focus()
+        const caret = before.length + sep.length + text.length
+        box.setSelectionRange(caret, caret)
+      },
+    }
+    boxTargets.set(box, t)
+  }
+  void voice.toggle(t)
+}
 // The prefix never reaches the PTY, and nothing reaches it while an overlay
 // is up (spec §5.4).
 focusTerm.shouldSendKey = (e) => !ui.isOpen() && !isPrefix(e)
@@ -718,6 +794,7 @@ function attachSession(id: string | null): void {
     return
   }
   // Words spoken to one session never land in the next one's prompt.
+  if (voice.isFor(termTarget)) voice.cancel()
   dictation?.cancel()
   // Never aim at a session that is not in the state we hold — `prevFocusedId`
   // can outlive one. The daemon would take the focus, send nothing back, and
@@ -821,7 +898,11 @@ function openSettings(): void {
     }
     if (v.ring !== ringSize()) changeRingSize(v.ring)
     else { paintBar(); void refreshUsage() }
-  })
+    // Notifications are a phone's: a desktop is not offered them at all.
+  }, detectPhone() ? [notificationsSection()] : [voiceSection(() => {
+    voice.forget()
+    void voice.engine().then((engine) => document.body.classList.toggle('no-voice', engine === null))
+  })])
 }
 
 function changeRingSize(size: RingSize): void {
@@ -1089,6 +1170,12 @@ function pickerKey(e: KeyboardEvent): void {
       if (current) ws.send({ type: 'ack', id: current.id })
       ui.close(); overlayMode = null
       break
+    case 'voice':
+      // Talk into the centre terminal: the phone's mic there, the desktop's here.
+      ui.close(); overlayMode = null
+      if (mobile.matches) dictation?.toggle()
+      else termVoice()
+      break
   }
 }
 
@@ -1124,5 +1211,42 @@ mobile.addEventListener('change', () => {
   inboxPanel.setBeside(agentView())
   requestAnimationFrame(() => fitTerminal(true))
 })
-if (InboxPanel.wanted()) openInbox()
+/*
+ * Presence, for phone notifications: whether tring is in front of someone on
+ * this screen — visible, and touched in the last two minutes. The daemon only
+ * notifies a phone when no screen is (notifier.ts), so the phone stays quiet
+ * while you sit at the PC. Repeated every minute while true; a screen that
+ * stops saying so lapses on the daemon's side.
+ */
+const ACTIVE_MS = 120_000
+let lastTouch = Date.now()
+let saidActive: boolean | null = null
+const isActive = (): boolean => !document.hidden && Date.now() - lastTouch < ACTIVE_MS
+function sayPresence(force = false): void {
+  const now = isActive()
+  if (!force && now === saidActive) return
+  saidActive = now
+  ws.send({ type: 'presence', active: now })
+}
+for (const ev of ['keydown', 'pointerdown', 'wheel', 'touchstart'] as const) {
+  window.addEventListener(ev, () => { lastTouch = Date.now(); sayPresence() }, { capture: true, passive: true })
+}
+document.addEventListener('visibilitychange', () => sayPresence())
+setInterval(() => sayPresence(isActive()), 60_000)
+
+/* A tapped notification lands on the orchestrator: a fresh window by its URL,
+   an open one by a message from the service worker. */
+const params = new URLSearchParams(location.search)
+const fromNotification = params.has('inbox')
+if (fromNotification) {
+  params.delete('inbox')
+  history.replaceState(null, '', `${location.pathname}${params.size ? `?${params}` : ''}${location.hash}`)
+}
+navigator.serviceWorker?.addEventListener('message', (e: MessageEvent<{ type?: string }>) => {
+  if (e.data?.type === 'open-inbox' && !inboxPanel.isOpen) openInbox()
+})
+
+if (fromNotification || InboxPanel.wanted()) openInbox()
+// A desktop that subscribed while 0.1.24 offered it there lets go now.
+void dropDesktopSubscription()
 ws.connect()

@@ -17,6 +17,8 @@ import { hooksStatus, installHooks, type HooksStatus } from './hooks-install.ts'
 import { ToolError, TOOLS, type OrchestratorTools } from './orchestrator-tools.ts'
 import type { Session } from './session.ts'
 import { claudeConversation } from './session.ts'
+import type { PushApi } from './push-api.ts'
+import { isModel, type ModelId, type WhisperStatus } from './whisper.ts'
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -52,7 +54,22 @@ export interface HttpOptions {
   tools?: OrchestratorTools | null
   /** The orchestrator agent's own session, which is in no project. */
   agentSession?: (id: string) => Session | undefined
+  /** Phone notifications for orchestrator cards. Null answers 503. */
+  push?: PushApi | null
+  /** Local speech recognition for the desktop microphone (whisper.ts). Null answers 503. */
+  voice?: VoiceApi | null
 }
+
+export interface VoiceApi {
+  status(): Promise<WhisperStatus>
+  /** False when an install is already running. */
+  install(model?: ModelId): boolean
+  setEnabled(on: boolean): Promise<void>
+  transcribe(wav: Buffer): Promise<string>
+}
+
+/** About eight minutes of 16 kHz mono speech: a dictated prompt, never a recording session. */
+const MAX_AUDIO_BYTES = 16 * 2 ** 20
 
 /** No response leaves without the header block — a 404 is framable too. */
 const head = (res: ServerResponse, code: number, type: string): void => {
@@ -306,6 +323,83 @@ export function createHandler(opts: HttpOptions) {
         if (gone.signal.aborted) return
         if (err instanceof ToolError) return json(res, 200, { text: err.message, isError: true })
         return json(res, 200, { text: `tring could not do that: ${(err as Error).message}`, isError: true })
+      }
+    }
+
+    /**
+     * Phone notifications: the settings section's calls. Each names its
+     * device by the push subscription's endpoint, which only that browser has.
+     */
+    if (url.pathname === '/api/push' && req.method === 'GET') {
+      if (!opts.push) return json(res, 503, { error: 'notifications are not available' })
+      return json(res, 200, { publicKey: opts.push.publicKey() })
+    }
+    const pushRoute = url.pathname.match(/^\/api\/push\/(status|subscribe|prefs|unsubscribe|test)$/)
+    if (pushRoute && req.method === 'POST') {
+      const push = opts.push
+      if (!push) return json(res, 503, { error: 'notifications are not available' })
+      const raw = await readBody(req)
+      if (raw === null) return tooLarge(req, res, 'body too large')
+      let body: { endpoint?: unknown; subscription?: unknown; prefs?: unknown; label?: unknown; phone?: unknown }
+      try {
+        body = JSON.parse(raw || '{}') as typeof body
+      } catch {
+        return json(res, 400, { error: 'malformed body' })
+      }
+      const endpoint = typeof body.endpoint === 'string' ? body.endpoint : ''
+      switch (pushRoute[1]) {
+        case 'status': return json(res, 200, push.status(endpoint))
+        case 'subscribe':
+          return await push.subscribe(body.subscription, body.prefs, body.label, body.phone)
+            ? json(res, 200, { ok: true })
+            : json(res, 400, { error: 'not a push subscription' })
+        case 'prefs':
+          return await push.setPrefs(endpoint, body.prefs) ? json(res, 200, { ok: true }) : json(res, 404, { error: 'unknown device' })
+        case 'unsubscribe':
+          await push.unsubscribe(endpoint)
+          return json(res, 200, { ok: true })
+        case 'test': {
+          const status = await push.test(endpoint)
+          if (status === null) return json(res, 404, { error: 'unknown device' })
+          return json(res, 200, { ok: status >= 200 && status < 300, status })
+        }
+      }
+    }
+
+    /**
+     * The desktop microphone's local Whisper: its status and the model this
+     * PC should use, installing it, switching it on, and turning speech into
+     * text. The audio is a WAV the page recorded, and stays on this machine.
+     */
+    if (url.pathname.startsWith('/api/voice')) {
+      const voice = opts.voice
+      if (!voice) return json(res, 503, { error: 'local speech recognition is not available' })
+      if (url.pathname === '/api/voice' && req.method === 'GET') return json(res, 200, await voice.status())
+      if (url.pathname === '/api/voice/transcribe' && req.method === 'POST') {
+        if (Number(req.headers['content-length'] ?? '0') > MAX_AUDIO_BYTES) return json(res, 413, { error: 'that recording is too long' })
+        const wav = await readBytes(req, MAX_AUDIO_BYTES)
+        if (wav === null) return tooLarge(req, res, 'that recording is too long')
+        if (wav.length < 44 || wav.subarray(0, 4).toString('latin1') !== 'RIFF') return json(res, 400, { error: 'not a WAV recording' })
+        try {
+          return json(res, 200, { text: await voice.transcribe(wav) })
+        } catch (err) {
+          return json(res, 500, { error: (err as Error).message })
+        }
+      }
+      if (req.method === 'POST' && (url.pathname === '/api/voice/install' || url.pathname === '/api/voice/enable')) {
+        const raw = await readBody(req)
+        if (raw === null) return tooLarge(req, res, 'body too large')
+        let body: { model?: unknown; enabled?: unknown }
+        try {
+          body = JSON.parse(raw || '{}') as typeof body
+        } catch {
+          return json(res, 400, { error: 'malformed body' })
+        }
+        if (url.pathname === '/api/voice/install') {
+          return json(res, 200, { started: voice.install(isModel(body.model) ? body.model : undefined) })
+        }
+        await voice.setEnabled(body.enabled === true)
+        return json(res, 200, await voice.status())
       }
     }
 

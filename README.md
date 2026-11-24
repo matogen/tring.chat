@@ -388,6 +388,35 @@ ceiling, and inventing one would be worse than having none.
 
 Reloading while the tab is open leaves you on it.
 
+## Phone notifications
+
+Off by default, and per device. In the gear's settings, **Notifications on this device**
+→ **Turn on**, and that browser gets a notification when the orchestrator has a card
+for you — a permission prompt, a question, or an agent that finished — even with tring
+closed or the phone locked. Turning it on in one browser never makes your others buzz.
+
+- **Which cards:** each kind has its own switch.
+- **Only when you are away** (on by default): no notification while any screen has tring
+  in front of you — visible, and touched in the last two minutes.
+- **Quiet by design:** a card is only sent if it is still waiting 15 seconds later, so the
+  ones the AI approves, or that you answer straight away, never buzz. One notification
+  per tile, a newer card replacing it, and at most one per tile per minute.
+- **No content:** a notification says which tile and what kind of card ("tring.chat/3
+  api needs permission · It wants to run a command"), never the command, code or ticket
+  text. It is end-to-end encrypted to the device; the push service only relays it.
+- **Send a test**, and **Turn off**, which also removes the device on the daemon.
+
+It needs tring opened over **HTTPS** (or on `localhost`): browsers only offer push to a
+secure page. A plain `http://` Tailscale address does not qualify; a real certificate
+in front of tring — `tailscale serve`, a reverse proxy, a tunnel — does.
+
+On an **iPhone or iPad** (iOS 16.4 or later), Safari only offers push to a site on the
+Home Screen: open tring in Safari, Share → **Add to Home Screen**, open it from that
+icon, and turn notifications on there. Android and desktop browsers work from a tab.
+
+The daemon talks to the push service directly (Apple's, Google's or Mozilla's, whichever
+the browser uses), with its own key in `~/.config/tring/push.json`.
+
 ## Sound
 
 When a session turns green, tring rings — two short strikes, synthesised rather
@@ -601,6 +630,24 @@ It talks to agents and nothing else. It never types into a plain shell, and neve
 tile that is waiting on a permission prompt or a question — those stay yours, in the
 cards beside it, as before. What the agents in the tiles do is still governed by their
 own permissions.
+
+**It never does the work itself.** It allocates work to tiles and looks things up; "test
+it in the browser" goes to the tile that owns the work. That is enforced, not just asked:
+its workspace settings deny editing and writing files, browser and computer-use tools,
+web fetch and search, and subagents, in every permission mode. It loads tring's MCP
+server and no other (`--strict-mcp-config`). Its workspace runs in the default
+permission mode even if yours is `auto`, so any shell command you have not allowed asks
+you first.
+
+To let it run a lookup without asking — a ticket tool, say — allow that command in
+`~/.config/tring/orchestrator/.claude/settings.local.json`, which is yours and never
+rewritten, and say how to call it in `CLAUDE.md` there. Use the literal path with
+backslashes doubled (Claude Code never pre-approves a command with `$HOME` in it), and the
+shell the tool expects:
+
+```json
+{ "permissions": { "allow": ["PowerShell(node \"C:\\\\Users\\\\me\\\\tools\\\\tickets.mjs\":*)"] } }
+```
 
 The agent lives in `~/.config/tring/orchestrator`, which tring rewrites on every start
 (`TRING.md` holds its instructions; add your own to `CLAUDE.md` there, which is kept).

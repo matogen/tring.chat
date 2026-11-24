@@ -80,6 +80,26 @@ export function describeError(code: string): string | null {
   }
 }
 
+/**
+ * What getUserMedia's refusal means, for the local Whisper recorder (the
+ * browser's own recognizer reports through describeError above).
+ */
+export function describeMicError(name: string): string {
+  switch (name) {
+    case 'NotAllowedError':
+    case 'SecurityError':
+      return 'the microphone was refused — allow it for this site (the icon in the address bar), then try again'
+    case 'NotFoundError':
+    case 'OverconstrainedError':
+      return 'no microphone found — plug one in or pick one in the system sound settings'
+    case 'NotReadableError':
+    case 'AbortError':
+      return 'the microphone is in use by another app, or the system blocked it'
+    default:
+      return `the microphone could not start (${name})`
+  }
+}
+
 export interface DictationCallbacks {
   /** The mic turned on or off; the button shows which. */
   onListening: (on: boolean) => void

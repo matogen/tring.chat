@@ -167,6 +167,20 @@ export class ProjectManager {
     return e.manager
   }
 
+  /**
+   * The project's tiles, if one of them runs — or, restored and not yet
+   * spawned, will reopen — Claude conversation `claudeId`; none otherwise.
+   * Spawns the project only in the first case: an inbox card restored for
+   * that conversation needs a live tile to reply into (card-store.ts).
+   */
+  tilesWith(projectId: string, claudeId: string): Session[] {
+    const e = this.entries.get(projectId)
+    if (!e) return []
+    const convs = e.manager ? e.manager.list().map((s) => s.claude) : e.pending.map((p) => p.claude)
+    if (!convs.some((c) => c?.id === claudeId)) return []
+    return this.ensure(projectId)?.list() ?? []
+  }
+
   managerFor(id: string): SessionManager | null {
     return this.entries.get(id)?.manager ?? null
   }
