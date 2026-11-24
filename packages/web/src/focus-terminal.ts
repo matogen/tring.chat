@@ -221,4 +221,24 @@ export class FocusTerminal {
     }
     return { cols: this.term.cols, rows: this.term.rows }
   }
+
+  /** The size `fitNow` would give, without changing anything. */
+  proposed(): { cols: number; rows: number } | null {
+    try {
+      const d = this.fit.proposeDimensions()
+      return d && d.cols > 0 && d.rows > 0 ? { cols: d.cols, rows: d.rows } : null
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Draws at exactly the PTY's size while another device owns it: narrower,
+   * or clipped by the panel, but laid out as the program meant. Fitting to
+   * this panel instead is what garbled it — redraws aimed at another width.
+   */
+  adopt(cols: number, rows: number): void {
+    if (cols < 1 || rows < 1 || (cols === this.term.cols && rows === this.term.rows)) return
+    this.term.resize(cols, rows)
+  }
 }

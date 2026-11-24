@@ -459,6 +459,29 @@ describe('knowing what each tile is working on', () => {
     expect(d['workedIn']).toEqual(['/src/tring.chat (1 edits, 2 reads)'])
   })
 
+  it('finds the conversation by id when the hook\'s transcript path is dead', async () => {
+    // Live: after a tring restart the tile resumed its conversation from the
+    // home directory, and SessionStart reported C--Users-User/<id>.jsonl,
+    // which does not exist. The real file is under the directory it began in.
+    sessions[0]!.transcript = '/t/C--Users-User/c1.jsonl'
+    sessions[0]!.claude = { id: 'c1', cwd: '/home/u' }
+    talks['/t/c1.jsonl'] = talks['/t/a.jsonl']!
+    delete talks['/t/a.jsonl']
+    const out = JSON.parse(await tools.call('list_sessions', {})) as { projects: Array<{ sessions: Array<Record<string, unknown>> }> }
+    expect(out.projects[0]!.sessions[0]!['conversation']).toMatchObject({ title: 'Reporting box export' })
+    // Remembered, so the dead path is not tried again.
+    expect(sessions[0]!.transcript).toBe('/t/c1.jsonl')
+    expect(await tools.call('session_history', { session: 'a' })).toMatch(/"Reporting box export": 4 of 4/)
+  })
+
+  it('finds a tile with no readable conversation from what is on its screen', async () => {
+    // A shell, or a Claude whose transcript cannot be found: its terminal is all there is.
+    sessions[1]!.recentText = () => 'Pushed fix/orchestrator-cards-resize-freeze to tring.chat\nPR #28 merged, v0.1.22 released'
+    const out = await tools.call('find_work', { query: 'tring card section resize' })
+    expect(out).toMatch(/^Best match: tring.chat\/2/)
+    expect(out).toMatch(/matched [^)]*screen only/)
+  })
+
   it('pulls absolute paths out of shell commands', async () => {
     const { pathsIn } = await import('../src/orchestrator-tools.ts')
     expect(pathsIn('cd "C:/Matogen/Internal Matogen/tring.chat" && npm test')).toEqual(['C:/Matogen/Internal Matogen/tring.chat'])

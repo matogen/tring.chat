@@ -1,9 +1,12 @@
 import type { AgentInfo, AutoDecision, InboxDecision, InboxItem } from '@tring/shared/protocol'
 import { age, answersFor, describe } from './inbox-view.ts'
 import { renderMarkdown } from './markdown.ts'
-import { clampWidth } from './diff-rows.ts'
+import {
+  clampSplit, MIN_CARDS_HEIGHT, MIN_CARDS_WIDTH, MIN_TERMINAL_HEIGHT, MIN_TERMINAL_WIDTH,
+} from './split.ts'
 
 const WIDTH_KEY = 'tring.inboxWidth'
+const HEIGHT_KEY = 'tring.inboxHeight'
 /** Beside the agent: wide enough for a card's buttons on one row. */
 const DEFAULT_WIDTH = 420
 
@@ -106,7 +109,9 @@ export class InboxPanel {
   private readonly agentNote = el('div', 'inbox-banner agent-note')
   /** Drags the column beside the agent wider or narrower, like the diff panel's. */
   private readonly handle = el('div', 'inbox-handle')
-  private width = InboxPanel.savedWidth()
+  private width = InboxPanel.saved(WIDTH_KEY) ?? DEFAULT_WIDTH
+  /** Stacked on a phone; null keeps the stylesheet's share. */
+  private height: number | null = InboxPanel.saved(HEIGHT_KEY)
   private readonly history = el('details', 'inbox-history')
   private readonly historyList = el('ol', 'inbox-history-list')
   private readonly historySummary = el('summary')
@@ -179,43 +184,76 @@ export class InboxPanel {
   setBeside(beside: boolean): void {
     this.el.classList.toggle('beside', beside)
     this.handle.hidden = !beside
-    if (beside) this.el.style.flexBasis = `${this.width}px`
+    this.applySize()
+  }
+
+  /** On a phone the cards are a band above the terminal, and the split is a height. */
+  private stacked(): boolean {
+    return getComputedStyle(this.cell).flexDirection.startsWith('column')
+  }
+
+  /**
+   * The saved split, along whichever way the cell is laid out now. A phone
+   * with no saved height keeps the stylesheet's default share.
+   */
+  private applySize(): void {
+    if (!this.el.classList.contains('beside')) {
+      this.el.style.removeProperty('flex-basis')
+      return
+    }
+    const size = this.stacked() ? this.height : this.width
+    if (size) this.el.style.flexBasis = `${size}px`
     else this.el.style.removeProperty('flex-basis')
+    this.handle.classList.toggle('across', this.stacked())
   }
 
   /** Per browser, like the diff panel's width. */
-  private static savedWidth(): number {
+  private static saved(key: string): number | null {
     try {
-      const v = Number(localStorage.getItem(WIDTH_KEY))
-      return Number.isFinite(v) && v > 0 ? v : DEFAULT_WIDTH
+      const v = Number(localStorage.getItem(key))
+      return Number.isFinite(v) && v > 0 ? v : null
     } catch {
-      return DEFAULT_WIDTH
+      return null
     }
   }
 
   /**
-   * Drag the handle to resize the column beside the agent. The terminal is
-   * refitted once, on release: fitting on every move would send the PTY a
-   * resize per pixel.
+   * Drag the handle to share the cell between the agent and the cards: a width
+   * side by side, a height when stacked. Both sides keep a minimum (split.ts).
+   * The terminal follows as the cards move — main.ts watches its box and
+   * refits it, and the PTY gets one resize once the size settles.
    */
   private bindResize(): void {
-    let right = 0
+    let from = 0
+    let across = false
     this.handle.addEventListener('pointerdown', (e) => {
       e.preventDefault()
-      right = this.el.getBoundingClientRect().right
+      across = this.stacked()
+      const box = this.el.getBoundingClientRect()
+      // Side by side the cards are on the right, so they grow leftwards;
+      // stacked they are on top and grow downwards.
+      from = across ? box.top : box.right
       this.handle.setPointerCapture(e.pointerId)
       this.handle.classList.add('dragging')
     })
     this.handle.addEventListener('pointermove', (e) => {
       if (!this.handle.hasPointerCapture(e.pointerId)) return
-      this.width = clampWidth(right - e.clientX, this.cell.clientWidth)
-      this.el.style.flexBasis = `${this.width}px`
+      if (across) {
+        this.height = clampSplit(e.clientY - from, this.cell.clientHeight, MIN_CARDS_HEIGHT, MIN_TERMINAL_HEIGHT)
+        this.el.style.flexBasis = `${this.height}px`
+      } else {
+        this.width = clampSplit(from - e.clientX, this.cell.clientWidth, MIN_CARDS_WIDTH, MIN_TERMINAL_WIDTH)
+        this.el.style.flexBasis = `${this.width}px`
+      }
     })
     const end = (e: PointerEvent): void => {
       if (!this.handle.hasPointerCapture(e.pointerId)) return
       this.handle.releasePointerCapture(e.pointerId)
       this.handle.classList.remove('dragging')
-      try { localStorage.setItem(WIDTH_KEY, String(this.width)) } catch { /* private mode */ }
+      try {
+        if (across && this.height) localStorage.setItem(HEIGHT_KEY, String(this.height))
+        if (!across) localStorage.setItem(WIDTH_KEY, String(this.width))
+      } catch { /* private mode */ }
       this.cb.onLayout?.()
     }
     this.handle.addEventListener('pointerup', end)

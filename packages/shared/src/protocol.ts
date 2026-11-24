@@ -53,7 +53,13 @@ export type ClientMessage =
   | { type: 'hello'; token?: string }
   | { type: 'focus'; id: string | null; cols: number; rows: number }
   | { type: 'input'; id: string; data: string }
-  | { type: 'resize'; cols: number; rows: number }
+  /**
+   * This client's terminal size for its focused session. `claim` takes the
+   * PTY's size for this device (a click, a keystroke-free focus, a window
+   * resize); without it the size is only recorded unless this client already
+   * owns it. See size-owner.ts on the server.
+   */
+  | { type: 'resize'; cols: number; rows: number; claim?: boolean }
   | { type: 'create'; projectId?: string; slot?: number; cwd: string; command?: string; name?: string }
   | { type: 'kill'; id: string }
   | { type: 'rename'; id: string; name: string }
@@ -103,6 +109,12 @@ export type ServerMessage =
       notable?: boolean
     }
   | { type: 'screen'; id: string; ansi: string }
+  /**
+   * The PTY's size for a session this client is watching. `mine` is true when
+   * this client owns it; otherwise another device does, and this client draws
+   * at exactly `cols`×`rows` until it claims the size back.
+   */
+  | { type: 'size'; id: string; cols: number; rows: number; mine: boolean }
   | { type: 'snapshot'; id: string; snapshot: ScreenSnapshot }
   | { type: 'exit'; id: string; code: number }
   | { type: 'error'; message: string }
