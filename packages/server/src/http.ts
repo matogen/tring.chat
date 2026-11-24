@@ -14,6 +14,9 @@ import type { Inbox, HookPayload } from './inbox.ts'
 import { routeHook } from './hook-route.ts'
 import type { InboxItem } from '@tring/shared/protocol'
 import { hooksStatus, installHooks, type HooksStatus } from './hooks-install.ts'
+import { ToolError, TOOLS, type OrchestratorTools } from './orchestrator-tools.ts'
+import type { Session } from './session.ts'
+import { claudeConversation } from './session.ts'
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -45,6 +48,10 @@ export interface HttpOptions {
   onPermission?: (item: InboxItem) => void
   /** Where Claude Code's user settings live; overridable for tests. */
   claudeSettingsPath?: string
+  /** What the orchestrator agent's MCP relay calls. Null answers 503. */
+  tools?: OrchestratorTools | null
+  /** The orchestrator agent's own session, which is in no project. */
+  agentSession?: (id: string) => Session | undefined
 }
 
 /** No response leaves without the header block — a 404 is framable too. */
@@ -227,8 +234,10 @@ export function createHandler(opts: HttpOptions) {
      */
     const hook = url.pathname.match(/^\/api\/sessions\/([^/]+)\/hook$/)
     if (hook && req.method === 'POST') {
-      const s = pm.findSession(decodeURIComponent(hook[1]!))
-      if (!s) return json(res, 404, { error: 'no such session' })
+      const id = decodeURIComponent(hook[1]!)
+      const agent = opts.agentSession?.(id)
+      const s = pm.findSession(id)
+      if (!s && !agent) return json(res, 404, { error: 'no such session' })
       const raw = await readBody(req)
       if (raw === null) return tooLarge(req, res, 'body too large')
       let body: { event?: unknown; payload?: unknown }
@@ -239,6 +248,15 @@ export function createHandler(opts: HttpOptions) {
       }
       if (typeof body.event !== 'string') return json(res, 400, { error: 'event is required' })
       const payload = (body.payload && typeof body.payload === 'object' ? body.payload : {}) as HookPayload
+      // The orchestrator agent's own prompts are on screen in front of you,
+      // so none of them become cards. Only its conversation id is kept, so a
+      // restart reopens the same one.
+      if (agent) {
+        const conv = body.event === 'SessionStart' ? claudeConversation({ id: payload.session_id, cwd: payload.cwd }) : null
+        if (conv) agent.setClaude(conv)
+        return json(res, 200, { output: null })
+      }
+      if (!s) return json(res, 404, { error: 'no such session' })
       if (!opts.inbox) {
         if (body.event === 'Stop' || body.event === 'Notification') s.hook()
         return json(res, 200, { output: null })
@@ -253,6 +271,42 @@ export function createHandler(opts: HttpOptions) {
       })
       if (gone.signal.aborted) return
       return json(res, 200, { output })
+    }
+
+    /**
+     * The orchestrator agent's tools, relayed by its MCP server (mcp-cli.ts).
+     * Behind the same token as everything else: anything holding it can
+     * already type into every shell, so this opens no door that was shut.
+     */
+    if (url.pathname === '/api/orchestrator/tools' && req.method === 'GET') {
+      return json(res, 200, { tools: TOOLS })
+    }
+    if (url.pathname === '/api/orchestrator/call' && req.method === 'POST') {
+      const tools = opts.tools
+      if (!tools) return json(res, 503, { error: 'the orchestrator agent is not available' })
+      const raw = await readBody(req)
+      if (raw === null) return tooLarge(req, res, 'body too large')
+      let body: { name?: unknown; arguments?: unknown }
+      try {
+        body = JSON.parse(raw || '{}') as typeof body
+      } catch {
+        return json(res, 400, { error: 'malformed body' })
+      }
+      if (typeof body.name !== 'string') return json(res, 400, { error: 'name is required' })
+      const args = (body.arguments && typeof body.arguments === 'object' ? body.arguments : {}) as Record<string, unknown>
+      // wait_for can run for minutes; the relay hanging up (Esc in Claude)
+      // ends it instead of leaving a poller behind.
+      const gone = new AbortController()
+      res.on('close', () => { if (!res.writableFinished) gone.abort() })
+      try {
+        const text = await tools.call(body.name, args, gone.signal)
+        if (gone.signal.aborted) return
+        return json(res, 200, { text, isError: false })
+      } catch (err) {
+        if (gone.signal.aborted) return
+        if (err instanceof ToolError) return json(res, 200, { text: err.message, isError: true })
+        return json(res, 200, { text: `tring could not do that: ${(err as Error).message}`, isError: true })
+      }
     }
 
     if (url.pathname === '/api/hooks' && req.method === 'GET') {

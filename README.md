@@ -540,6 +540,45 @@ publishing, deploys, `kubectl`/`terraform`, anything mentioning production, secr
 `.env` files, paths outside the session's directory, MCP tools and plan approvals.
 Every decision it makes is listed in the inbox with its reason.
 
+Agents' messages, plans and questions are shown as formatted Markdown — bold, lists,
+code, tables and links — never as raw asterisks. On a phone the Orchestrator also has a
+button of its own in the bar under the tabs, with the count of cards waiting.
+
+### Orchestrator agent
+
+Optional, off by default. Tick **Agent** in the Orchestrator's header and the centre
+becomes a Claude Code session of its own, with the cards in a column beside it. Instead of
+typing into each tile, you tell it what you want:
+
+> *Which tiles are on which branch? Ask the api tile to run its tests, and start a new
+> tile in web to update the changelog.*
+
+It works the tiles through tring's own MCP server, `tring`:
+
+| Tool | What it does | Asks you first |
+|---|---|---|
+| `list_sessions` | every project and tile: status, directory, git branch, whether it runs Claude, what it waits on, what it last said | no |
+| `read_session` | the last lines of a tile's terminal | no |
+| `session_changes` | a tile's uncommitted git changes | no |
+| `send_prompt` | a prompt to the Claude in a tile, as if you typed it there | no |
+| `wait_for` | waits until tiles finish, then reads their answers | no |
+| `create_session` | a new tile running Claude, with an optional first prompt | yes |
+
+It talks to agents and nothing else. It never types into a plain shell, and never into a
+tile that is waiting on a permission prompt or a question — those stay yours, in the
+cards beside it, as before. What the agents in the tiles do is still governed by their
+own permissions.
+
+The agent lives in `~/.config/tring/orchestrator`, which tring rewrites on every start
+(`TRING.md` holds its instructions; add your own to `CLAUDE.md` there, which is kept).
+The first time it opens, Claude Code asks whether to trust that folder and lists the five
+tools it pre-approves; say yes. Its conversation survives a restart of tring. If you quit
+its Claude, the panel offers *Start again* or *New conversation*. Untick **Agent** and the
+Orchestrator is the inbox it always was.
+
+It needs the hooks (`tring hooks install`): they are how it knows which tiles run Claude
+and when an agent has finished.
+
 ## Claude Code
 
 `tring hooks install` (see [Orchestrator](#orchestrator)) includes a Stop hook, so

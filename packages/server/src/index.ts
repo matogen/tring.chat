@@ -22,6 +22,8 @@ import { AutoAnswerer } from './auto-answer.ts'
 import { hooksStatus, installHooks, uninstallHooks } from './hooks-install.ts'
 import { prependPath, writeHookShim } from './hook-shim.ts'
 import { autostartOff, autostartOn, autostartStatus, ForeignAutostart, type AutostartEnv } from './autostart.ts'
+import { OrchestratorAgent } from './orchestrator-agent.ts'
+import { OrchestratorTools } from './orchestrator-tools.ts'
 
 interface Auth {
   token: string | null
@@ -212,9 +214,26 @@ async function main(): Promise<void> {
     },
   })
   await auto.load()
+  // The orchestrator agent (off by default): a Claude Code of its own that
+  // drives the tiles through the tools below, relayed by tring-mcp.
+  const configDir = path.dirname(pm.statePath)
+  const agent = new OrchestratorAgent({
+    dir: path.join(configDir, 'orchestrator'),
+    statePath: path.join(configDir, 'orchestrator-agent.json'),
+    url,
+    token,
+    scrollback: args.scrollback,
+    idleMs: args.idleMs,
+    ...(args.shell ? { shell: args.shell } : {}),
+    mcpScript: [path.resolve(here, 'tring-mcp.js'), path.resolve(here, 'mcp-cli.ts')].find((p) => existsSync(p)) ?? null,
+    node: process.execPath,
+  })
+  const tools = new OrchestratorTools({ pm, inbox })
   const handle = createHandler({
     pm, webRoot, token, sameOrigin, fsRoots: args.fsRoot, uploads, inbox,
     onPermission: (item) => { void auto.offer(item) },
+    tools,
+    agentSession: (id) => agent.find(id),
   })
   const listener: RequestListener = (req, res) => {
     void handle(req, res).catch(() => {
@@ -226,8 +245,10 @@ async function main(): Promise<void> {
   // Rejected at the handshake, before Hub ever sees a socket: an origin that
   // is refused here never gets to send a `hello` at all.
   const wss = new WebSocketServer({ server, verifyClient: upgradeGuard(sameOrigin) })
-  const hub = new Hub({ pm, token, inbox, auto })
+  const hub = new Hub({ pm, token, inbox, auto, agent })
   hub.attach(wss)
+  // After the hub, so its first state change reaches the sockets.
+  await agent.load()
 
   // The one link that carries the secret. The client stores it and scrubs it
   // from the address bar on arrival, so it is needed once per browser.
@@ -271,6 +292,7 @@ async function main(): Promise<void> {
 
   const shutdown = async (): Promise<void> => {
     hub.dispose()
+    agent.dispose()
     await uploads.dispose()
     await pm.dispose()
     server.close(() => process.exit(0))

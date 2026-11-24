@@ -139,9 +139,20 @@ export class ProjectManager {
   }
 
   activate(id: string): SessionManager | null {
+    if (!this.entries.has(id)) return null
+    this.activeId = id
+    return this.ensure(id)
+  }
+
+  /**
+   * The project's sessions, spawning a restored project's if they are still
+   * pending, without making it the active project. The orchestrator agent
+   * starts tiles in projects you are not looking at, and doing so must not
+   * pull the view out from under you.
+   */
+  ensure(id: string): SessionManager | null {
     const e = this.entries.get(id)
     if (!e) return null
-    this.activeId = id
     if (!e.manager) {
       e.manager = this.spawnManager(e)
       for (const rec of e.pending) {
@@ -167,8 +178,15 @@ export class ProjectManager {
   create(projectId: string | undefined, spec: SessionSpec): Session | null {
     const id = projectId ?? this.activeId
     if (!id) return null
-    const mgr = this.managerFor(id) ?? this.activate(id)
+    const mgr = this.ensure(id)
     return mgr ? mgr.create(spec) : null
+  }
+
+  /** A project by id, or by name ignoring case — names are what people say. */
+  findProject(ref: string): ProjectInfo | undefined {
+    const all = this.list()
+    const want = ref.trim().toLowerCase()
+    return all.find((p) => p.id === ref) ?? all.find((p) => p.name.toLowerCase() === want)
   }
 
   /** Session lookup by globally unique id, across every live project. */

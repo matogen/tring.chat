@@ -1,5 +1,6 @@
-import type { AutoDecision, InboxDecision, InboxItem } from '@tring/shared/protocol'
+import type { AgentInfo, AutoDecision, InboxDecision, InboxItem } from '@tring/shared/protocol'
 import { age, answersFor, describe } from './inbox-view.ts'
+import { renderMarkdown } from './markdown.ts'
 
 const STORAGE_KEY = 'tring.orchestrator'
 /**
@@ -27,6 +28,8 @@ export interface InboxCallbacks {
   installHooks: () => Promise<void>
   /** The supervisor that approves routine permission prompts. */
   onAuto: (enabled: boolean) => void
+  /** The orchestrator agent: on or off, or start its Claude again. */
+  onAgent: (change: { enabled: boolean } | { restart: 'resume' | 'fresh' }) => void
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -66,6 +69,9 @@ export class InboxPanel {
   private readonly empty = el('div', 'inbox-empty')
   private readonly banner = el('div', 'inbox-banner')
   private readonly autoBox = el('input')
+  private readonly agentBox = el('input')
+  /** Says why the agent is not running, with the way to start it again. */
+  private readonly agentNote = el('div', 'inbox-banner agent-note')
   private readonly history = el('details', 'inbox-history')
   private readonly historyList = el('ol', 'inbox-history-list')
   private readonly historySummary = el('summary')
@@ -89,11 +95,21 @@ export class InboxPanel {
     autoLabel.title = 'A small Claude model approves routine permission prompts (tests, builds, edits inside the project). ' +
       'Pushes, deletes, sudo, secrets, publishing, MCP tools, plans and questions always come to you. It never denies.'
     autoLabel.append(this.autoBox, el('span', undefined, 'AI approves routine prompts'))
-    head.append(autoLabel)
+    // The agent's switch. Off, this panel is the inbox it always was; on, a
+    // Claude Code of its own takes the centre and the cards move beside it.
+    this.agentBox.type = 'checkbox'
+    this.agentBox.onchange = () => this.cb.onAgent({ enabled: this.agentBox.checked })
+    const agentLabel = el('label', 'inbox-auto inbox-agent')
+    agentLabel.title = 'A Claude Code session of its own in the centre. Tell it what you want; it reads every tile ' +
+      '(status, branch, screen, changes), prompts the agents in them and starts new ones. ' +
+      'Permission prompts stay here, with you.'
+    agentLabel.append(this.agentBox, el('span', undefined, 'Agent'))
+    head.append(agentLabel, autoLabel)
     this.history.hidden = true
     this.history.append(this.historySummary, this.historyList)
     this.banner.hidden = true
-    this.el.append(head, this.banner, this.history, this.list, this.empty)
+    this.agentNote.hidden = true
+    this.el.append(head, this.agentNote, this.banner, this.history, this.list, this.empty)
     this.el.addEventListener('keydown', (e) => this.onKey(e))
     cell.append(this.el)
   }
@@ -107,14 +123,42 @@ export class InboxPanel {
     try { return localStorage.getItem(STORAGE_KEY) === '1' } catch { return false }
   }
 
-  open(): void {
+  /** `takeKeys` false leaves the keyboard where it is: on the agent's terminal. */
+  open(takeKeys = true): void {
     this.shown = true
     this.el.hidden = false
     try { localStorage.setItem(STORAGE_KEY, '1') } catch { /* private mode */ }
     this.render()
     void this.checkHooks()
     this.ticker ??= setInterval(() => this.paintAges(), 5000)
-    this.focusCard(0, false)
+    if (takeKeys) this.focusCard(0, false)
+  }
+
+  /**
+   * Beside the agent's terminal rather than over it. The keyboard hint goes:
+   * the keys are the terminal's until a card is clicked.
+   */
+  setBeside(beside: boolean): void {
+    this.el.classList.toggle('beside', beside)
+  }
+
+  /** Mirrors the daemon's agent state: the switch, and a note when it is down. */
+  setAgent(agent: AgentInfo): void {
+    this.agentBox.checked = agent.enabled
+    const down = agent.enabled && (agent.error !== null || agent.id === null || agent.status === 'exited')
+    this.agentNote.hidden = !down
+    if (!down) return
+    if (agent.error) {
+      this.agentNote.replaceChildren(el('span', undefined, `The orchestrator agent could not start: ${agent.error}`))
+      return
+    }
+    this.agentNote.replaceChildren(
+      el('span', undefined, agent.id ? 'The orchestrator agent’s Claude has exited.' : 'The orchestrator agent is starting…'),
+      ...(agent.id ? [
+        button('Start again', 'primary', () => this.cb.onAgent({ restart: 'resume' }), 'Reopen the same conversation'),
+        button('New conversation', '', () => this.cb.onAgent({ restart: 'fresh' })),
+      ] : []),
+    )
   }
 
   close(): void {
@@ -173,18 +217,28 @@ export class InboxPanel {
   }
 
   private render(): void {
+    // Whatever has the keyboard — usually a half-typed reply — keeps it. A
+    // node the DOM moves loses focus, so cards already in place are never
+    // touched: a new card arriving is an insert, not a rebuild of the list.
+    const active = document.activeElement
+    const typing = active instanceof HTMLElement && this.list.contains(active) ? active : null
     const keep = new Set(this.items.map((i) => i.id))
     for (const [id, card] of this.cards) {
       if (!keep.has(id)) { card.root.remove(); this.cards.delete(id) }
     }
+    let prev: Node | null = null
     for (const item of this.items) {
       let card = this.cards.get(item.id)
       if (!card) {
         card = this.build(item)
         this.cards.set(item.id, card)
       }
-      this.list.append(card.root) // re-appending keeps the order oldest first
+      // Oldest first. Only a card that is not already where it belongs moves.
+      const want: Node | null = prev ? prev.nextSibling : this.list.firstChild
+      if (want !== card.root) this.list.insertBefore(card.root, want)
+      prev = card.root
     }
+    if (typing && typing.isConnected && document.activeElement !== typing) typing.focus({ preventScroll: true })
     this.empty.hidden = this.items.length > 0
     this.empty.textContent = 'Nothing is waiting on you. Cards appear here when an agent asks for permission, asks a question, or finishes.'
   }
@@ -277,7 +331,8 @@ export class InboxPanel {
 
     if (item.kind === 'permission') {
       if (text.note) root.append(el('p', 'card-note', text.note))
-      root.append(el(text.mono ? 'pre' : 'p', 'card-body', text.body))
+      // Commands and diffs stay verbatim; a plan is prose, written in Markdown.
+      root.append(text.mono ? el('pre', 'card-body', text.body) : renderMarkdown(text.body, 'card-body md'))
       if (text.tool) root.append(el('div', 'card-tool', text.tool))
 
       const reason = el('input', 'card-reason')
@@ -324,7 +379,7 @@ export class InboxPanel {
       for (const [qi, q] of qs.entries()) {
         const block = el('div', 'card-question')
         if (q.header) block.append(el('span', 'card-chip', q.header))
-        block.append(el('p', 'card-ask', q.question))
+        block.append(renderMarkdown(q.question, 'card-ask md'))
         const opts = el('div', 'card-options')
         for (const [oi, o] of q.options.entries()) {
           const b = el('button', 'option')
@@ -375,7 +430,8 @@ export class InboxPanel {
     }
 
     if (item.kind === 'reply') {
-      root.append(el('div', 'card-message', text.body))
+      // What the agent said, as it meant it to read: **bold** is bold.
+      root.append(renderMarkdown(text.body, 'card-message md'))
       const box = el('textarea', 'card-reply')
       box.rows = 2
       box.placeholder = 'Reply… (Enter sends, Shift+Enter for a new line)'

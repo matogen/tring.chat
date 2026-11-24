@@ -107,6 +107,12 @@ export class Session {
   title: string | null = null
   /** The conversation running here, kept so a restart can reopen it. */
   claude: ClaudeConversation | null = null
+  /** What the agent said when it last stopped (Stop hook), for the orchestrator. */
+  lastMessage: string | null = null
+  /** When the agent last stopped; 0 for never. */
+  stoppedAt = 0
+  /** When it was last given a prompt, typed or sent by the orchestrator; 0 for never. */
+  promptedAt = 0
 
   readonly tracker: ActivityTracker
 
@@ -295,6 +301,33 @@ export class Session {
    */
   snapshotNow(): ScreenSnapshot {
     return snapshot(this.term)
+  }
+
+  /**
+   * The last `lines` lines of screen and scrollback as plain text, trailing
+   * blank lines dropped. What the orchestrator agent reads a tile through.
+   */
+  recentText(lines: number): string {
+    const buf = this.term.buffer.active
+    const line = (y: number): string => buf.getLine(y)?.translateToString(true) ?? ''
+    // Counted back from the last line with anything on it: a shell that has
+    // just started fills one line at the top, and the rows below it are blank.
+    let end = buf.length
+    while (end > 0 && !line(end - 1).trim()) end--
+    const out: string[] = []
+    for (let y = Math.max(0, end - Math.max(1, lines)); y < end; y++) out.push(line(y))
+    return out.join('\n')
+  }
+
+  /** The agent stopped and said this; see `lastMessage`. */
+  said(text: string): void {
+    this.lastMessage = text
+    this.stoppedAt = Date.now()
+  }
+
+  /** A prompt went in; see `promptedAt`. */
+  prompted(): void {
+    this.promptedAt = Date.now()
   }
 
   /** Only when the screen actually changed, which is what keeps 16 tiles cheap. */

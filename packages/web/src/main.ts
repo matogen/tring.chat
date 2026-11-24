@@ -7,7 +7,7 @@ import './theme.css'
 import './style.css'
 
 import type {
-  ProjectInfo, ScreenSnapshot, ServerMessage, SessionInfo, UpdateInfo,
+  AgentInfo, ProjectInfo, ScreenSnapshot, ServerMessage, SessionInfo, UpdateInfo,
 } from '@tring/shared/protocol'
 import { actionForEvent, isPrefix, legendForSlot, slotForEvent } from '@tring/shared/keymap'
 import { api, apiPost, uploadFile, WsClient } from './ws-client.ts'
@@ -95,19 +95,34 @@ const inboxPanel = new InboxPanel(focusCell, {
   hooks: () => api<{ installed: boolean; path: string }>('/api/hooks'),
   installHooks: async () => { await apiPost('/api/hooks') },
   onAuto: (enabled) => ws.send({ type: 'autoAnswer', enabled }),
+  onAgent: (change) => ws.send({ type: 'agent', ...change }),
 })
 /** The first `inbox` after connecting is the backlog, not news worth a chime. */
 let inboxSeen = false
 
+/**
+ * The orchestrator agent (off unless switched on in the inbox). While
+ * orchestrator mode is up and the agent is running, the centre terminal is
+ * the agent's and the cards sit beside it; everything else about the ring —
+ * the focused tile, its slot, the picker — carries on underneath unchanged.
+ */
+let agent: AgentInfo = { enabled: false, id: null, status: null, error: null }
+/** The agent session the centre terminal is showing, or null for the focused tile. */
+let shownAgent: string | null = null
+const agentView = (): boolean => inboxPanel.isOpen && agent.enabled && agent.id !== null
+/** Whose output the centre terminal shows and whose PTY its keys go to. */
+const target = (): string | null => (agentView() ? agent.id : focusedId)
+
 const ws = new WsClient({
   onOpen: () => { hideToast(); reattach() },
   onClose: () => showToast('daemon disconnected — reconnecting'),
-  onOutput: (id, data) => { if (id === focusedId) focusTerm.write(data) },
+  onOutput: (id, data) => { if (id === target()) focusTerm.write(data) },
   onMessage: handleMessage,
 })
 
 focusTerm.onInput = (data) => {
-  if (focusedId) ws.send({ type: 'input', id: focusedId, data })
+  const id = target()
+  if (id) ws.send({ type: 'input', id, data })
 }
 
 // Drag a file onto the terminal and its path is typed into the prompt, the
@@ -115,7 +130,7 @@ focusTerm.onInput = (data) => {
 refuseStrayDrops(window)
 const pasteOpts: PasteOptions = {
   upload: uploadFile,
-  ready: () => focusedId !== null,
+  ready: () => target() !== null,
   insert: (text) => { focusTerm.paste(text); focusTerm.focus() },
   onError: showToast,
 }
@@ -151,7 +166,7 @@ const dictation = makeRecognition && new Dictation(makeRecognition, {
   onHeard: (text) => { heardEl.textContent = text || 'listening… tap the mic again to finish' },
   // A trailing space, so the next words spoken or typed do not run on. Not
   // focused: the keyboard stays as it was, up or down.
-  onText: (text) => { if (focusedId) focusTerm.paste(text + ' ') },
+  onText: (text) => { if (target()) focusTerm.paste(text + ' ') },
   onError: showToast,
 }, navigator.language)
 // The prefix never reaches the PTY, and nothing reaches it while an overlay
@@ -223,7 +238,7 @@ function handleMessage(msg: ServerMessage): void {
       break
     }
     case 'screen':
-      if (msg.id === focusedId) focusTerm.replay(msg.ansi)
+      if (msg.id === target()) focusTerm.replay(msg.ansi)
       break
     case 'snapshot': {
       lastShots.set(msg.id, msg.snapshot)
@@ -238,6 +253,12 @@ function handleMessage(msg: ServerMessage): void {
       break
     case 'autoAnswer':
       inboxPanel.setAuto(msg.enabled, msg.history)
+      break
+    case 'agent':
+      agent = msg.agent
+      inboxPanel.setAgent(agent)
+      applyCentre()
+      paintSwitcher()
       break
     case 'inbox': {
       const fresh = inboxPanel.setItems(msg.items)
@@ -455,21 +476,26 @@ function paintSwitcher(): void {
   const focused = focusedId ? sessionById(focusedId) ?? null : null
   const done = sessions().filter((s) => s.status === 'done').length
   const listening = dictation?.listening ?? false
+  const inbox = { open: inboxPanel.isOpen, count: inboxPanel.count }
+  const override = agentView() ? { key: '\u25c6', name: 'Orchestrator', status: agent.status ?? 'idle' } : null
   // Rebuilt only when what it shows changes. Every status message repaints,
   // and a button replaced between finger-down and finger-up is a lost tap.
-  const sig = `${focused?.id}|${focused?.status}|${focused?.name}|${focused?.title}|${done}|${listening}`
+  const sig = `${focused?.id}|${focused?.status}|${focused?.name}|${focused?.title}|${done}|${listening}` +
+    `|${inbox.open}|${inbox.count}|${override?.status}`
   if (sig === switcherSig) return
   switcherSig = sig
-  renderSwitcher(switcherEl, { focused, done, listening }, {
+  renderSwitcher(switcherEl, { focused, done, listening, inbox, override }, {
     onOpen: openPicker, onNext: nextDone, onEsc: escFromButton,
     onPaste: pasteFromButton, onAttach: pickFiles, onCopy: copyFromButton,
     onMic: dictation ? () => dictation.toggle() : undefined,
+    onInbox: toggleInbox,
   })
 }
 
 /** The switcher's Esc button: the key a phone keyboard does not have. */
 function escFromButton(): void {
-  if (focusedId) ws.send({ type: 'input', id: focusedId, data: '\x1b' })
+  const id = target()
+  if (id) ws.send({ type: 'input', id, data: '\x1b' })
 }
 
 /** The switcher's paste button: the clipboard if it can be read, a sheet if not. */
@@ -485,7 +511,7 @@ function pasteFromButton(): void {
 
 /** The switcher's copy button: the screen's links and text, as a sheet to copy from. */
 function copyFromButton(): void {
-  if (!focusedId) return
+  if (!target()) return
   const buffer = focusTerm.term.buffer.active
   ui.openCopySheet(
     { text: screenText(buffer, focusTerm.term.rows), links: recentLinks(buffer) },
@@ -521,14 +547,41 @@ function toggleInbox(): void {
 
 function openInbox(): void {
   showRing()
-  inboxPanel.open()
+  // With the agent running the keyboard goes to it, not to the first card.
+  inboxPanel.open(!(agent.enabled && agent.id))
+  applyCentre()
   paintBar()
+  paintSwitcher()
 }
 
 function closeInbox(): void {
   inboxPanel.close()
+  applyCentre()
   paintBar()
+  paintSwitcher()
   if (focusedId) focusTerm.focus()
+}
+
+/**
+ * Points the centre terminal at the agent or back at the focused tile, when
+ * that changes. The socket's focus moves with it, so output, replay and
+ * resizes follow; the tile's own focus is left alone to come back to.
+ */
+function applyCentre(): void {
+  const want = agentView() ? agent.id : null
+  focusCell.classList.toggle('agent-view', want !== null)
+  inboxPanel.setBeside(want !== null)
+  if (want === shownAgent) return
+  shownAgent = want
+  dictation?.cancel()
+  focusTerm.clear()
+  // After layout: the cards beside the terminal take width it must not count.
+  requestAnimationFrame(() => {
+    const { cols, rows } = focusTerm.fitNow()
+    ws.send({ type: 'focus', id: target(), cols, rows })
+    for (const t of thumbs.values()) t.refresh()
+    if (want) focusTerm.focus()
+  })
 }
 
 /** A card's Open: that session in the centre, across projects if need be. */
@@ -553,6 +606,18 @@ function openFromInbox(id: string): void {
  */
 function attachSession(id: string | null): void {
   if (id && id === focusedId) return
+  // The agent has the centre: the tile becomes the one to come back to, and
+  // nothing is sent or drawn for it until orchestrator mode closes.
+  if (agentView()) {
+    const s = id ? sessionById(id) : undefined
+    if (focusedId) prevFocusedId = focusedId
+    focusedId = s?.id ?? null
+    focusedSlot = s?.slot ?? null
+    diffPanel.setSession(focusedId)
+    if (s) lastFocused.set(s.projectId, s.id)
+    paintStatuses()
+    return
+  }
   // Words spoken to one session never land in the next one's prompt.
   dictation?.cancel()
   // Never aim at a session that is not in the state we hold — `prevFocusedId`
@@ -589,9 +654,10 @@ function attachSession(id: string | null): void {
  * after a gap in which output was missed.
  */
 function reattach(): void {
-  if (!focusedId) return
+  const id = target()
+  if (!id) return
   const { cols, rows } = focusTerm.fitNow()
-  ws.send({ type: 'focus', id: focusedId, cols, rows })
+  ws.send({ type: 'focus', id, cols, rows })
 }
 
 /** Follows the focus into whatever now holds its slot (see focus-target.ts). */
@@ -680,7 +746,7 @@ function activateProject(id: string): void {
   focusedId = null
   focusedSlot = null
   diffPanel.setSession(null)
-  focusTerm.clear()
+  if (!agentView()) focusTerm.clear()
   // The project's sessions arrive with the next `state`, so the session to
   // return to can only be chosen once they do.
   restoreFocusFor = id
@@ -821,8 +887,15 @@ document.addEventListener('keydown', (e) => {
  * A panel is the exception — its fields are the one place the keyboard is
  * meant to go instead — and so is the usage view, which has no terminal.
  */
-document.addEventListener('click', () => {
-  if (ui.isOpen() || viewMode !== 'ring' || !focusedId || inboxPanel.isOpen) return
+document.addEventListener('click', (e) => {
+  if (ui.isOpen() || viewMode !== 'ring') return
+  // Beside the agent, the cards keep the clicks made on them; anywhere else
+  // goes back to typing to the agent.
+  if (agentView()) {
+    if (!inboxPanel.el.contains(e.target as Node)) focusTerm.focus()
+    return
+  }
+  if (!focusedId || inboxPanel.isOpen) return
   focusTerm.focus()
 })
 
