@@ -277,3 +277,16 @@ describe('WorkflowRunner: the orchestrator\'s ticket tools', () => {
     return rig().then((r) => expect(() => r.runner.ticketStatus('CHV-1')).toThrow(ToolError))
   })
 })
+
+describe('WorkflowRunner: cards', () => {
+  it('turns each ticket\'s cards into inbox items, and shows none for a ticket cleaned up', async () => {
+    const r = await started()
+    await r.as('CHV-9 planner')('submit_plan', { plan })
+    const items = r.runner.cardItems()
+    expect(items.map((i) => [i.kind, i.id.split(':').slice(1).join(':')])).toEqual([['feature', 'feature'], ['workflow', 'plan:v1']])
+    expect(items[1]).toMatchObject({ ticketId: r.ticket().id, sessionId: '', title: expect.stringMatching(/Plan for CHV-9/) })
+    expect(items[1]!.actions!.map((a) => a.id)).toEqual(['approve', 'revise', 'cancel', 'agents'])
+    await r.store.update(r.ticket().id, (t) => { t.archived = true })
+    expect(r.runner.cardItems()).toEqual([])
+  })
+})

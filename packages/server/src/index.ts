@@ -362,7 +362,9 @@ async function main(): Promise<void> {
   // Rejected at the handshake, before Hub ever sees a socket: an origin that
   // is refused here never gets to send a `hello` at all.
   const wss = new WebSocketServer({ server, verifyClient: upgradeGuard(sameOrigin) })
-  const hub = new Hub({ pm, token, inbox, auto, agent })
+  const hub = new Hub({ pm, token, inbox, auto, agent, workflow: runner })
+  onTickets = () => inbox.syncWorkflow(runner.cardItems())
+  inbox.syncWorkflow(runner.cardItems(), false)
   hubRef = hub
   hub.attach(wss)
   // The hub owns both change callbacks; saving the cards rides along. Tiles

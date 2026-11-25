@@ -82,6 +82,8 @@ export type ClientMessage =
       /** Shown to the agent with a deny. */
       message?: string
     }
+  /** A button on a multi-PR workflow card, with the words or number it asked for. */
+  | { type: 'action'; itemId: string; actionId: string; text?: string; value?: number }
   /** Types a follow-up prompt into a session that finished and is waiting. */
   | { type: 'reply'; itemId: string; text: string }
   /** Turns the supervisor that approves routine permission prompts on or off. */
@@ -175,7 +177,21 @@ export type DiffResult =
  * hook payload says exactly which tool and which input, where a scraped
  * prompt is a guess that breaks with every TUI redesign.
  */
-export type InboxKind = 'permission' | 'question' | 'reply'
+export type InboxKind = 'permission' | 'question' | 'reply' | 'workflow' | 'feature'
+
+/**
+ * A button on a multi-PR workflow card. Its answer goes to the stack engine
+ * (an `action` message), never into a tile.
+ */
+export interface InboxAction {
+  id: string
+  label: string
+  primary?: boolean
+  /** Asks for words first: a reason to skip, the changes wanted. */
+  needsText?: boolean
+  /** Asks for a number first: the agents slider. */
+  needsValue?: { min: number; max: number; value: number }
+}
 
 /** `terminal` hands the prompt back to the session's own TUI unanswered. */
 export type InboxDecision = 'allow' | 'deny' | 'terminal'
@@ -213,6 +229,14 @@ export interface InboxItem {
    * was asking.
    */
   interrupted?: 'permission' | 'question'
+  /** workflow, feature: the ticket it is about. Its body is `message`, as markdown. */
+  ticketId?: string
+  /** workflow, feature: the card's heading. */
+  title?: string
+  /** workflow, feature: its buttons. */
+  actions?: InboxAction[]
+  /** workflow: the PR it is about. */
+  prIndex?: number
 }
 
 /**

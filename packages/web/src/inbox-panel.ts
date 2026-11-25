@@ -3,6 +3,7 @@ import { age, answersFor, describe } from './inbox-view.ts'
 import { renderMarkdown } from './markdown.ts'
 import { answerText, parseChoices } from './choices.ts'
 import { MOBILE_QUERY as PHONE } from './switcher.ts'
+import { cardSignature, orderCards, workflowCard } from './workflow-view.ts'
 import {
   clampSplit, MIN_CARDS_HEIGHT, MIN_CARDS_WIDTH, MIN_TERMINAL_HEIGHT, MIN_TERMINAL_WIDTH,
 } from './split.ts'
@@ -46,6 +47,8 @@ export interface InboxCallbacks {
   onLayout?: () => void
   /** The reply box's microphone (voice.ts): start or stop talking into `box`. */
   onVoice?: (box: HTMLTextAreaElement, button: HTMLButtonElement) => void
+  /** A button on a multi-PR workflow card, with the words or number it asked for. */
+  onAction?: (itemId: string, actionId: string, text?: string, value?: number) => void
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -94,6 +97,8 @@ interface Card {
   /** Only ever called with a fresh item for the same id, to refresh labels. */
   paintHeader: () => void
   key: (e: KeyboardEvent) => boolean
+  /** Workflow cards only: what it shows, so it is drawn again when that changes. */
+  sig?: string
 }
 
 /**
@@ -459,8 +464,16 @@ export class InboxPanel {
       if (!keep.has(id)) { card.root.remove(); this.cards.delete(id) }
     }
     let prev: Node | null = null
-    for (const item of this.items) {
+    for (const item of orderCards(this.items)) {
       let card = this.cards.get(item.id)
+      // A ticket's card shows its state, which moves on: redraw it, unless
+      // someone is typing in it (a reason, the changes they want).
+      if (card?.sig !== undefined && card.sig !== cardSignature(item) && !card.root.contains(document.activeElement)) {
+        const fresh = this.build(item)
+        card.root.replaceWith(fresh.root)
+        this.cards.set(item.id, fresh)
+        card = fresh
+      }
       if (!card) {
         card = this.build(item)
         this.cards.set(item.id, card)
@@ -475,6 +488,70 @@ export class InboxPanel {
     if (this.fullId && !this.cards.has(this.fullId)) this.fullGone()
     this.empty.hidden = this.items.length > 0
     this.empty.textContent = 'Nothing is waiting on you. Cards appear here when an agent asks for permission, asks a question, or finishes.'
+  }
+
+  /**
+   * A multi-PR workflow card: the ticket's status (pinned), or a call for the
+   * user — a plan, a finding, a restack, a push. Its buttons go to the stack
+   * engine; one that asks for words or a number opens a box for it first.
+   */
+  private buildWorkflow(item: InboxItem): Card {
+    const v = workflowCard(item)
+    const root = el('section', `card card-${item.kind}${v.pinned ? ' pinned' : ''}`)
+    root.tabIndex = 0
+    const head = el('header', 'card-head')
+    head.append(
+      el('span', 'card-slot', v.pinned ? '\u25c6' : '\u2022'),
+      el('span', 'card-heading', v.heading),
+      el('span', 'card-age', age(Date.now() - item.createdAt)),
+    )
+    const main = el('div', 'card-main')
+    main.append(...expandable(renderMarkdown(v.body, 'card-message md')))
+    const foot = el('div', 'card-foot')
+    const actions = el('div', 'card-actions')
+    const ask = el('div', 'card-ask')
+    ask.hidden = true
+    const send = (id: string, text?: string, value?: number): void => this.cb.onAction?.(item.id, id, text, value)
+    const plain: HTMLButtonElement[] = []
+    for (const b of v.buttons) {
+      const btn = button(b.label, b.primary ? 'primary' : '', () => {
+        if (b.input === 'none') return send(b.id)
+        ask.hidden = false
+        if (b.input === 'text') {
+          const box = el('input', 'card-reason')
+          box.placeholder = `${b.label.replace(/…$/, '')}: why? (Enter sends)`
+          box.onkeydown = (e) => {
+            if (e.key === 'Enter' && box.value.trim()) { e.preventDefault(); send(b.id, box.value.trim()) }
+            if (e.key === 'Escape') { e.preventDefault(); ask.hidden = true; root.focus() }
+          }
+          ask.replaceChildren(box, button('Send', 'primary', () => { if (box.value.trim()) send(b.id, box.value.trim()) }))
+          box.focus()
+        } else {
+          const range = el('input', 'card-range')
+          range.type = 'range'
+          range.min = String(b.min ?? 0)
+          range.max = String(b.max ?? 0)
+          range.value = String(b.value ?? b.min ?? 0)
+          const shown = el('b', 'card-range-value', range.value)
+          range.oninput = () => { shown.textContent = range.value }
+          ask.replaceChildren(el('span', undefined, b.label), range, shown, button('Set', 'primary', () => send(b.id, undefined, Number(range.value))))
+          range.focus()
+        }
+      })
+      if (b.input === 'none') plain.push(btn)
+      actions.append(btn)
+    }
+    foot.append(actions, ask)
+    root.append(head, main, foot)
+    return {
+      item, root, sig: cardSignature(item), paintHeader: () => {},
+      // 1-9 press the card's buttons that need nothing more, in order.
+      key: (e) => {
+        const n = Number(e.key)
+        if (n >= 1 && n <= 9 && plain[n - 1]) { plain[n - 1]!.click(); return true }
+        return false
+      },
+    }
   }
 
   private async checkHooks(): Promise<void> {
@@ -536,6 +613,7 @@ export class InboxPanel {
   }
 
   private build(item: InboxItem): Card {
+    if (item.kind === 'workflow' || item.kind === 'feature') return this.buildWorkflow(item)
     const text = describe(item)
     const root = el('section', `card card-${item.kind}`)
     root.tabIndex = 0

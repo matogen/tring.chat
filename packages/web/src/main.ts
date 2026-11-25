@@ -95,6 +95,9 @@ const inboxPanel = new InboxPanel(focusCell, {
   },
   onAnswer: (itemId, decision, extra) => ws.send({ type: 'answer', itemId, decision, ...extra }),
   onReply: (itemId, text) => ws.send({ type: 'reply', itemId, text }),
+  onAction: (itemId, actionId, text, value) => ws.send({
+    type: 'action', itemId, actionId, ...(text !== undefined ? { text } : {}), ...(value !== undefined ? { value } : {}),
+  }),
   onOpen: (id) => openFromInbox(id),
   hooks: () => api<{ installed: boolean; path: string }>('/api/hooks'),
   installHooks: async () => { await apiPost('/api/hooks') },

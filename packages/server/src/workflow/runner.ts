@@ -702,7 +702,22 @@ export class WorkflowRunner implements WorkflowTools {
     return `Done: ${action}${pr !== undefined ? ` ${localKeyOf(t, pr)}` : ''} on ${t.localKey}.`
   }
 
-  /** A card button pressed in the inbox (commit 6 wires the client to this). */
+/** Every ticket's cards, as inbox items (Inbox.syncWorkflow keeps the inbox to these). */
+  cardItems(): InboxItem[] {
+    return this.d.store.list().filter((t) => !t.archived).flatMap((t) => cardsFor(t).map((c): InboxItem => ({
+      id: c.id,
+      sessionId: '',
+      kind: c.kind === 'feature' ? 'feature' : 'workflow',
+      createdAt: 0,
+      ticketId: t.id,
+      title: c.title,
+      message: c.body,
+      actions: c.actions,
+      ...(c.prIndex !== undefined ? { prIndex: c.prIndex } : {}),
+    })))
+  }
+
+  /** A card button pressed in the inbox. */
   act(ticketId: string, cardId: string, action: string, text?: string, value?: number): Promise<string | null> {
     return this.run(ticketId, { type: 'action', cardId, action, ...(text ? { text } : {}), ...(value !== undefined ? { value } : {}) })
   }

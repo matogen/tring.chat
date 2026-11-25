@@ -1382,3 +1382,12 @@ body.card-full-open .term-voice { display: none; }
 .voice-rec .btn { justify-self: start; }
 .voice-pick { margin: 0; color: var(--text); font-weight: 600; }
 .voice-error { color: var(--amber); }
+
+/* ---- the multi-PR workflow's cards ---- */
+.card-feature { border-color: var(--emerald); }
+.card-feature .card-slot, .card-workflow .card-slot { color: var(--emerald); }
+.card-feature .card-heading, .card-workflow .card-heading { font-weight: 600; }
+.card-ask { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.card-ask .card-reason { flex: 1 1 200px; }
+.card-range { flex: 1 1 140px; accent-color: var(--emerald); }
+.card-range-value { min-width: 2ch; text-align: right; }

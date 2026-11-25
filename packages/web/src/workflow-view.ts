@@ -1,3 +1,4 @@
+import type { InboxItem } from '@tring/shared/protocol'
 import { MAX_AGENTS, MIN_AGENTS, type WorkflowSettings } from '@tring/shared/workflow'
 
 /** What Settings → Workflow shows: pure, so it is tested without a page (workflow-settings.ts draws it). */
@@ -50,3 +51,46 @@ export function workflowControls(s: WorkflowSettings): WorkflowControl[] {
   return out
 }
 
+
+/* ---------- the multi-PR workflow's cards ---------- */
+
+export interface WorkflowButton {
+  id: string
+  label: string
+  primary: boolean
+  /** What it asks for before it is sent: nothing, words, or a number. */
+  input: 'none' | 'text' | 'value'
+  min?: number
+  max?: number
+  value?: number
+}
+
+export interface WorkflowCardView {
+  /** The ticket's own status card: kept at the top. */
+  pinned: boolean
+  heading: string
+  /** Markdown. */
+  body: string
+  buttons: WorkflowButton[]
+}
+
+export function workflowCard(item: InboxItem): WorkflowCardView {
+  return {
+    pinned: item.kind === 'feature',
+    heading: item.title ?? 'Ticket',
+    body: item.message ?? '',
+    buttons: (item.actions ?? []).map((a): WorkflowButton => a.needsValue
+      ? { id: a.id, label: a.label, primary: !!a.primary, input: 'value', min: a.needsValue.min, max: a.needsValue.max, value: a.needsValue.value }
+      : { id: a.id, label: a.label, primary: !!a.primary, input: a.needsText ? 'text' : 'none' }),
+  }
+}
+
+/** Feature cards first, each ticket's progress at a glance; everything else in its own order. */
+export function orderCards(items: InboxItem[]): InboxItem[] {
+  return [...items.filter((i) => i.kind === 'feature'), ...items.filter((i) => i.kind !== 'feature')]
+}
+
+/** What a card shows; a card whose signature changed is drawn again. */
+export function cardSignature(item: InboxItem): string {
+  return JSON.stringify([item.kind, item.title ?? null, item.message ?? null, item.actions ?? null])
+}

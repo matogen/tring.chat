@@ -22,6 +22,8 @@ export interface HubOptions {
   auto?: AutoAnswerer | null
   /** The orchestrator agent; its terminal is reachable by id like any session's. */
   agent?: OrchestratorAgent | null
+  /** The multi-PR workflow: where its cards' buttons go. Resolves to why nothing happened, or null. */
+  workflow?: { act(ticketId: string, cardId: string, action: string, text?: string, value?: number): Promise<string | null> } | null
 }
 
 interface Client {
@@ -251,12 +253,28 @@ export class Hub {
       case 'respawn':
         pm.findManager(msg.id)?.respawn(msg.id)
         break
+      case 'action': {
+        const item = this.opts.inbox?.get(msg.itemId)
+        const wf = this.opts.workflow
+        if (!item?.ticketId || !wf || typeof msg.actionId !== 'string') break
+        const text = typeof msg.text === 'string' ? msg.text : undefined
+        const value = typeof msg.value === 'number' && Number.isFinite(msg.value) ? msg.value : undefined
+        void wf.act(item.ticketId, item.id, msg.actionId, text, value).then((notice) => {
+          // Pressed on a card that is no longer current: say so here only. The
+          // inbox broadcast with the current cards is already on its way.
+          if (notice) this.send(c, { type: 'error', message: notice })
+        })
+        break
+      }
+
       case 'answer': {
         const inbox = this.opts.inbox
         const item = inbox?.get(msg.itemId)
         // A card already settled elsewhere is not an error worth showing:
         // the inbox broadcast that removed it is already on its way.
         if (!inbox || !item) break
+        // A ticket's cards go away when the ticket moves on, not when dismissed.
+        if (item.kind === 'workflow' || item.kind === 'feature') break
         if (msg.decision !== 'allow' && msg.decision !== 'deny' && msg.decision !== 'terminal') break
         // A reply card can only be dismissed; its answer is typed, via `reply`.
         if (item.kind === 'reply' && msg.decision !== 'terminal') break

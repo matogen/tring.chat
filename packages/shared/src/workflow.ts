@@ -244,4 +244,6 @@ export interface Ticket {
   baseMoved: Record<string, { commits: number; conflict: boolean }>
   /** The planner's last errors, while it is revising. */
   planErrors: string[]
+  /** Cleaned up: kept for the record (Recent tickets), no longer on any card. */
+  archived?: boolean
 }

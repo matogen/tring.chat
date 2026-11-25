@@ -87,6 +87,37 @@ export class Inbox {
   }
 
   /**
+   * The multi-PR workflow's cards, made to match `items`: new ones added
+   * (and announced, for phone notifications), changed ones updated in place,
+   * ones no longer in `items` removed. They are derived from the tickets, so
+   * this is the only way they change. Every other card is left alone.
+   * `announce` false for the first sync after a restart: those were announced before it.
+   */
+  syncWorkflow(items: InboxItem[], announce = true): void {
+    const want = new Map(items.map((i) => [i.id, i]))
+    let changed = false
+    for (const [id, e] of this.entries) {
+      if (e.item.kind !== 'workflow' && e.item.kind !== 'feature') continue
+      if (!want.has(id)) { this.entries.delete(id); changed = true }
+    }
+    const added: InboxItem[] = []
+    for (const item of items) {
+      const had = this.entries.get(item.id)
+      if (!had) {
+        const fresh = { ...item, createdAt: this.now() }
+        this.entries.set(item.id, { item: fresh, settle: null })
+        added.push(fresh)
+        changed = true
+      } else if (JSON.stringify({ ...had.item, createdAt: 0 }) !== JSON.stringify({ ...item, createdAt: 0 })) {
+        had.item = { ...item, createdAt: had.item.createdAt }
+        changed = true
+      }
+    }
+    if (changed) this.onChange?.()
+    if (announce) for (const item of added) this.onAdded?.(item)
+  }
+
+  /**
    * Cards saved before a restart (card-store.ts), already re-pointed at their
    * tiles' new session ids. Ids are kept. Not announced through `onAdded`:
    * whoever was to be told about them was told before the restart.
