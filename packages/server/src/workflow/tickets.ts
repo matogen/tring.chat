@@ -87,12 +87,12 @@ export class TicketStore {
       maxAgents: spec.maxAgents,
       log: [],
       createdAt: this.now(),
-      laneChecks: {},
       amendments: [],
       baseMoved: {},
       planErrors: [],
       strategy: null,
       combinedPr: false,
+      integrationCheck: true,
       integration: {},
       combined: {},
       followUps: [],
@@ -253,6 +253,10 @@ function upgrade(t: Ticket): Ticket {
   const approved = t.prs.length > 0 || ['building', 'integrating', 'done'].includes(t.phase)
   t.strategy ??= approved ? 'stacked' : null
   t.combinedPr ??= false
+  // Before the integration check, lanes were checked whole; the check stands in for that.
+  t.integrationCheck ??= true
+  delete (t as { laneChecks?: unknown }).laneChecks
+  for (const p of t.prs) if ((p.work as string) === 'checking-lane') p.work = 'idle'
   t.integration ??= {}
   t.combined ??= {}
   t.followUps ??= []

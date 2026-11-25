@@ -102,6 +102,31 @@ ${RULES}
 Your local ticket, with the whole plan's context, is in \`stack_brief\`; the whole stack is in \`stack_status\`.`
 }
 
+/** The test commands of a repo's units still to land, each once. */
+export function repoTests(t: Ticket, repo: string): string[] {
+  const units = (t.plan?.prs ?? []).filter((p) => p.repo === repo && t.prs.find((x) => x.index === p.index)?.status !== 'merged')
+  return [...new Set(units.flatMap((p) => p.tests.run))]
+}
+
+export function integratorBrief(t: Ticket, repo: string, sha: string): string {
+  const units = (t.plan?.prs ?? []).filter((p) => p.repo === repo && t.prs.find((x) => x.index === p.index)?.status !== 'merged')
+  return `You run the integration check of ticket ${t.localKey} in ${repo}.
+
+Your worktree is at ${sha}: ${repo}'s base with every unit of the ticket merged in
+(${units.map((p) => `${localKeyOf(t, p.index)} ${p.title}`).join(', ')}). Each passed its own tests and review on its own;
+your job is to find out whether they pass together.
+
+Run each of these, then the repository's full test suite, and its integration and end-to-end suites if it has them:
+${list(repoTests(t, repo))}
+
+Your tile is read-only: do not edit, commit or push anything. If a command needs setup (installing dependencies,
+a build), do it without changing tracked files.
+
+Then call \`report_integration\` with sha "${sha}", passed true or false, the commands and their summary lines as
+evidence, and for a failure each failing test with the unit whose files it exercises when you can tell
+(failures: [{ test, unit }]). Then you are done; this tile closes.`
+}
+
 export function reviewerBrief(t: Ticket, pr: StackPr, round: number, range: { base: string; head: string }, recheck: Finding[]): string {
   const p = t.plan?.prs.find((x) => x.index === pr.index)
   return `You are a fresh reviewer for ${localKeyOf(t, pr.index)}: "${p?.title}" (ticket ${t.localKey} "${t.title}"), review round ${round}.
@@ -136,10 +161,6 @@ ${job.findings.map((f) => `- ${f.id} [${f.severity}]${f.file ? ` ${f.file}${f.li
 Resolve conflicts in files you own; if one is in a file you do not own, run \`git rebase --abort\` and call
 \`blocked\` naming the file. Then run your tests and call \`report\` with kind "restacked", the new HEAD sha and
 the evidence.${pr.prUrl ? ` Your PR (${pr.prUrl}) is already open: do not push the rebased branch until tring tells you to${job.retarget ? `; tring then points it at ${job.retarget}` : ''}.` : ''}`
-    case 'checkLane':
-      return `Every PR in your lane is reviewed: ${job.prs.map((i) => localKeyOf(t, i)).join(', ')}. Your branch holds all of them.
-Run every one of their test commands, plus the repository's full test suite, on your HEAD. Call \`report\` with kind
-"lane_passing" (and the sha and evidence) if all pass, or "lane_failing" with what failed.`
     case 'push':
       return pr.prUrl
         ? `The user says push. Push your rebased branch with \`git push --force-with-lease\`, then call \`open_pr\`

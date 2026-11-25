@@ -33,12 +33,12 @@ function ticket(maxAgents: number): Ticket {
   return {
     id: 't1', key: 'CHV-1', localKey: 'CHV-1', title: 'Orders', text: 'show orders', source: 'pasted', repos,
     projectId: 'p1', phase: 'planning', plan: null, prs: [], maxAgents, log: [], createdAt: 0,
-    laneChecks: {}, amendments: [], baseMoved: {}, planErrors: [],
-    strategy: null, combinedPr: false, integration: {}, combined: {}, followUps: [],
+    amendments: [], baseMoved: {}, planErrors: [],
+    strategy: null, combinedPr: false, integrationCheck: true, integration: {}, combined: {}, followUps: [],
   }
 }
 
-interface RigOptions { review?: boolean; restack?: 'offer' | 'auto'; maxAgents?: number; plan?: Plan }
+interface RigOptions { review?: boolean; restack?: 'offer' | 'auto'; maxAgents?: number; plan?: Plan; integration?: boolean }
 
 function rig(o: RigOptions = {}) {
   let now = 1_000
@@ -46,7 +46,7 @@ function rig(o: RigOptions = {}) {
   let quotaHigh = false
   const env = (): EngineEnv => ({
     now, quotaHigh,
-    settings: { requireFreshReview: o.review ?? true, autoRestack: o.restack ?? 'offer' },
+    settings: { requireFreshReview: o.review ?? true, autoRestack: o.restack ?? 'offer', integrationCheck: o.integration ?? true },
     repoIdForPath: (p) => p.split('/').pop()!,
   })
   const branchHead = (branch: string): string => {
@@ -92,6 +92,12 @@ function rig(o: RigOptions = {}) {
         range: { base: p.baseSha ?? '', head: p.headSha ?? '' },
         findings: findings.map((f) => ({ severity: f.severity, file: f.file ?? null, line: null, summary: f.summary })),
       })
+    },
+    /** The runner's side of a running integration check: merged as m-<repo>, then the integrator's verdict. */
+    integrate(repo: string, status: 'passing' | 'failing' = 'passing', evidence = 'all 40 pass'): StepResult {
+      if (t.integration[repo]?.status !== 'running') throw new Error(`no integration check running in ${repo}`)
+      r.send({ type: 'integration', repo, result: { status: 'merged', sha: `m-${repo}`, base: 'b0' } })
+      return r.send({ type: 'integration', repo, result: { status, sha: `m-${repo}`, evidence } })
     },
     /** Interface, tests, a clean review: the PR is review-clean at `sha`. */
     clean(i: number, sha: string) {
@@ -195,10 +201,7 @@ describe('stack engine: who starts when', () => {
     const plan = { ...ordersPlan(), interfaces: [], prs: [1, 2, 3, 4, 5, 6].map((i) => planned({ index: i })) }
     const r = rig({ review: false, plan })
     expect(jobs(r.approve().commands).map((j) => j.pr)).toEqual([1, 2, 3, 4])
-    // The freed agent tests PR 2's lane whole first: finished work before new work.
-    expect(jobs(r.pass(2, 'a2').commands)).toEqual([{ pr: 2, job: 'checkLane' }])
-    const next = r.send({ type: 'report', pr: 2, kind: 'lane_passing', sha: 'a2', evidence: 'ok', git: { head: 'a2', clean: true } })
-    expect(jobs(next.commands)).toEqual([{ pr: 5, job: 'code' }])
+    expect(jobs(r.pass(2, 'a2').commands)).toEqual([{ pr: 5, job: 'code' }])
   })
 
   it('puts a waiting reviewer before a new coder', () => {
@@ -474,17 +477,95 @@ describe('stack engine: lanes, pushes and merges', () => {
     return r
   }
 
-  it('tests each lane whole at its top once every PR in it is clean', () => {
-    const r = allClean()
+  it('tests each repo\'s units together once every one is clean: its base with each lane\'s top merged in', () => {
+    const r = rig()
+    r.approve()
+    r.clean(1, 'a1')
+    r.clean(2, 'b1')
+    // api is clean through its top (PR 2); web's only unit is still being written.
+    expect(r.t.integration['api']).toMatchObject({ status: 'running', tips: { 2: 'b1' } })
+    expect(r.t.integration['web']).toBeUndefined()
+    r.send({ type: 'report', pr: 3, kind: 'interface_ready' })
+    r.pass(3, 'c1')
+    expect(kinds(r.review(3).commands)).toContain('integrate')
+    expect(r.t.integration['web']).toMatchObject({ status: 'running', tips: { 3: 'c1' } })
     expect(r.t.phase).toBe('integrating')
-    expect(r.pr(2).work).toBe('checking-lane')
-    expect(r.pr(3).work).toBe('checking-lane')
     expect(r.card('push', 1)).toBeUndefined()
+  })
+
+  it('sends the integrate command with each tip\'s branch and head, and counts the integrator as an agent', () => {
+    const r = rig({ maxAgents: 4 })
+    r.approve()
+    r.clean(1, 'a1')
+    const res = (() => { r.send({ type: 'report', pr: 2, kind: 'interface_ready' }); r.pass(2, 'b1'); return r.review(2) })()
+    expect(res.commands).toContainEqual({ do: 'integrate', repo: 'api', tips: [{ unit: 2, branch: 'feature/CHV-1-2-orders-api', sha: 'b1' }] })
+  })
+
+  it('takes the integrator\'s verdict only for the merge it was given', () => {
+    const r = allClean()
+    r.send({ type: 'integration', repo: 'api', result: { status: 'merged', sha: 'm1', base: 'b0' } })
+    expect(r.send({ type: 'integration', repo: 'api', result: { status: 'passing', sha: 'old', evidence: 'ok' } }).notice).toMatch(/not old/)
+    r.send({ type: 'integration', repo: 'api', result: { status: 'passing', sha: 'm1', evidence: 'ok' } })
+    expect(r.t.integration['api']!.status).toBe('passing')
+    expect(r.card('push', 1)).toBeDefined()
+  })
+
+  it('on a failure, sends it to the unit the user picks, whose fix is reviewed and tested together again', () => {
+    const r = allClean()
+    r.integrate('api', 'failing', 'orders.e2e: 2 failed')
+    const card = r.card('integration')!
+    expect(card.body).toContain('orders.e2e: 2 failed')
+    expect(card.actions.map((a) => a.id)).toEqual(['route:1', 'route:2', 'retry', 'accept'])
+    expect(r.card('push', 1)).toBeUndefined()
+    const res = r.click('integration', 'route:2')
+    expect(jobs(res.commands)).toEqual([{ pr: 2, job: 'fix' }])
+    expect(r.pr(2).status).toBe('in-review')
+    expect(r.t.integration['api']!.status).toBe('waiting')
+    r.send({ type: 'resolveFinding', pr: 2, finding: '2.i1', outcome: 'fixed', note: 'fixed the join' })
+    r.pass(2, 'b2')
+    r.review(2)
+    expect(r.t.integration['api']).toMatchObject({ status: 'running', tips: { 2: 'b2' } })
+  })
+
+  it('runs a check again, or accepts a failure with a reason', () => {
+    const r = allClean()
+    r.integrate('api', 'failing')
+    expect(kinds(r.click('integration', 'retry').commands)).toContain('integrate')
+    r.integrate('api', 'failing')
+    expect(r.click('integration', 'accept').notice).toMatch(/needs a reason/)
+    r.click('integration', 'accept', { text: 'flaky e2e, tracked in CHV-10' })
+    expect(r.t.integration['api']).toMatchObject({ status: 'passing', evidence: expect.stringMatching(/flaky e2e/) })
+    expect(r.card('push', 1)).toBeDefined()
+  })
+
+  it('names a conflict between units, and runs it again on request', () => {
+    const r = allClean()
+    r.send({ type: 'integration', repo: 'api', result: { status: 'conflict', units: [1, 2], files: ['package-lock.json'] } })
+    const card = r.card('integration')!
+    expect(card.title).toMatch(/CHV-1-1 and CHV-1-2 conflict/)
+    expect(card.body).toContain('package-lock.json')
+    expect(kinds(r.click('integration', 'retry').commands)).toContain('integrate')
+  })
+
+  it('tests again when the base moves, and after any head moves', () => {
+    const r = allClean()
+    r.integrate('api')
+    expect(kinds(r.send({ type: 'baseMoved', repo: 'api', commits: 2, conflict: false }).commands)).toContain('integrate')
+    r.integrate('api')
+    r.send({ type: 'headMoved', pr: 2, sha: 'b9' })
+    expect(r.card('push', 1)).toBeUndefined()
+  })
+
+  it('pushes without it when the integration check is off', () => {
+    const r = allClean({ integration: false })
+    expect(r.t.integration).toEqual({})
+    expect(r.card('push', 1)).toBeDefined()
+    expect(checklist(r.t)).not.toHaveProperty('tested together')
   })
 
   it('offers a push bottom up once the lane passes, and lets exactly that push through', () => {
     const r = allClean()
-    r.send({ type: 'report', pr: 2, kind: 'lane_passing', sha: 'b1', evidence: 'all 40 pass', git: { head: 'b1', clean: true } })
+    r.integrate('api')
     expect(r.card('push', 1)).toBeDefined()
     expect(r.card('push', 2)).toBeUndefined()
     const push = r.click('push', 'push', { pr: 1 })
@@ -498,7 +579,7 @@ describe('stack engine: lanes, pushes and merges', () => {
 
   it('pushes a whole lane in order from the feature card', () => {
     const r = allClean()
-    r.send({ type: 'report', pr: 2, kind: 'lane_passing', sha: 'b1', evidence: 'ok', git: { head: 'b1', clean: true } })
+    r.integrate('api')
     const res = r.click('feature', 'push-stack:1')
     expect(jobs(res.commands)).toEqual([{ pr: 1, job: 'push' }])
     const next = r.send({ type: 'report', pr: 1, kind: 'pushed', url: 'u1' })
@@ -507,7 +588,7 @@ describe('stack engine: lanes, pushes and merges', () => {
 
   it('will not push a lane that would conflict with its moved base, and offers to update it', () => {
     const r = allClean()
-    r.send({ type: 'report', pr: 2, kind: 'lane_passing', sha: 'b1', evidence: 'ok', git: { head: 'b1', clean: true } })
+    r.integrate('api')
     r.send({ type: 'baseMoved', repo: 'api', commits: 3, conflict: true })
     expect(r.card('push', 1)).toBeUndefined()
     const res = r.click('feature', 'update:api')
@@ -516,7 +597,7 @@ describe('stack engine: lanes, pushes and merges', () => {
 
   it('after a merge restacks the PR above onto the base and retargets its PR; all merged is done', () => {
     const r = allClean({ restack: 'auto' })
-    r.send({ type: 'report', pr: 2, kind: 'lane_passing', sha: 'b1', evidence: 'ok', git: { head: 'b1', clean: true } })
+    r.integrate('api')
     r.click('feature', 'push-stack:1')
     r.send({ type: 'report', pr: 1, kind: 'pushed', url: 'u1' })
     r.send({ type: 'report', pr: 2, kind: 'pushed', url: 'u2' })
@@ -530,13 +611,16 @@ describe('stack engine: lanes, pushes and merges', () => {
 
   it('asks before pushing a pushed PR\'s restacked branch, then pushes it to the same PR', () => {
     const r = allClean({ restack: 'auto' })
-    r.send({ type: 'report', pr: 2, kind: 'lane_passing', sha: 'b1', evidence: 'ok', git: { head: 'b1', clean: true } })
+    r.integrate('api')
     r.click('feature', 'push-stack:1')
     r.send({ type: 'report', pr: 1, kind: 'pushed', url: 'u1' })
     r.send({ type: 'report', pr: 2, kind: 'pushed', url: 'u2' })
     r.click('feature', 'merged:1')
     expect(r.card('push', 2)).toBeUndefined()
     r.send({ type: 'report', pr: 2, kind: 'restacked', sha: 'b2', evidence: 'ok', git: { head: 'b2', clean: true, diffChanged: false } })
+    // The rebased branch is tested on the new base before it may be pushed.
+    expect(r.card('push', 2)).toBeUndefined()
+    r.integrate('api')
     const card = r.card('push', 2)!
     expect(card.title).toMatch(/rebased branch/)
     const push = r.click('push', 'push', { pr: 2 })
@@ -548,7 +632,7 @@ describe('stack engine: lanes, pushes and merges', () => {
 
   it('logs a PR left to open by hand as such', () => {
     const r = allClean()
-    r.send({ type: 'report', pr: 2, kind: 'lane_passing', sha: 'b1', evidence: 'ok', git: { head: 'b1', clean: true } })
+    r.integrate('api')
     r.click('push', 'push', { pr: 1 })
     r.send({ type: 'report', pr: 1, kind: 'pushed', url: 'https://bitbucket.org/w/r/pull-requests/new?source=x', byHand: true })
     expect(r.t.log.at(-1)!.text).toMatch(/open its PR by hand/)
@@ -567,7 +651,7 @@ describe('stack engine: lanes, pushes and merges', () => {
   it('ticks the checklist as the stack gets there', () => {
     const r = allClean()
     expect(checklist(r.t)).toEqual({
-      'tests written': true, 'tests passing': true, 'review clean': true, 'docs updated': true, 'CI green': null,
+      'tests written': true, 'tests passing': true, 'review clean': true, 'docs updated': true, 'tested together': null, 'CI green': null,
     })
   })
 

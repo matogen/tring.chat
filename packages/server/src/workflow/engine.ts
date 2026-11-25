@@ -45,8 +45,10 @@ export type EngineEvent =
   | { type: 'action'; cardId: string; action: string; text?: string; value?: number }
   | { type: 'worktree'; pr: number; path: string; baseSha: string }
   | { type: 'report'; pr: number; kind: 'interface_ready' }
-  | { type: 'report'; pr: number; kind: 'tests_passing' | 'restacked' | 'lane_passing'; sha: string; evidence: string; git: GitCheck }
-  | { type: 'report'; pr: number; kind: 'tests_failing' | 'lane_failing'; evidence: string }
+  | { type: 'report'; pr: number; kind: 'tests_passing' | 'restacked'; sha: string; evidence: string; git: GitCheck }
+  | { type: 'report'; pr: number; kind: 'tests_failing'; evidence: string }
+  /** The integration check of a repo: merged (tested next), conflicting, its result, or tring could not run it. */
+  | { type: 'integration'; repo: string; result: IntegrationResult }
   /** byHand: tring could not open the PR, and url is the link for the user to open it. */
   | { type: 'report'; pr: number; kind: 'pushed'; url: string; byHand?: boolean }
   | { type: 'blocked'; pr: number; reason: string }
@@ -62,9 +64,15 @@ export type EngineEvent =
   | { type: 'activity'; pr: number }
   | { type: 'tick' }
 
+export type IntegrationResult =
+  | { status: 'merged'; sha: string; base: string; worktree?: string }
+  | { status: 'conflict'; units: number[]; files: string[] }
+  | { status: 'passing' | 'failing'; sha: string; evidence: string }
+  | { status: 'error'; why: string }
+
 export interface EngineEnv {
   now: number
-  settings: Pick<WorkflowSettings, 'requireFreshReview' | 'autoRestack'>
+  settings: Pick<WorkflowSettings, 'requireFreshReview' | 'autoRestack' | 'integrationCheck'>
   /** Claude usage is past 90 %: no new agent starts. */
   quotaHigh: boolean
   repoIdForPath: (path: string) => string
@@ -80,7 +88,6 @@ export type Job =
   | { kind: 'fix'; findings: Finding[] }
   /** Rebase onto `onto` from `from` (the old base), run its tests, report restacked; retarget its PR when `retarget`. */
   | { kind: 'restack'; onto: string; from: string; retarget: string | null }
-  | { kind: 'checkLane'; prs: number[] }
   | { kind: 'push'; base: string }
 
 /** A message for an agent that is not a piece of work: delivered when it is next idle. */
@@ -108,6 +115,8 @@ export type Command =
   | { do: 'closeCoder'; pr: number }
   /** The coder's tile again, with a fresh conversation and its brief. */
   | { do: 'freshCoder'; pr: number }
+  /** Merge `tips` (each unit's branch at its head) onto the repo's base and have an integrator test the result. */
+  | { do: 'integrate'; repo: string; tips: Array<{ unit: number; branch: string; sha: string }> }
   | { do: 'closeAll' }
 
 export interface StepResult {
@@ -241,9 +250,15 @@ function apply(t: Ticket, e: EngineEvent, env: EngineEnv, out: Command[]): strin
       return null
     }
 
-    case 'baseMoved':
+    case 'baseMoved': {
       t.baseMoved[e.repo] = { commits: e.commits, conflict: e.conflict }
+      // What was tested together no longer sits on the base as it is: test it again.
+      const i = t.integration[e.repo]
+      if (e.commits > 0 && i && i.status !== 'running') i.status = 'waiting'
       return null
+    }
+
+    case 'integration': return integration(t, e.repo, e.result, env)
 
     case 'merged': {
       const pr = prOf(t, e.pr)
@@ -327,16 +342,13 @@ function report(t: Ticket, e: Extract<EngineEvent, { type: 'report' }>, env: Eng
     }
 
     case 'tests_failing':
-    case 'lane_failing':
-      pr.flags.failing = e.kind === 'tests_failing'
-      if (e.kind === 'lane_failing') pr.flags.blocked = `the whole lane's tests fail: ${e.evidence}`
-      if (e.kind === 'tests_failing' && atLeast(pr, 'tests-passing') && pr.status !== 'pushed' && pr.status !== 'merged') {
+      pr.flags.failing = true
+      if (atLeast(pr, 'tests-passing') && pr.status !== 'pushed' && pr.status !== 'merged') {
         pr.status = 'coding'
         pr.work = 'coding'
         pr.review = null
       }
-      if (pr.work === 'checking-lane') pr.work = 'idle'
-      log(t, env, pr.index, 'coder', `${e.kind === 'lane_failing' ? 'lane' : 'tests'} failing: ${e.evidence}`)
+      log(t, env, pr.index, 'coder', `tests failing: ${e.evidence}`)
       return null
 
     case 'restacked': {
@@ -355,17 +367,6 @@ function report(t: Ticket, e: Extract<EngineEvent, { type: 'report' }>, env: Eng
       log(t, env, pr.index, 'coder', `restacked to ${e.git.head.slice(0, 8)}${e.git.diffChanged ? ' (its diff changed)' : ''}: ${e.evidence}`)
       if (pr.status === 'pushed' && pr.headSha !== e.git.head) pr.flags.repush = true
       if (pr.headSha !== e.git.head) moved(t, pr, e.git.head, true, env, out)
-      return null
-    }
-
-    case 'lane_passing': {
-      if (pr.work !== 'checking-lane') return 'no lane check was asked for'
-      const why = verified(e)
-      if (why) return reject(why)
-      if (pr.headSha !== e.git.head) return reject('the lane moved while it was checked; check it again')
-      t.laneChecks[pr.index] = e.git.head
-      pr.work = 'idle'
-      log(t, env, pr.index, 'coder', `the whole lane passes on ${e.sha.slice(0, 8)}: ${e.evidence}`)
       return null
     }
 
@@ -419,6 +420,36 @@ function review(t: Ticket, e: Extract<EngineEvent, { type: 'review' }>, env: Eng
   }
   log(t, env, pr.index, 'reviewer', `round ${round}: ${held.length} held, ${fresh.length - held.length} advisory finding(s)`)
   return null
+}
+
+/** The integration check's progress, as the runner reports it. */
+function integration(t: Ticket, repo: string, r: IntegrationResult, env: EngineEnv): string | null {
+  const i = t.integration[repo]
+  if (!i || i.status !== 'running') return `no integration check is running in ${repo}`
+  switch (r.status) {
+    case 'merged':
+      i.sha = r.sha
+      i.base = r.base
+      if (r.worktree) i.worktree = r.worktree
+      return null
+    case 'conflict':
+      i.status = 'conflict'
+      i.conflict = { units: r.units, files: r.files }
+      log(t, env, null, 'tring', `integration of ${repo}: ${r.units.map((u) => `${t.localKey}-${u}`).join(' and ')} conflict in ${r.files.join(', ')}`)
+      return null
+    case 'error':
+      i.status = 'failing'
+      i.evidence = `tring could not run it: ${r.why}`
+      log(t, env, null, 'tring', `integration of ${repo}: ${i.evidence}`)
+      return null
+    case 'passing':
+    case 'failing':
+      if (r.sha !== i.sha) return `tring is checking ${i.sha?.slice(0, 8) ?? 'another merge'} in ${repo}, not ${r.sha.slice(0, 8)}`
+      i.status = r.status
+      i.evidence = r.evidence
+      log(t, env, null, 'integrator', `${repo} ${r.status === 'passing' ? 'passes' : 'fails'} together on ${r.sha.slice(0, 8)}: ${r.evidence}`)
+      return null
+  }
 }
 
 /** A head moved: the PRs on it need a restack. `cascade`: it moved because the user's restack reached it. */
@@ -519,6 +550,35 @@ function act(t: Ticket, e: Extract<EngineEvent, { type: 'action' }>, env: Engine
       return null
     case 'merged':
       return apply(t, { type: 'merged', pr: Number(arg) }, env, out)
+    case 'route': {
+      // The integration failure goes to one unit as a held finding to fix, and its fix is reviewed again.
+      const i = t.integration[card.repo!]!
+      const n = (argPr!.review?.findings.filter((f) => f.id.startsWith(`${argPr!.index}.i`)).length ?? 0) + 1
+      const f: Finding = {
+        id: `${argPr!.index}.i${n}`, severity: 'high', file: null, line: null,
+        summary: `The ${card.repo} units fail when tested together: ${i.evidence ?? ''}`, holds: true,
+        resolution: 'fix-requested', routedTo: null,
+      }
+      argPr!.review = argPr!.review
+        ? { ...argPr!.review, findings: [...argPr!.review.findings, f] }
+        : { round: 0, reviewer: null, range: { base: argPr!.baseSha ?? '', head: argPr!.headSha ?? '' }, findings: [f] }
+      if (env.settings.requireFreshReview && argPr!.status === 'review-clean') argPr!.status = 'in-review'
+      i.status = 'waiting'
+      log(t, env, argPr!.index, 'user', `fix the ${card.repo} integration failure`)
+      return null
+    }
+    case 'retry':
+      t.integration[card.repo!]!.status = 'waiting'
+      t.integration[card.repo!]!.conflict = null
+      log(t, env, null, 'user', `run the ${card.repo} integration check again`)
+      return null
+    case 'accept': {
+      const i = t.integration[card.repo!]!
+      i.status = 'passing'
+      i.evidence = `accepted by the user: ${text}`
+      log(t, env, null, 'user', `accepted the ${card.repo} integration failure: ${text}`)
+      return null
+    }
     case 'update': {
       const repo = arg!
       for (const root of t.prs.filter((p) => plannedOf(t, p)?.repo === repo && parentOf(t, p) === null)) {
@@ -537,6 +597,8 @@ function approvePlan(t: Ticket, env: EngineEnv, out: Command[]): string | null {
   const plan = t.plan!
   t.phase = 'building'
   t.strategy = 'stacked'
+  t.integrationCheck = env.settings.integrationCheck
+  t.integration = {}
   t.prs = plan.prs.map((p) => ({
     index: p.index,
     branch: env.branchFor?.(t, p) ?? defaultBranch(t, p),
@@ -595,7 +657,8 @@ function settle(t: Ticket): void {
 
 /** How many of this ticket's agents are working now. */
 export function working(t: Ticket): number {
-  return t.prs.filter((p) => p.work !== 'idle').length + t.prs.filter((p) => p.reviewing).length
+  return t.prs.filter((p) => p.work !== 'idle').length + t.prs.filter((p) => p.reviewing).length +
+    Object.values(t.integration).filter((i) => i.status === 'running').length
 }
 
 /**
@@ -663,15 +726,23 @@ function schedule(t: Ticket, env: EngineEnv, out: Command[]): void {
     work(p, 'fixing', { kind: 'fix', findings: fixes })
   }
 
-  // A lane whose every PR is review-clean is tested whole, at its top.
-  for (const leaf of order.filter((p) => !childrenOf(t, p.index).some((c) => c.status !== 'merged'))) {
-    if (!ready(leaf) || leaf.work !== 'idle' || leaf.reviewing || !leaf.headSha) continue
-    const lane = lanePrs(t, leaf.index, true)
-    if (!lane.every((p) => atLeast(p, 'review-clean'))) continue
-    if (lane.some((p) => p.restack || p.work !== 'idle')) continue
-    if (t.laneChecks[leaf.index] === leaf.headSha || lane.every((p) => atLeast(p, 'pushed'))) continue
-    if (!take(!leaf.coder)) continue
-    work(leaf, 'checking-lane', { kind: 'checkLane', prs: lane.filter((p) => p.status !== 'merged').map((p) => p.index) })
+  // A repo whose units are all review-clean is tested together: its base with every tip merged in.
+  if (t.integrationCheck) {
+    for (const repo of t.repos) {
+      const units = unitsIn(t, repo.id)
+      if (!units.length || units.some((p) => !ready(p) || !atLeast(p, 'review-clean') || p.reviewing || p.work !== 'idle' || p.restack)) continue
+      const tips = tipsOf(t, repo.id)
+      if (!tips) continue
+      const i = t.integration[repo.id]
+      if (i && i.status !== 'waiting' && sameTips(i.tips, tips)) continue
+      if (i?.status === 'running') continue
+      if (!take(true)) continue
+      t.integration[repo.id] = { status: 'running', base: null, tips, sha: null, conflict: null, evidence: null, worktree: i?.worktree ?? null }
+      out.push({
+        do: 'integrate', repo: repo.id,
+        tips: Object.entries(tips).map(([u, sha]) => ({ unit: Number(u), branch: prOf(t, Number(u))!.branch, sha })),
+      })
+    }
   }
 
   // Pushes the user allowed, bottom up.
@@ -711,8 +782,10 @@ export interface CardAction {
 
 export interface CardSpec {
   id: string
-  kind: 'plan' | 'finding' | 'review' | 'restack' | 'blocked' | 'push' | 'amendment' | 'feature'
+  kind: 'plan' | 'finding' | 'review' | 'restack' | 'blocked' | 'push' | 'amendment' | 'feature' | 'integration'
   prIndex?: number
+  /** An integration card's repo. */
+  repo?: string
   findingId?: string
   amendment?: string
   title: string
@@ -798,6 +871,32 @@ export function cardsFor(t: Ticket): CardSpec[] {
         })
     }
   }
+  for (const [repo, i] of Object.entries(t.integration)) {
+    const units = unitsIn(t, repo)
+    if (i.status === 'failing') {
+      cards.push({
+        id: `${t.id}:integration:${repo}:${(i.sha ?? 'none').slice(0, 12)}`, kind: 'integration', repo,
+        title: `${repo}: the units fail together`,
+        body: `${i.evidence ?? ''}\n\nEach passes on its own; together they do not. Send it to the unit that should fix it, ` +
+          'run the check again, or accept it with a reason.',
+        actions: [
+          ...units.map((p, n) => ({ id: `route:${p.index}`, label: `${t.localKey}-${p.index} fixes it`, ...(n === 0 ? { primary: true } : {}) })),
+          { id: 'retry', label: 'Run it again' },
+          { id: 'accept', label: 'Accept with reason…', needsText: true },
+        ],
+      })
+    }
+    if (i.status === 'conflict' && i.conflict) {
+      const who = i.conflict.units.map((u) => `${t.localKey}-${u}`).join(' and ')
+      cards.push({
+        id: `${t.id}:conflict:${repo}:${i.conflict.units.join('-')}`, kind: 'integration', repo,
+        title: `${repo}: ${who} conflict`,
+        body: `Merged together, ${who} conflict in ${i.conflict.files.join(', ')}. One unit should own those files: ` +
+          'tell the other one (or its owner) what to change, then run the check again.',
+        actions: [{ id: 'retry', label: 'Run it again', primary: true }],
+      })
+    }
+  }
   return cards
 }
 
@@ -873,8 +972,16 @@ export function checklist(t: Ticket): Record<string, boolean | null> {
       const pr = owner && prOf(t, owner.index)
       return !!pr && atLeast(pr, 'review-clean')
     }),
+    ...(t.integrationCheck ? { 'tested together': integrated(t) } : {}),
     'CI green': ci(t),
   }
+}
+
+/** Every repo's units pass together on their heads; false when one fails or conflicts. */
+function integrated(t: Ticket): boolean | null {
+  const repos = t.repos.filter((r) => unitsIn(t, r.id).length)
+  if (repos.some((r) => ['failing', 'conflict'].includes(t.integration[r.id]?.status ?? ''))) return false
+  return repos.length > 0 && repos.every((r) => integrationPassing(t, r.id)) ? true : null
 }
 
 /** Green when every pushed PR's CI is; red when any is; unknown until the forge says. */
@@ -960,17 +1067,50 @@ function leavesOver(t: Ticket, p: StackPr): StackPr[] {
   return kids.length ? kids.flatMap((c) => leavesOver(t, c)) : [p]
 }
 
-/** Reviewed, every lane through it tested whole (or pushed and since restacked), what it sits on pushed, and no conflict with a moved base. */
+/**
+ * Reviewed (or pushed and since restacked), its repo's integration check
+ * passing on the heads as they are, what it sits on pushed, and no conflict
+ * with a moved base.
+ */
 function pushable(t: Ticket, p: StackPr): boolean {
   if (p.restack || p.flags.blocked) return false
-  // A pushed PR's rebased branch: its restack report carried its tests.
   if (p.status === 'pushed' && !p.flags.repush) return false
   if (p.status !== 'review-clean' && p.status !== 'pushed') return false
-  if (p.status === 'review-clean' && !leavesOver(t, p).every((leaf) => leaf.headSha && t.laneChecks[leaf.index] === leaf.headSha)) return false
+  const repo = plannedOf(t, p)?.repo
+  if (!repo) return false
+  if (t.integrationCheck && !integrationPassing(t, repo)) return false
   const parent = parentOf(t, p)
   if (parent && !atLeast(parent, 'pushed')) return false
-  const repo = plannedOf(t, p)?.repo
-  return !(repo && t.baseMoved[repo]?.conflict)
+  return !t.baseMoved[repo]?.conflict
+}
+
+/** A repo's units still to land. */
+const unitsIn = (t: Ticket, repo: string): StackPr[] =>
+  t.prs.filter((p) => p.status !== 'merged' && plannedOf(t, p)?.repo === repo)
+
+/**
+ * What a repo's integration check merges: every unit nothing unmerged sits
+ * on (each lane's top; for independent units, every unit), at its head.
+ * Null while one has no head yet.
+ */
+function tipsOf(t: Ticket, repo: string): Record<number, string> | null {
+  const tips: Record<number, string> = {}
+  for (const p of unitsIn(t, repo)) {
+    if (childrenOf(t, p.index).some((c) => c.status !== 'merged')) continue
+    if (!p.headSha) return null
+    tips[p.index] = p.headSha
+  }
+  return tips
+}
+
+const sameTips = (a: Record<number, string>, b: Record<number, string>): boolean =>
+  Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([k, v]) => b[Number(k)] === v)
+
+/** The repo's units passed together, on the heads they have now. */
+function integrationPassing(t: Ticket, repo: string): boolean {
+  const i = t.integration[repo]
+  const tips = tipsOf(t, repo)
+  return !!i && i.status === 'passing' && !!tips && sameTips(i.tips, tips)
 }
 
 /** The PR that owns `file`, when it is not `pr` itself: findings there go to it. */

@@ -78,6 +78,14 @@ describe('phone notifications for workflow cards', () => {
     expect(JSON.stringify(sent)).not.toContain('secret')
   })
 
+  it('says an integration check failed, or units conflict, and nothing more', async () => {
+    const { n, sent } = notifier([phone])
+    await n.fire(wf('t1:integration:api:m1abc', { title: 'api: the units fail together', message: 'secret.e2e failed' }))
+    await n.fire(wf('t1:conflict:api:1-2', { title: 'api: CHV-9-1 and CHV-9-2 conflict' }))
+    expect(sent.map((s) => s.body)).toEqual(['An integration check failed', 'Units conflict when merged together'])
+    expect(JSON.stringify(sent)).not.toContain('secret')
+  })
+
   it('never buzzes for a ticket\'s status card, and follows the question setting', async () => {
     const { n, sent } = notifier([phone, { ...phone, prefs: { ...DEFAULT_PREFS, question: false } }])
     await n.fire(wf('t1:feature', { kind: 'feature' }))

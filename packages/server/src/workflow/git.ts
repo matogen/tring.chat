@@ -161,6 +161,54 @@ export class StackGit {
     return r.ok ? null : lastLines(r.err) || 'git branch -d failed'
   }
 
+  /**
+   * The integration check's merge: `origin/<base>` (or the local base, without
+   * a remote) with every tip merged in, in order, as plain objects
+   * (merge-tree, commit-tree), so no branch moves. On a clean merge the
+   * result is checked out, detached, in a worktree kept for the purpose
+   * (`name`), reused on the next run. On a conflict, the units whose changes
+   * meet in the conflicting files, and nothing is checked out.
+   */
+  async integrate(repo: string, spec: { base: string; tips: Array<{ unit: number; branch: string }>; name: string }):
+    Promise<{ sha: string; base: string; worktree: string } | { conflict: { units: number[]; files: string[] } }> {
+    let base = ''
+    for (const ref of [`refs/remotes/origin/${spec.base}`, `refs/heads/${spec.base}`]) {
+      const r = await git(repo, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])
+      if (r.ok) { base = r.out.trim(); break }
+    }
+    if (!base) throw new Error(`${spec.base} does not exist in ${repo}`)
+    const touched = new Map<number, string[]>()
+    const env = { GIT_AUTHOR_NAME: 'tring', GIT_AUTHOR_EMAIL: 'tring@localhost', GIT_COMMITTER_NAME: 'tring', GIT_COMMITTER_EMAIL: 'tring@localhost' }
+    let at = base
+    for (const tip of spec.tips) {
+      if (tip.branch.startsWith('-')) throw new Error(`"${tip.branch}" is not a branch`)
+      const diff = await git(repo, ['diff', '--name-only', `${base}...${tip.branch}`])
+      touched.set(tip.unit, diff.out.split(/\r?\n/).filter(Boolean))
+      const m = await git(repo, ['merge-tree', '--write-tree', '--name-only', '--no-messages', at, tip.branch])
+      if (!m.ok && m.code === 1) {
+        const files = [...new Set(m.out.split(/\r?\n/).slice(1).filter(Boolean))].sort()
+        const units = spec.tips.filter((x) => x.unit === tip.unit || (touched.get(x.unit) ?? []).some((f) => files.includes(f)))
+          .map((x) => x.unit)
+        return { conflict: { units: [...new Set(units)].sort((a, b) => a - b), files } }
+      }
+      if (!m.ok) throw new Error(`git merge-tree failed: ${lastLines(m.err)}`)
+      const tree = m.out.split(/\r?\n/)[0]!.trim()
+      const c = await git(repo, ['commit-tree', tree, '-p', at, '-p', tip.branch, '-m', `tring: integration check, unit ${tip.unit}`], { env })
+      if (!c.ok) throw new Error(`git commit-tree failed: ${lastLines(c.err)}`)
+      at = c.out.trim()
+    }
+    const place = await this.ops.place(repo)
+    if (!place) throw new Error(`${repo} is not a git repository`)
+    const trees = await this.ops.worktrees(repo)
+    const there = trees.find((w) => path.basename(w.path) === spec.name && !w.prunable)
+    const dir = path.resolve(there ? there.path : defaultWorktreePath(place.commonDir, trees, spec.name))
+    const r = there
+      ? await git(dir, ['checkout', '--quiet', '--detach', at], { plain: true, timeout: 60_000 })
+      : await git(repo, ['worktree', 'add', '--quiet', '--detach', dir, at], { plain: true, timeout: 60_000 })
+    if (!r.ok) throw new Error(`could not check out the integration merge: ${lastLines(r.err)}`)
+    return { sha: at, base, worktree: dir }
+  }
+
   /** Whether `branch` would conflict with `onto` (merge-tree, nothing written to any worktree). */
   async conflicts(repo: string, branch: string, onto: string): Promise<boolean> {
     const r = await git(repo, ['merge-tree', '--write-tree', '--quiet', onto, branch])

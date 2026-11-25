@@ -67,6 +67,7 @@ function fakeGit(over: Partial<Record<keyof StackGit, unknown>> = {}): StackGit 
     conflicts: async () => false,
     isMerged: async () => true,
     originUrl: async () => 'git@bitbucket.org:matogen/api.git',
+    integrate: async () => ({ sha: 'm1', base: 'b0', worktree: path.resolve('/wt/integration') }),
     removeWorktree: async () => null,
     deleteBranch: async () => null,
     ...over,
@@ -430,5 +431,73 @@ describe('WorkflowRunner: after the push', () => {
       ['CHV-9-1', 'develop', 'coding', false],
       ['CHV-9-2', 'CHV-9-1', 'planned', true],
     ])
+  })
+})
+
+describe('WorkflowRunner: the integration check', () => {
+  /** One unit, review-clean at a1: the next step is the api repo's integration check. */
+  async function clean(git = fakeGit()) {
+    const r = await rig(git)
+    await r.runner.startTicket({ key: 'CHV-9', title: 'Orders', text: 'x', source: 'goby', repos: [{ path: ROOT }] })
+    await new Promise((res) => setTimeout(res, 50))
+    await r.as('CHV-9 planner')('submit_plan', { plan: { ...plan, prs: [plan.prs[0]], interfaces: [] } })
+    await r.runner.ticketAction({ ticket: 'CHV-9', action: 'approve' })
+    await r.store.update(r.ticket().id, (t) => Object.assign(t.prs[0]!, { status: 'review-clean', work: 'idle', headSha: 'a1' }))
+    await r.runner.run(r.ticket().id, { type: 'tick' })
+    await new Promise((res) => setTimeout(res, 50))
+    return r
+  }
+
+  it('merges the units onto the base and opens a read-only integrator tile on the result', async () => {
+    const asked: unknown[] = []
+    const r = await clean(fakeGit({ integrate: async (...a: unknown[]) => { asked.push(a); return { sha: 'm1', base: 'b0', worktree: path.resolve('/wt/integration') } } }))
+    expect(asked).toEqual([[ROOT, { base: 'develop', tips: [{ unit: 1, branch: 'a1' }], name: 'tring-CHV-9-api-integration' }]])
+    const tile = r.tile('CHV-9 api integration')!
+    expect(tile.cwd).toBe(path.resolve('/wt/integration'))
+    const settings = JSON.parse(await readFile(/--settings "([^"]+)"/.exec(tile.command)![1]!, 'utf8'))
+    expect(settings.permissions).toEqual({ allow: ['Bash(npm test)'], deny: ['Edit', 'Write', 'NotebookEdit'] })
+    await r.flush()
+    expect(tile.typed[0]).toMatch(/integration check of ticket CHV-9 in api/)
+    expect(tile.typed[0]).toContain('m1')
+    expect(tile.typed[0]).toContain('- npm test')
+    expect(r.runner.gate(tile.id, 'Edit', { file_path: path.resolve('/wt/integration/x.ts') })).toMatchObject({ decision: 'deny' })
+    expect(r.runner.gate(tile.id, 'Bash', { command: 'git push' })).toMatchObject({ decision: 'deny' })
+    expect(r.ticket().integration['api']).toMatchObject({ status: 'running', sha: 'm1', base: 'b0' })
+  })
+
+  it('takes the integrator\'s verdict for that merge only', async () => {
+    const r = await clean()
+    const integrator = r.as('CHV-9 api integration')
+    await expect(integrator('report_integration', { sha: 'old', passed: true, evidence: 'ok' })).rejects.toThrow(/checking m1/)
+    expect(await integrator('report_integration', {
+      sha: 'm1', passed: false, evidence: 'npm test: 2 failed', failures: [{ test: 'orders.e2e', unit: 1 }],
+    })).toMatch(/Recorded/)
+    expect(r.ticket().integration['api']).toMatchObject({ status: 'failing', evidence: expect.stringMatching(/2 failed[\s\S]*orders\.e2e \(CHV-9-1\)/) })
+  })
+
+  it('lets the orchestrator send a failure to a PR, run the check again, or accept it', async () => {
+    const r = await clean()
+    await r.as('CHV-9 api integration')('report_integration', { sha: 'm1', passed: false, evidence: '1 failed' })
+    await expect(r.runner.ticketAction({ ticket: 'CHV-9', action: 'accept', repo: 'api' })).rejects.toThrow(/needs a reason/)
+    expect(await r.runner.ticketAction({ ticket: 'CHV-9', action: 'route', pr: 1 })).toMatch(/Done: route CHV-9-1/)
+    expect(r.ticket().prs[0]!.review!.findings.at(-1)).toMatchObject({ id: '1.i1', resolution: 'fix-requested' })
+  })
+
+  it('offers tring\'s integration worktree to Clean up, and removes it when ticked', async () => {
+    const removed: string[] = []
+    const r = await clean(fakeGit({ removeWorktree: async (_repo: string, wt: string) => { removed.push(wt); return null } }))
+    await r.store.update(r.ticket().id, (t) => { t.phase = 'done' })
+    const items = await r.runner.cleanupPlan(r.ticket().id)
+    expect(items.find((i) => i.id === 'integration:api')).toMatchObject({ safe: true, label: expect.stringContaining(path.resolve('/wt/integration')) })
+    await r.runner.cleanup(r.ticket().id, ['integration:api'])
+    expect(removed).toEqual([path.resolve('/wt/integration')])
+  })
+
+  it('reports a conflict without opening a tile, and a merge it could not make as a failure', async () => {
+    const r = await clean(fakeGit({ integrate: async () => ({ conflict: { units: [1], files: ['package-lock.json'] } }) }))
+    expect(r.ticket().integration['api']).toMatchObject({ status: 'conflict', conflict: { units: [1], files: ['package-lock.json'] } })
+    expect(r.tile('CHV-9 api integration')).toBeUndefined()
+    const broken = await clean(fakeGit({ integrate: async () => { throw new Error('develop does not exist') } }))
+    expect(broken.ticket().integration['api']).toMatchObject({ status: 'failing', evidence: expect.stringMatching(/could not run it: develop does not exist/) })
   })
 })

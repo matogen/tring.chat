@@ -275,7 +275,7 @@ export interface Review {
 }
 
 /** What a PR's coder is doing for the engine right now; anything but idle and queued is an agent at work. */
-export type PrWork = 'idle' | 'coding' | 'fixing' | 'restacking' | 'checking-lane' | 'pushing'
+export type PrWork = 'idle' | 'coding' | 'fixing' | 'restacking' | 'pushing'
 
 export interface StackPr {
   index: number
@@ -322,7 +322,7 @@ export interface WorkLogEntry {
   at: number
   /** The PR it is about; null for the ticket as a whole. */
   pr: number | null
-  who: 'planner' | 'coder' | 'reviewer' | 'user' | 'tring'
+  who: 'planner' | 'coder' | 'reviewer' | 'integrator' | 'user' | 'tring'
   text: string
 }
 
@@ -347,8 +347,6 @@ export interface Ticket {
   maxAgents: number
   log: WorkLogEntry[]
   createdAt: number
-  /** Lane checks that passed: the lane's top PR -> its head when its whole lane passed there. */
-  laneChecks: Record<number, string>
   /** Interface changes a lower PR asked for, waiting for the user. */
   amendments: Array<{ id: string; pr: number; name: string; contract: string; why: string }>
   /** How far each repo's base branch moved on its remote since the lanes were based on it. */
@@ -363,6 +361,8 @@ export interface Ticket {
   strategy: Strategy | null
   /** Independent PRs through a feature branch and one final PR. */
   combinedPr: boolean
+  /** Whether pushes wait for the integration check: Settings at the time the plan was approved. */
+  integrationCheck: boolean
   /** Each repo's integration check, by repo id. */
   integration: Record<string, Integration>
   /** One PR per repo made of the units' commits (single), or independent's final PR, by repo id. */
@@ -380,6 +380,8 @@ export interface Integration {
   tips: Record<number, string>
   /** The merge (or assembled head) that was tested. */
   sha: string | null
+  /** tring's own checkout of it, detached: offered by Clean up. */
+  worktree?: string | null
   conflict: { units: number[]; files: string[] } | null
   evidence: string | null
 }

@@ -183,3 +183,51 @@ describe('StackGit: cleaning up', () => {
     expect(await sg.deleteBranch(repo, 'feat/unmerged', 'develop')).toMatch(/not fully merged/)
   })
 })
+
+describe('StackGit: the integration check', () => {
+  let dir: string
+  let clone: string
+  beforeAll(() => {
+    dir = mkdtempSync(path.join(os.tmpdir(), 'tring-integrate-'))
+    const bare = path.join(dir, 'origin.git')
+    git(dir, 'init', '-q', '--bare', bare)
+    clone = path.join(dir, 'app')
+    git(dir, 'clone', '-q', bare, clone)
+    git(clone, 'checkout', '-qb', 'develop')
+    commit(clone, 'app.ts', 'export const a = 1\n')
+    git(clone, 'push', '-q', '-u', 'origin', 'develop')
+    const unit = (branch: string, file: string, body: string): void => {
+      git(clone, 'checkout', '-qb', branch, 'origin/develop')
+      commit(clone, file, body, branch)
+    }
+    unit('u/one', 'one.ts', 'export const one = 1\n')
+    unit('u/two', 'two.ts', 'export const two = 2\n')
+    unit('u/left', 'app.ts', 'export const a = 2\n')
+    unit('u/right', 'app.ts', 'export const a = 3\n')
+    git(clone, 'checkout', '-q', 'develop')
+  })
+  afterAll(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('merges every tip onto the base in a worktree of its own, writing nothing to any branch', async () => {
+    const r = await sg.integrate(clone, { base: 'develop', tips: [{ unit: 1, branch: 'u/one' }, { unit: 2, branch: 'u/two' }], name: 'tring-CHV-9-integration' })
+    if (!('sha' in r)) throw new Error(JSON.stringify(r))
+    expect(r.base).toBe(git(clone, 'rev-parse', 'origin/develop'))
+    expect(git(r.worktree, 'rev-parse', 'HEAD')).toBe(r.sha)
+    expect(existsSync(path.join(r.worktree, 'one.ts')) && existsSync(path.join(r.worktree, 'two.ts'))).toBe(true)
+    expect(git(clone, 'rev-parse', 'u/one')).toBe(git(clone, 'rev-parse', 'u/one'))
+    expect(git(clone, 'branch', '--list', 'tring*')).toBe('')
+
+    const again = await sg.integrate(clone, { base: 'develop', tips: [{ unit: 1, branch: 'u/one' }], name: 'tring-CHV-9-integration' })
+    if (!('sha' in again)) throw new Error(JSON.stringify(again))
+    expect(again.worktree).toBe(r.worktree)
+    expect(git(r.worktree, 'rev-parse', 'HEAD')).toBe(again.sha)
+    expect(existsSync(path.join(r.worktree, 'two.ts'))).toBe(false)
+  })
+
+  it('names the units and files that conflict, and leaves the worktree as it was', async () => {
+    const r = await sg.integrate(clone, {
+      base: 'develop', tips: [{ unit: 1, branch: 'u/one' }, { unit: 3, branch: 'u/left' }, { unit: 4, branch: 'u/right' }], name: 'tring-CHV-9-integration',
+    })
+    expect(r).toEqual({ conflict: { units: [3, 4], files: ['app.ts'] } })
+  })
+})

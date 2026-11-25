@@ -178,7 +178,7 @@ export function railRows(t: TicketView): RailRow[] {
     chips: r.prs.map((p): RailChip => ({
       key: p.key, title: p.title, status: p.status, on: p.on, slot: p.slot, prUrl: p.prUrl,
       label: p.reviewing ? 'being reviewed' : p.queued ? 'queued'
-        : p.work === 'restacking' ? 'restacking' : p.work === 'checking-lane' ? 'testing the lane'
+        : p.work === 'restacking' ? 'restacking'
         : p.work === 'pushing' ? 'pushing' : p.work === 'fixing' ? 'fixing' : STATUS_LABEL[p.status],
       marks: [
         ...(p.needsRestack ? ['needs restack'] : []),

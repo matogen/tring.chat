@@ -9,12 +9,12 @@ import type { GateDecision } from '../hook-route.ts'
 import { secretEquals } from '../security.ts'
 import { ToolError, type ToolDef, type WorkflowTools } from '../orchestrator-tools.ts'
 import { cleanPrompt, typePrompt } from '../type-prompt.ts'
-import { coderBrief, jobText, noteText, plannerBrief, reviewerBrief } from './briefs.ts'
-import { cardsFor, checklist, prOf, step, type Command, type EngineEnv, type EngineEvent, type ReviewFinding } from './engine.ts'
+import { coderBrief, integratorBrief, jobText, noteText, plannerBrief, repoTests, reviewerBrief } from './briefs.ts'
+import { cardsFor, checklist, prOf, step, type Command, type EngineEnv, type EngineEvent, type IntegrationResult, type ReviewFinding } from './engine.ts'
 import { HeadWatcher, type StackGit } from './git.ts'
 import { matches } from './plan.ts'
 import { toolsFor, type Role } from './stack-tools.ts'
-import { localKeyOf, renderTicket, type TicketStore } from './tickets.ts'
+import { localKeyOf, renderTicket, safeName, type TicketStore } from './tickets.ts'
 
 /**
  * Runs the multi-PR workflow: carries out what the stack engine says against
@@ -84,6 +84,8 @@ interface TileRecord {
   role: Role
   /** The PR, for a coder or reviewer. */
   pr: number | null
+  /** The repo, for an integrator. */
+  repo?: string
   projectId: string
   slot: number
   /** A reviewer's range, for its submit_review. */
@@ -168,7 +170,7 @@ export class WorkflowRunner implements WorkflowTools {
     const s = this.d.settings.get()
     return {
       now: this.now,
-      settings: { requireFreshReview: s.requireFreshReview, autoRestack: s.autoRestack },
+      settings: { requireFreshReview: s.requireFreshReview, autoRestack: s.autoRestack, integrationCheck: s.integrationCheck },
       quotaHigh: this.d.quotaHigh(),
       repoIdForPath: (p) => path.basename(p),
       branchFor: (t, p) => {
@@ -256,20 +258,49 @@ export class WorkflowRunner implements WorkflowTools {
           `Status: ${pr.status}. Read \`git log\` and \`git status\` in your worktree, then carry on.`)
         return
       }
+      case 'integrate': return this.integrate(t, c.repo, c.tips)
       case 'closeAll':
-        for (const r of this.tiles.filter((x) => x.ticketId === t.id)) await this.close(t.id, r.role, r.pr)
+        for (const r of this.tiles.filter((x) => x.ticketId === t.id)) await this.close(t.id, r.role, r.pr, r.repo)
         return
+    }
+  }
+
+  /**
+   * A repo's integration check: tring merges the tips onto the base (no
+   * branch moves), then a fresh read-only integrator tile tests the merge.
+   */
+  private async integrate(t: Ticket, repoId: string, tips: Array<{ unit: number; branch: string; sha: string }>): Promise<void> {
+    const repo = t.repos.find((x) => x.id === repoId)!
+    const report = (result: IntegrationResult): Promise<string | null> => this.apply(t.id, { type: 'integration', repo: repoId, result })
+    try {
+      const made = await this.d.git.integrate(repo.root, {
+        base: repo.baseBranch,
+        // The heads the engine recorded, not wherever the branches are by now.
+        tips: tips.map((x) => ({ unit: x.unit, branch: x.sha })),
+        name: `tring-${safeName(t.localKey)}-${safeName(repoId)}-integration`,
+      })
+      if ('conflict' in made) {
+        await report({ status: 'conflict', ...made.conflict })
+        return
+      }
+      if (await report({ status: 'merged', sha: made.sha, base: made.base, worktree: made.worktree })) return
+      await this.close(t.id, 'integrator', null, repoId)
+      const fresh = this.d.store.get(t.id)!
+      await this.spawn(fresh, 'integrator', null, made.worktree, null, undefined, repoId)
+      this.queue(t.id, 'integrator', null, integratorBrief(fresh, repoId, made.sha), repoId)
+    } catch (err) {
+      await report({ status: 'error', why: (err as Error).message })
     }
   }
 
   /* ---------- tiles ---------- */
 
-  private key(ticketId: string, role: Role, pr: number | null): string {
-    return `${ticketId}:${role}:${pr ?? 0}`
+  private key(ticketId: string, role: Role, pr: number | null, repo?: string): string {
+    return `${ticketId}:${role}:${pr ?? 0}${repo ? `:${repo}` : ''}`
   }
 
-  private recordFor(ticketId: string, role: Role, pr: number | null): TileRecord | undefined {
-    return this.tiles.find((r) => r.ticketId === ticketId && r.role === role && r.pr === pr)
+  private recordFor(ticketId: string, role: Role, pr: number | null, repo?: string): TileRecord | undefined {
+    return this.tiles.find((r) => r.ticketId === ticketId && r.role === role && r.pr === pr && (r.repo ?? null) === (repo ?? null))
   }
 
   private sessionOf(r: TileRecord): RunnerSession | undefined {
@@ -283,11 +314,11 @@ export class WorkflowRunner implements WorkflowTools {
     return s ? this.tiles.find((r) => r.projectId === s.projectId && r.slot === s.slot) : undefined
   }
 
-  private async spawn(t: Ticket, role: Role, pr: number | null, cwd: string, resume: string | null, range?: { base: string; head: string }): Promise<void> {
+  private async spawn(t: Ticket, role: Role, pr: number | null, cwd: string, resume: string | null, range?: { base: string; head: string }, repo?: string): Promise<void> {
     if (!t.projectId) throw new Error('the ticket has no tab')
     if (!this.d.mcpScript) throw new Error('the tring MCP relay is missing from this install')
     const token = randomBytes(24).toString('hex')
-    const dir = path.join(this.d.tileDir, t.id, `${role}-${pr ?? 0}`)
+    const dir = path.join(this.d.tileDir, t.id, `${role}-${repo ? safeName(repo) : pr ?? 0}`)
     await mkdir(dir, { recursive: true })
     const tokenFile = path.join(dir, '.token')
     await writeAtomic(tokenFile, `${token}\n`)
@@ -301,24 +332,25 @@ export class WorkflowRunner implements WorkflowTools {
         },
       },
     }, null, 2) + '\n')
-    await writeAtomic(path.join(dir, 'settings.json'), JSON.stringify(tileSettings(t, role, pr, this.d.hookCommand ?? 'tring-hook'), null, 2) + '\n')
+    await writeAtomic(path.join(dir, 'settings.json'), JSON.stringify(tileSettings(t, role, pr, this.d.hookCommand ?? 'tring-hook', repo), null, 2) + '\n')
     const claudeArgs = `--permission-mode auto${modelFlags(this.d.settings.get().models?.[role])} --settings ${quoted(path.join(dir, 'settings.json'))} --mcp-config ${quoted(path.join(dir, 'mcp.json'))}`
-    const name = role === 'planner' ? `${t.localKey} planner` : role === 'coder' ? localKeyOf(t, pr!) : `${localKeyOf(t, pr!)} review`
+    const name = role === 'planner' ? `${t.localKey} planner` : role === 'coder' ? localKeyOf(t, pr!)
+      : role === 'integrator' ? `${t.localKey} ${repo} integration` : `${localKeyOf(t, pr!)} review`
     const s = this.d.pm.create(t.projectId, {
       cwd, name, claudeArgs, command: `claude ${claudeArgs}${resume ? ` --resume ${resume}` : ''}`,
     })
     if (!s) throw new Error('no free slot in the ticket tab')
-    // One tile per role and PR: a respawn replaces the record.
-    this.tiles = this.tiles.filter((r) => !(r.ticketId === t.id && r.role === role && r.pr === pr))
-    this.tiles.push({ token, ticketId: t.id, role, pr, projectId: s.projectId, slot: s.slot, ...(range ? { range } : {}) })
+    // One tile per role and PR (and repo, for an integrator): a respawn replaces the record.
+    this.tiles = this.tiles.filter((r) => !(r.ticketId === t.id && r.role === role && r.pr === pr && (r.repo ?? null) === (repo ?? null)))
+    this.tiles.push({ token, ticketId: t.id, role, pr, ...(repo ? { repo } : {}), projectId: s.projectId, slot: s.slot, ...(range ? { range } : {}) })
     await this.saveTiles()
     if (role === 'coder' && pr !== null) {
       await this.d.store.update(t.id, (x) => { const p = prOf(x, pr); if (p) p.coder = { projectId: s.projectId, slot: s.slot, claudeId: null } })
     }
   }
 
-  private async close(ticketId: string, role: Role, pr: number | null): Promise<void> {
-    const r = this.recordFor(ticketId, role, pr)
+  private async close(ticketId: string, role: Role, pr: number | null, repo?: string): Promise<void> {
+    const r = this.recordFor(ticketId, role, pr, repo)
     if (!r) return
     const s = this.sessionOf(r)
     if (role === 'coder' && pr !== null && s?.claude) {
@@ -327,7 +359,7 @@ export class WorkflowRunner implements WorkflowTools {
     }
     if (s) this.d.pm.kill(s.id)
     this.tiles = this.tiles.filter((x) => x !== r)
-    this.queues.delete(this.key(ticketId, role, pr))
+    this.queues.delete(this.key(ticketId, role, pr, repo))
     await this.saveTiles()
   }
 
@@ -335,8 +367,8 @@ export class WorkflowRunner implements WorkflowTools {
     return writeAtomic(this.tilesFile, JSON.stringify({ tiles: this.tiles }, null, 2) + '\n')
   }
 
-  private queue(ticketId: string, role: Role, pr: number | null, text: string): void {
-    const k = this.key(ticketId, role, pr)
+  private queue(ticketId: string, role: Role, pr: number | null, text: string, repo?: string): void {
+    const k = this.key(ticketId, role, pr, repo)
     this.queues.set(k, [...(this.queues.get(k) ?? []), text])
   }
 
@@ -344,7 +376,7 @@ export class WorkflowRunner implements WorkflowTools {
   async deliver(): Promise<void> {
     const waiting = new Set(this.d.inbox.list().filter((i) => i.kind !== 'reply').map((i) => i.sessionId))
     for (const r of this.tiles) {
-      const k = this.key(r.ticketId, r.role, r.pr)
+      const k = this.key(r.ticketId, r.role, r.pr, r.repo)
       const q = this.queues.get(k)
       const s = this.sessionOf(r)
       if (!s) continue
@@ -460,6 +492,13 @@ export class WorkflowRunner implements WorkflowTools {
           : 'not merged',
       })
     }
+    for (const [repoId, i] of Object.entries(t.integration)) {
+      if (!i.worktree) continue
+      items.push({
+        id: `integration:${repoId}`, kind: 'worktree', label: `${i.worktree} (integration check)`,
+        safe: done, why: 'tring\'s own checkout of the integration merge, on no branch',
+      })
+    }
     return items
   }
 
@@ -469,12 +508,18 @@ export class WorkflowRunner implements WorkflowTools {
     if (!t) throw new ToolError(`no ticket ${ticketId}`)
     const want = new Set(ids)
     const out: Array<{ id: string; error: string | null }> = []
-    for (const r of this.tiles.filter((x) => x.ticketId === t.id)) if (want.has('tab')) await this.close(t.id, r.role, r.pr)
+    for (const r of this.tiles.filter((x) => x.ticketId === t.id)) if (want.has('tab')) await this.close(t.id, r.role, r.pr, r.repo)
     // Worktrees before branches: git will not delete a branch checked out somewhere.
     for (const p of t.prs) {
       const repo = this.repoOf(t, p)!
       if (want.has(`worktree:${p.index}`) && p.worktree) {
         out.push({ id: `worktree:${p.index}`, error: await this.d.git.removeWorktree(repo.root, p.worktree) })
+      }
+    }
+    for (const [repoId, i] of Object.entries(t.integration)) {
+      const repo = t.repos.find((x) => x.id === repoId)
+      if (want.has(`integration:${repoId}`) && i.worktree && repo) {
+        out.push({ id: `integration:${repoId}`, error: await this.d.git.removeWorktree(repo.root, i.worktree) })
       }
     }
     for (const p of t.prs) {
@@ -562,7 +607,7 @@ export class WorkflowRunner implements WorkflowTools {
       if (!pr.pushAllowed) {
         return {
           decision: 'deny',
-          reason: 'Pushing is held: tring lets a push through only once your PR is review-clean, its whole lane passes, and the user clicks Push. Carry on with your work.',
+          reason: 'Pushing is held: tring lets a push through only once your PR is review-clean, its repo passes the integration check, and the user clicks Push. Carry on with your work.',
         }
       }
       return null
@@ -615,12 +660,34 @@ export class WorkflowRunner implements WorkflowTools {
       case 'stack_brief': {
         const pr = r.pr !== null ? prOf(t, r.pr) : undefined
         const brief = r.role === 'planner' ? plannerBrief(t, this.d.settings.get().defaultStrategy) : pr && r.role === 'coder' ? coderBrief(t, pr)
+          : r.role === 'integrator' ? integratorBrief(t, r.repo ?? '', t.integration[r.repo ?? '']?.sha ?? '(no merge yet)')
           : pr ? reviewerBrief(t, pr, (pr.review?.round ?? 0) + 1, r.range ?? { base: pr.baseSha ?? '', head: pr.headSha ?? '' }, []) : ''
         const docs = renderTicket(t)
         const local = r.pr !== null ? [...docs.entries()].find(([n]) => n.endsWith(`-${r.pr}.md`))?.[1] : [...docs.values()][0]
         return `${brief}\n\n---\n\n${local ?? ''}`
       }
       case 'stack_status': return this.stackStatus(t)
+      case 'report_integration': {
+        const repo = r.repo ?? ''
+        const i = t.integration[repo]
+        if (!i || i.status !== 'running' || !i.sha) throw new ToolError(`tring is not running an integration check in ${repo} now`)
+        const sha = str('sha')
+        if (sha !== i.sha && !(sha.length >= 7 && i.sha.startsWith(sha))) {
+          throw new ToolError(`tring is checking ${i.sha.slice(0, 8)} in ${repo}: run the tests on that merge and report it`)
+        }
+        const evidence = str('evidence')
+        if (!evidence) throw new ToolError('give the commands you ran and their summary lines as evidence')
+        const failures = (Array.isArray(args['failures']) ? args['failures'] : []).filter((f) => f && typeof f === 'object')
+          .map((f: Record<string, unknown>) => `- ${String(f['test'] ?? '').trim()}${typeof f['unit'] === 'number' ? ` (${localKeyOf(t, f['unit'])})` : ''}`)
+        const passed = args['passed'] === true
+        const notice = await this.run(t.id, {
+          type: 'integration', repo,
+          result: { status: passed ? 'passing' : 'failing', sha: i.sha, evidence: [evidence, ...(passed ? [] : failures)].join('\n') },
+        })
+        if (notice) throw new ToolError(notice)
+        setTimeout(() => { void this.close(t.id, 'integrator', null, repo) }, 3000).unref?.()
+        return 'Recorded. Thank you; this tile closes now.'
+      }
       case 'submit_plan': {
         const plan = args['plan']
         const added: TicketRepo[] = []
@@ -683,8 +750,8 @@ export class WorkflowRunner implements WorkflowTools {
     let e: EngineEvent
     switch (kind) {
       case 'interface_ready': e = { type: 'report', pr: pr.index, kind }; break
-      case 'tests_failing': case 'lane_failing': e = { type: 'report', pr: pr.index, kind, evidence }; break
-      case 'tests_passing': case 'restacked': case 'lane_passing': {
+      case 'tests_failing': e = { type: 'report', pr: pr.index, kind, evidence }; break
+      case 'tests_passing': case 'restacked': {
         if (!sha) throw new ToolError('give the sha of the commit the tests ran on')
         if (!evidence.trim()) throw new ToolError('give the test commands and their summary lines as evidence')
         const git = await this.d.git.check(pr.worktree!)
@@ -836,6 +903,9 @@ export class WorkflowRunner implements WorkflowTools {
           `${p.flags.needsRestack ? '; needs restack' : ''}${p.flags.baseFailing ? '; a lower PR is failing' : ''}${p.flags.blocked ? `; blocked: ${p.flags.blocked}` : ''}${p.paused ? '; paused' : ''}`,
         ...findings].join('\n')
       }),
+      ...Object.entries(t.integration).map(([repo, i]) => `Integration check, ${repo}: ${i.status}${i.sha ? ` on ${i.sha.slice(0, 8)}` : ''}` +
+        `${i.conflict ? ` (${i.conflict.units.map((u) => localKeyOf(t, u)).join(' and ')} conflict in ${i.conflict.files.join(', ')})` : ''}` +
+        `${i.evidence && i.status !== 'passing' ? `: ${i.evidence.split('\n')[0]}` : ''}`),
       `Checklist: ${Object.entries(checklist(t)).map(([k, v]) => `${k} ${v === true ? 'yes' : v === false ? 'no' : 'unknown'}`).join(', ')}`,
       'Waiting on the user:',
       ...cardsFor(t).filter((c) => c.kind !== 'feature').map((c) => `- ${c.title} [${c.actions.map((a) => a.id).join(', ')}]`),
@@ -876,6 +946,9 @@ export class WorkflowRunner implements WorkflowTools {
       nudge: () => [byKind('blocked'), 'nudge'],
       fresh: () => [byKind('blocked'), 'fresh'],
       pause: () => [byKind('blocked'), 'pause'],
+      route: () => [cards.find((c) => c.kind === 'integration' && c.actions.some((a) => a.id === `route:${pr}`)), `route:${pr}`],
+      retry: () => [cards.find((c) => c.kind === 'integration' && c.repo === args['repo']), 'retry'],
+      accept: () => [cards.find((c) => c.kind === 'integration' && c.repo === args['repo']), 'accept'],
     }
     const chosen = pick[action]?.()
     if (!chosen) throw new ToolError(`unknown action ${action}`)
@@ -930,9 +1003,10 @@ export function modelFlags(m: RoleModel | undefined): string {
   return model + effort
 }
 
-export function tileSettings(t: Ticket, role: Role, pr: number | null, hook: string): Record<string, unknown> {
+export function tileSettings(t: Ticket, role: Role, pr: number | null, hook: string, repo?: string): Record<string, unknown> {
   const planned = pr !== null ? t.plan?.prs.find((x) => x.index === pr) : undefined
-  const allow = role === 'planner' ? [] : (planned?.tests.run ?? []).map((c) => `Bash(${c})`)
+  const commands = role === 'planner' ? [] : role === 'integrator' ? repoTests(t, repo ?? '') : planned?.tests.run ?? []
+  const allow = commands.map((c) => `Bash(${c})`)
   return {
     permissions: {
       allow,
