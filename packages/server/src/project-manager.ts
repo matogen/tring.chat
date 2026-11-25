@@ -14,6 +14,8 @@ export interface PersistedSession {
   color?: string | null
   /** The Claude conversation the tile was running; reopened on restore. */
   claude?: ClaudeConversation | null
+  /** See Session's `claudeArgs`. */
+  claudeArgs?: string | null
 }
 
 export interface PersistedProject {
@@ -109,10 +111,12 @@ export class ProjectManager {
     }))
   }
 
-  createProject(name: string, root: string): string {
+  /** `activate` false leaves the view where it is (a ticket tab the orchestrator opens). */
+  createProject(name: string, root: string, activate = true): string {
     const id = randomUUID()
     this.entries.set(id, { id, name, root, manager: null, pending: [] })
-    this.activate(id)
+    if (activate) this.activate(id)
+    else this.ensure(id)
     return id
   }
 
@@ -277,6 +281,7 @@ export class ProjectManager {
               command: s.command,
               color: s.color,
               ...(s.claude ? { claude: s.claude } : {}),
+              ...(s.claudeArgs ? { claudeArgs: s.claudeArgs } : {}),
             }))
           : e.pending,
       })),

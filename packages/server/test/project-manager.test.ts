@@ -229,3 +229,21 @@ describe('ProjectManager.tilesWith', () => {
     await pm.dispose()
   })
 })
+
+describe('ProjectManager: tiles of the multi-PR workflow', () => {
+  it('keeps the options a tile reopens Claude with, so a restart brings back its settings and tools', async () => {
+    const { dir, statePath, pm } = await fixture()
+    const id = pm.createProject('CHV-9 Orders', dir)
+    pm.create(id, { cwd: dir, command: 'claude', claudeArgs: '--permission-mode auto --settings "x.json"' })
+    await pm.save()
+    const saved = JSON.parse(await readFile(statePath, 'utf8')) as PersistedState
+    expect(saved.projects[0]!.sessions[0]!.claudeArgs).toBe('--permission-mode auto --settings "x.json"')
+  })
+
+  it('opens a project without moving the view when asked to', async () => {
+    const { dir, pm } = await fixture()
+    const first = pm.createProject('mine', dir)
+    pm.createProject('CHV-9 Orders', dir, false)
+    expect(pm.activeProjectId).toBe(first)
+  })
+})

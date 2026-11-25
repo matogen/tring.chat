@@ -14,7 +14,8 @@ import type { Inbox, HookPayload } from './inbox.ts'
 import { routeHook } from './hook-route.ts'
 import type { InboxItem } from '@tring/shared/protocol'
 import { hooksStatus, installHooks, type HooksStatus } from './hooks-install.ts'
-import { ToolError, TOOLS, type OrchestratorTools } from './orchestrator-tools.ts'
+import { ToolError, TOOLS, type OrchestratorTools, type ToolDef } from './orchestrator-tools.ts'
+import type { GateDecision } from './hook-route.ts'
 import type { WorkflowSettingsStore } from './workflow/settings.ts'
 import type { Session } from './session.ts'
 import { claudeConversation } from './session.ts'
@@ -59,8 +60,28 @@ export interface HttpOptions {
   push?: PushApi | null
   /** Local speech recognition for the desktop microphone (whisper.ts). Null answers 503. */
   voice?: VoiceApi | null
+  /** The multi-PR workflow's tiles: their tools, behind a token per tile. Null answers 503. */
+  stack?: StackApi | null
+  /** The multi-PR workflow's say on a tool call in one of its tiles (see hook-route.ts). */
+  gate?: (sessionId: string, tool: string, input: Record<string, unknown>) => GateDecision | null
+  /** Every hook event from a tile, by session id (the workflow watches its agents with it). */
+  onHook?: (sessionId: string, event: string) => void
+  /** Each usage report as it is read; the workflow's quota guard uses its limits. */
+  onUsage?: (report: UsageReport) => void
   /** Settings → Workflow (workflow/settings.ts). Null answers 503. */
   workflow?: Pick<WorkflowSettingsStore, 'get' | 'update'> | null
+}
+
+/**
+ * The `tring-stack` MCP server a workflow tile runs (mcp-cli.ts --api stack).
+ * Each tile holds its own token, which says which ticket, role and PR it is,
+ * and opens these two routes and nothing else.
+ */
+export interface StackApi {
+  /** What a tile token stands for; null for a token that is not one. */
+  authorize(token: string | null): unknown
+  tools(who: unknown): ToolDef[]
+  call(who: unknown, name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<string>
 }
 
 export interface VoiceApi {
@@ -224,6 +245,10 @@ export function createHandler(opts: HttpOptions) {
     // guessed the secret either.
     if (!sameOrigin(req)) return text(res, 403, 'forbidden origin')
 
+    // A workflow tile's own token opens its two routes, and only those; the
+    // daemon's token is not handed to its agents.
+    if (url.pathname === '/api/stack/tools' || url.pathname === '/api/stack/call') return await stackApi(req, res, url)
+
     if (url.pathname.startsWith('/api/')) {
       if (token && !bearerEquals(token, req.headers.authorization)) {
         return json(res, 401, { error: 'unauthorized' })
@@ -231,6 +256,37 @@ export function createHandler(opts: HttpOptions) {
       return await api(req, res, url)
     }
     return await serveStatic(res, url.pathname)
+  }
+
+  async function stackApi(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+    const stack = opts.stack
+    if (!stack) return json(res, 503, { error: 'the multi-PR workflow is not available' })
+    const bearer = /^bearer +(.*)$/i.exec(req.headers.authorization ?? '')?.[1] ?? null
+    const who = stack.authorize(bearer)
+    if (!who) return json(res, 401, { error: 'unauthorized' })
+    if (url.pathname === '/api/stack/tools' && req.method === 'GET') return json(res, 200, { tools: stack.tools(who) })
+    if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' })
+    const raw = await readBody(req)
+    if (raw === null) return tooLarge(req, res, 'body too large')
+    let body: { name?: unknown; arguments?: unknown }
+    try {
+      body = JSON.parse(raw || '{}') as typeof body
+    } catch {
+      return json(res, 400, { error: 'malformed body' })
+    }
+    if (typeof body.name !== 'string') return json(res, 400, { error: 'name is required' })
+    const args = (body.arguments && typeof body.arguments === 'object' ? body.arguments : {}) as Record<string, unknown>
+    const gone = new AbortController()
+    res.on('close', () => { if (!res.writableFinished) gone.abort() })
+    try {
+      const text = await stack.call(who, body.name, args, gone.signal)
+      if (gone.signal.aborted) return
+      return json(res, 200, { text, isError: false })
+    } catch (err) {
+      if (gone.signal.aborted) return
+      if (err instanceof ToolError) return json(res, 200, { text: err.message, isError: true })
+      return json(res, 200, { text: `tring could not do that: ${(err as Error).message}`, isError: true })
+    }
   }
 
   async function api(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
@@ -277,6 +333,7 @@ export function createHandler(opts: HttpOptions) {
         return json(res, 200, { output: null })
       }
       if (!s) return json(res, 404, { error: 'no such session' })
+      opts.onHook?.(s.id, body.event)
       if (!opts.inbox) {
         if (body.event === 'Stop' || body.event === 'Notification') s.hook()
         return json(res, 200, { output: null })
@@ -288,6 +345,7 @@ export function createHandler(opts: HttpOptions) {
       const output = await routeHook({
         inbox: opts.inbox, session: s, event: body.event, payload,
         signal: gone.signal, onPermission: opts.onPermission,
+        ...(opts.gate ? { gate: (tool: string, input: Record<string, unknown>) => opts.gate!(s.id, tool, input) } : {}),
       })
       if (gone.signal.aborted) return
       return json(res, 200, { output })
@@ -299,7 +357,7 @@ export function createHandler(opts: HttpOptions) {
      * already type into every shell, so this opens no door that was shut.
      */
     if (url.pathname === '/api/orchestrator/tools' && req.method === 'GET') {
-      return json(res, 200, { tools: TOOLS })
+      return json(res, 200, { tools: opts.tools?.list() ?? TOOLS })
     }
     if (url.pathname === '/api/orchestrator/call' && req.method === 'POST') {
       const tools = opts.tools
@@ -494,7 +552,9 @@ export function createHandler(opts: HttpOptions) {
         usage = { at: now, report: collectUsage(defaultTranscriptDir(), now) }
       }
       try {
-        return json(res, 200, await usage.report)
+        const report = await usage.report
+        opts.onUsage?.(report)
+        return json(res, 200, report)
       } catch {
         usage = null
         return json(res, 500, { error: 'cannot read Claude Code transcripts' })

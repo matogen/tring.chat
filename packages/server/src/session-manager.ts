@@ -12,6 +12,8 @@ export interface SessionSpec {
   autorun?: boolean
   /** A Claude conversation to reopen in the new shell; see Session's `resume`. */
   resume?: ClaudeConversation | null
+  /** See Session's `claudeArgs`. */
+  claudeArgs?: string | null
 }
 
 export interface SessionManagerOptions {
@@ -69,6 +71,7 @@ export class SessionManager {
       ...(this.opts.shell ? { shell: this.opts.shell } : {}),
       autorun: spec.autorun,
       resume: spec.resume ?? null,
+      claudeArgs: spec.claudeArgs ?? null,
     })
 
     session.onData = (data) => this.onSessionData?.(session, data)
@@ -162,6 +165,7 @@ export class SessionManager {
       // A dead tile that was a shell running Claude comes back to the same
       // conversation; one with its own command re-runs that instead.
       resume: old.claude,
+      claudeArgs: old.claudeArgs,
     }
     // One change, not two. The new PTY gets a new id, so a client watching
     // this slot has to follow it there — and a client that is first told the

@@ -35,6 +35,18 @@ export interface HookRequest {
   signal: AbortSignal
   /** Called once per new permission card; may settle it through the inbox. */
   onPermission?: (item: InboxItem) => void
+  /**
+   * The multi-PR workflow's say on a tool call in one of its tiles: an edit
+   * outside the files the PR owns, a push before its gate is clean. Null when
+   * the tile is not one of the workflow's, or it has nothing to say.
+   */
+  gate?: (tool: string, input: Record<string, unknown>) => GateDecision | null
+}
+
+export interface GateDecision {
+  decision: 'allow' | 'deny'
+  /** Shown to the agent, so it knows what to do instead. */
+  reason: string
 }
 
 /**
@@ -63,7 +75,12 @@ export function routeHook(req: HookRequest): Promise<Record<string, unknown> | n
       return hold(req, { sessionId: session.id, kind: 'permission', tool, input: input ?? {} })
 
     case 'PreToolUse': {
-      if (tool !== 'AskUserQuestion') return Promise.resolve(null)
+      if (tool !== 'AskUserQuestion') {
+        const g = tool ? req.gate?.(tool, input ?? {}) ?? null : null
+        return Promise.resolve(g && {
+          hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: g.decision, permissionDecisionReason: g.reason },
+        })
+      }
       const questions = questionsOf(input)
       if (!questions) return Promise.resolve(null)
       return hold(req, { sessionId: session.id, kind: 'question', tool, input: input ?? {}, questions })

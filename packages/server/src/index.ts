@@ -32,6 +32,10 @@ import { sendPush } from './web-push.ts'
 import { vocabulary, Whisper } from './whisper.ts'
 import { realGit } from './git-worktrees.ts'
 import { WorkflowSettingsStore } from './workflow/settings.ts'
+import { TicketStore } from './workflow/tickets.ts'
+import { StackGit } from './workflow/git.ts'
+import { WorkflowRunner } from './workflow/runner.ts'
+import type { Limit } from './usage.ts'
 
 interface Auth {
   token: string | null
@@ -225,6 +229,35 @@ async function main(): Promise<void> {
   // The orchestrator agent (off by default): a Claude Code of its own that
   // drives the tiles through the tools below, relayed by tring-mcp.
   const configDir = path.dirname(pm.statePath)
+  const workflow = new WorkflowSettingsStore(path.join(configDir, 'workflow.json'))
+  await workflow.load()
+  const tickets = new TicketStore(path.join(configDir, 'tickets.json'), path.join(configDir, 'tickets'))
+  await tickets.load()
+  let limits: Limit[] = []
+  /** Redraws the workflow's cards when a ticket changes; set once the inbox can show them. */
+  let onTickets: () => void = () => {}
+  const mcpScript = [path.resolve(here, 'tring-mcp.js'), path.resolve(here, 'mcp-cli.ts')].find((p) => existsSync(p)) ?? null
+  const runner = new WorkflowRunner({
+    store: tickets,
+    settings: workflow,
+    git: new StackGit(),
+    pm: {
+      list: () => pm.list(),
+      createProject: (name, root, activate) => pm.createProject(name, root, activate),
+      create: (projectId, spec) => pm.create(projectId, spec),
+      findSession: (id) => pm.findSession(id),
+      kill: (id) => pm.findManager(id)?.kill(id),
+    },
+    inbox,
+    quotaHigh: () => limits.some((l) => l.percent >= 90),
+    tileDir: path.join(configDir, 'stack-tiles'),
+    url,
+    mcpScript,
+    node: process.execPath,
+    onChange: () => onTickets(),
+  })
+  await runner.load()
+  runner.start()
   const agent = new OrchestratorAgent({
     dir: path.join(configDir, 'orchestrator'),
     statePath: path.join(configDir, 'orchestrator-agent.json'),
@@ -233,10 +266,11 @@ async function main(): Promise<void> {
     scrollback: args.scrollback,
     idleMs: args.idleMs,
     ...(args.shell ? { shell: args.shell } : {}),
-    mcpScript: [path.resolve(here, 'tring-mcp.js'), path.resolve(here, 'mcp-cli.ts')].find((p) => existsSync(p)) ?? null,
+    mcpScript,
     node: process.execPath,
+    multiPr: () => workflow.get().multiPr,
   })
-  const tools = new OrchestratorTools({ pm, inbox })
+  const tools = new OrchestratorTools({ pm, inbox, workflow: runner })
   // The cards survive a restart (card-store.ts). Brought back before the hub
   // exists, so the first inbox any screen sees already has them, and before
   // anything is listening for new cards, so none of them buzzes a phone twice.
@@ -273,8 +307,6 @@ async function main(): Promise<void> {
   // and the branches they are on, with the ticket numbers in them.
   const whisper = new Whisper(path.join(configDir, 'whisper'), path.join(configDir, 'whisper.json'))
   await whisper.load()
-  const workflow = new WorkflowSettingsStore(path.join(configDir, 'workflow.json'))
-  await workflow.load()
   let vocab = { at: 0, text: '' }
   const voiceVocabulary = async (): Promise<string> => {
     if (Date.now() - vocab.at < 60_000) return vocab.text
@@ -297,7 +329,22 @@ async function main(): Promise<void> {
     tools,
     agentSession: (id) => agent.find(id),
     push: pushApi(pushStore, notifier),
-    workflow,
+    // Switching the workflow on or off changes the orchestrator's tools and
+    // instructions, which Claude reads when it starts: so it starts again, in
+    // the same conversation.
+    workflow: {
+      get: () => workflow.get(),
+      update: async (patch) => {
+        const was = workflow.get().multiPr
+        const next = await workflow.update(patch)
+        if (next.multiPr !== was && agent.enabled) await agent.restart(false)
+        return next
+      },
+    },
+    stack: runner,
+    gate: (id, tool, input) => runner.gate(id, tool, input),
+    onHook: (id) => runner.onHook(id),
+    onUsage: (report) => { limits = report.limits },
     voice: {
       status: () => whisper.status(),
       install: (model) => whisper.install(model),
@@ -375,6 +422,7 @@ async function main(): Promise<void> {
     await cards.close()
     hub.dispose()
     agent.dispose()
+    runner.stop()
     whisper.stopServer()
     await uploads.dispose()
     await pm.dispose()
