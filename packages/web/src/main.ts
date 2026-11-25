@@ -20,6 +20,8 @@ import { Dictation, recognitionFactory } from './dictation.ts'
 import { Voice, type VoiceTarget } from './voice.ts'
 import { voiceSection } from './voice-settings.ts'
 import { workflowSection } from './workflow-settings.ts'
+import { railRows, tabBadges } from './workflow-view.ts'
+import type { TicketView } from '@tring/shared/workflow'
 import { attachTileDrag } from './tile-drag.ts'
 import { attachImagePaste, pasteFromClipboard, type PasteOptions } from './paste.ts'
 import { copyToClipboard, recentLinks, screenText } from './copy.ts'
@@ -37,6 +39,11 @@ import { tring } from './sound.ts'
 const barEl = document.getElementById('bar') as HTMLElement
 const switcherEl = document.getElementById('switcher') as HTMLElement
 const ringEl = document.getElementById('ring') as HTMLElement
+const stackEl = document.getElementById('stack') as HTMLElement
+/** The multi-PR workflow's tickets, from the daemon's state. */
+let tickets: TicketView[] = []
+/** The inbox as last sent, for the ticket a card button belongs to. */
+let inboxItems: import('@tring/shared/protocol').InboxItem[] = []
 const usageEl = document.getElementById('usage') as HTMLElement
 
 let projects: ProjectInfo[] = []
@@ -95,7 +102,9 @@ const inboxPanel = new InboxPanel(focusCell, {
   },
   onAnswer: (itemId, decision, extra) => ws.send({ type: 'answer', itemId, decision, ...extra }),
   onReply: (itemId, text) => ws.send({ type: 'reply', itemId, text }),
-  onAction: (itemId, actionId, text, value) => ws.send({
+  onAction: (itemId, actionId, text, value) => actionId === 'cleanup'
+    ? void openCleanup(inboxItems.find((i) => i.id === itemId)?.ticketId ?? '')
+    : ws.send({
     type: 'action', itemId, actionId, ...(text !== undefined ? { text } : {}), ...(value !== undefined ? { value } : {}),
   }),
   onOpen: (id) => openFromInbox(id),
@@ -291,6 +300,7 @@ function handleMessage(msg: ServerMessage): void {
     case 'state': {
       projects = msg.projects
       update = msg.update ?? update
+      tickets = msg.tickets ?? []
       const alive = new Set(projects.flatMap((p) => p.sessions).map((s) => s.id))
       for (const id of lastShots.keys()) if (!alive.has(id)) lastShots.delete(id)
       viewedId = msg.activeProjectId ?? projects[0]?.id ?? null
@@ -354,6 +364,7 @@ function handleMessage(msg: ServerMessage): void {
       paintSwitcher()
       break
     case 'inbox': {
+      inboxItems = msg.items
       const fresh = inboxPanel.setItems(msg.items)
       if (inboxSeen && fresh.length > 0) tring()
       inboxSeen = true
@@ -378,10 +389,71 @@ const barCallbacks = () => ({
 
 const paintBar = (): void =>
   renderBar(barEl, projects, viewedId, barCallbacks(), update, viewMode === 'usage',
-    { open: inboxPanel.isOpen, count: inboxPanel.count })
+    { open: inboxPanel.isOpen, count: inboxPanel.count }, tabBadges(tickets))
+
+/**
+ * A ticket tab's stack: one row per repo, its PRs bottom up with their
+ * status and what holds them. A click on a PR focuses its coder's tile.
+ */
+function paintStack(): void {
+  const t = tickets.find((x) => x.projectId === viewedId)
+  stackEl.hidden = !t || viewMode === 'usage'
+  if (!t) { stackEl.replaceChildren(); return }
+  const rows = railRows(t).map((r) => {
+    const row = document.createElement('div')
+    row.className = 'stack-row'
+    const head = document.createElement('span')
+    head.className = 'stack-repo'
+    head.textContent = r.repo
+    head.title = `builds on ${r.base}`
+    row.append(head)
+    for (const c of r.chips) {
+      const chip = document.createElement('button')
+      chip.type = 'button'
+      chip.className = `stack-chip status-${c.status}${c.marks.length ? ' held' : ''}`
+      chip.title = [`${c.key} ${c.title}`, `on ${c.on}`, ...c.marks, ...(c.prUrl ? [c.prUrl] : [])].join('\n')
+      const k = document.createElement('b')
+      k.textContent = c.key.replace(`${t.localKey}-`, '')
+      const label = document.createElement('span')
+      label.textContent = `${c.title} · ${c.label}`
+      chip.append(k, label)
+      if (c.marks.length) {
+        const m = document.createElement('i')
+        m.textContent = c.marks.some((x) => x.startsWith('stuck')) ? '\u26a0' : c.marks.includes('needs restack') ? '\u27f3' : '\u23f8'
+        chip.append(m)
+      }
+      chip.disabled = c.slot === null
+      chip.onclick = () => { if (c.slot !== null) focusSlot(c.slot) }
+      row.append(chip)
+    }
+    return row
+  })
+  const title = document.createElement('span')
+  title.className = 'stack-title'
+  title.textContent = `${t.localKey} · ${t.phase.replace('-', ' ')}`
+  stackEl.replaceChildren(title, ...rows)
+}
+
+/** Clean up… on a finished ticket's card: the dialog, then only what was ticked. */
+async function openCleanup(ticketId: string): Promise<void> {
+  try {
+    const { items } = await api<{ items: ui.CleanupChoice[] }>(`/api/tickets/${encodeURIComponent(ticketId)}/cleanup`)
+    const t = tickets.find((x) => x.id === ticketId)
+    ui.openCleanupDialog(`Clean up ${t?.localKey ?? 'the ticket'}`, items, (ids) => {
+      void apiPost<{ results: Array<{ id: string; error: string | null }> }>(`/api/tickets/${encodeURIComponent(ticketId)}/cleanup`, { items: ids })
+        .then((r) => {
+          const failed = r.results.filter((x) => x.error)
+          showToast(failed.length ? `not removed: ${failed.map((x) => `${x.id} (${x.error})`).join('; ')}` : 'cleaned up')
+        }, (err: Error) => showToast(`could not clean up: ${err.message}`))
+    })
+  } catch (err) {
+    showToast(`could not clean up: ${(err as Error).message}`)
+  }
+}
 
 function render(): void {
   paintBar()
+  paintStack()
   renderRing()
   paintStatuses()
 }

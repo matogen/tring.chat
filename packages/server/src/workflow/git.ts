@@ -129,6 +129,32 @@ export class StackGit {
     return { commits: n.ok ? Number(n.out.trim()) || 0 : 0, error: n.ok ? null : lastLines(n.err) }
   }
 
+  /** Whether `branch` is in `base` on origin (or locally): merged by a merge or a fast-forward. A squash merge is not. */
+  async isMerged(repo: string, branch: string, base: string): Promise<boolean> {
+    for (const into of [`refs/remotes/origin/${base}`, `refs/heads/${base}`]) {
+      if (!(await git(repo, ['show-ref', '--verify', '--quiet', into])).ok) continue
+      return (await git(repo, ['merge-base', '--is-ancestor', `refs/heads/${branch}`, into])).ok
+    }
+    return false
+  }
+
+  /** `git worktree remove`, never forced: one with changes in it stays. Git's words, or null. */
+  async removeWorktree(repo: string, worktree: string): Promise<string | null> {
+    const r = await git(repo, ['worktree', 'remove', worktree], { plain: true })
+    return r.ok ? null : lastLines(r.err) || 'git worktree remove failed'
+  }
+
+  /**
+   * `git branch -d`, never -D. Git checks -d against the branch's upstream,
+   * so that is pointed at origin/<base> first: it deletes exactly what is
+   * merged into the base, and refuses the rest.
+   */
+  async deleteBranch(repo: string, branch: string, base: string): Promise<string | null> {
+    await git(repo, ['branch', '--quiet', `--set-upstream-to=origin/${base}`, branch])
+    const r = await git(repo, ['branch', '-d', branch])
+    return r.ok ? null : lastLines(r.err) || 'git branch -d failed'
+  }
+
   /** Whether `branch` would conflict with `onto` (merge-tree, nothing written to any worktree). */
   async conflicts(repo: string, branch: string, onto: string): Promise<boolean> {
     const r = await git(repo, ['merge-tree', '--write-tree', '--quiet', onto, branch])

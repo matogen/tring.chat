@@ -661,6 +661,43 @@ Orchestrator is the inbox it always was.
 It needs the hooks (`tring hooks install`): they are how it knows which tiles run Claude
 and when an agent has finished.
 
+### Multi-PR workflow
+
+For a complex feature or bug fix, built as a stack of small, tested, reviewed PRs.
+Switch it on in **Settings → Workflow → Multi-PR workflow** (off by default; off, nothing
+of it runs or shows). The orchestrator agent restarts in the same conversation to pick up
+its ticket tools.
+
+Then tell the orchestrator *work on ticket CHV-3193* (or describe the work). It looks the
+ticket up the way it already does (or asks you to paste it), works out which local repos
+it touches, and calls `start_ticket`. tring opens a tab for the ticket without moving your
+view, and in it:
+
+- A **planner** (read-only) splits the ticket into 1–16 small PRs, in lanes per repo:
+  each with its scope, the files only it may edit, the interfaces it provides and uses,
+  its tests and acceptance criteria. You approve the plan on a card before any code.
+  tring keeps its own local tickets (`<KEY>-1`, `<KEY>-2`… under
+  `~/.config/tring/tickets/`); it never writes to your tracker.
+- A **coder** per PR, in its own worktree branched from the PR below it. Lower PRs commit
+  their interfaces first; upper ones start once those exist and code against the plan.
+- A **fresh reviewer** per review round, read-only, using a code-review skill if you have
+  one. High and medium findings hold the PR; each is a card: *Fix* (the coder looks into
+  it, and may decline it with a reason) or *Skip with reason…*.
+- When a PR below moves, the ones above it are restacked bottom up (offered, or
+  automatic). Each lane's tests run whole at its top. *Push & open PR* (draft, against
+  the branch below) is yours to click, per PR or for the whole stack. You merge; tring
+  follows the merge (GitHub through `gh`; *Mark merged* elsewhere), restacks what was on
+  it and retargets its PR. When it is done, *Clean up…* offers to remove the tab,
+  worktrees and branches, ticking only what is safe and never forcing git.
+
+The rules are enforced, not just asked for: each tile runs `claude --permission-mode
+auto` with its own settings, and tring's hook denies an edit outside the PR's files, any
+push before you click Push, and any merge. Agents report through a `tring-stack` MCP
+server that only their own token opens, and a "tests pass" counts only for a committed
+HEAD. At most *Agents per ticket* (4–16) work at once, and none start while the usage
+panel shows a limit at 90 % or more. The ticket's feature card (pinned at the top of the
+inbox, on the phone too) shows its progress and checklist; the tab shows a stack rail.
+
 ## Claude Code
 
 `tring hooks install` (see [Orchestrator](#orchestrator)) includes a Stop hook, so

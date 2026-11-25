@@ -247,6 +247,7 @@ async function main(): Promise<void> {
       create: (projectId, spec) => pm.create(projectId, spec),
       findSession: (id) => pm.findSession(id),
       kill: (id) => pm.findManager(id)?.kill(id),
+      deleteProject: (id) => pm.deleteProject(id),
     },
     inbox,
     quotaHigh: () => limits.some((l) => l.percent >= 90),
@@ -345,6 +346,7 @@ async function main(): Promise<void> {
     gate: (id, tool, input) => runner.gate(id, tool, input),
     onHook: (id) => runner.onHook(id),
     onUsage: (report) => { limits = report.limits },
+    cleanup: { plan: (id) => runner.cleanupPlan(id), run: (id, items) => runner.cleanup(id, items) },
     voice: {
       status: () => whisper.status(),
       install: (model) => whisper.install(model),
@@ -363,7 +365,7 @@ async function main(): Promise<void> {
   // is refused here never gets to send a `hello` at all.
   const wss = new WebSocketServer({ server, verifyClient: upgradeGuard(sameOrigin) })
   const hub = new Hub({ pm, token, inbox, auto, agent, workflow: runner })
-  onTickets = () => inbox.syncWorkflow(runner.cardItems())
+  onTickets = () => { inbox.syncWorkflow(runner.cardItems()); hub.refreshTickets() }
   inbox.syncWorkflow(runner.cardItems(), false)
   hubRef = hub
   hub.attach(wss)

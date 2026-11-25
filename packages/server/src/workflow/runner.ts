@@ -2,7 +2,8 @@ import { randomBytes } from 'node:crypto'
 import { mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { InboxItem, ProjectInfo, SessionStatus } from '@tring/shared/protocol'
-import type { StackPr, Ticket, TicketRepo, WorkflowSettings } from '@tring/shared/workflow'
+import type { StackPr, Ticket, TicketRepo, TicketView, WorkflowSettings } from '@tring/shared/workflow'
+import { Forge } from './forge.ts'
 import { writeAtomic } from '../card-store.ts'
 import type { GateDecision } from '../hook-route.ts'
 import { secretEquals } from '../security.ts'
@@ -46,6 +47,7 @@ export interface RunnerDeps {
     create(projectId: string, spec: { cwd: string; command: string; name: string; claudeArgs: string }): RunnerSession | null
     findSession(id: string): RunnerSession | undefined
     kill(sessionId: string): void
+    deleteProject(id: string): void
   }
   inbox: { list(): InboxItem[] }
   /** Claude usage is past the quota guard. */
@@ -63,6 +65,17 @@ export interface RunnerDeps {
   type?: (s: RunnerSession, text: string) => void
   /** The tickets changed: cards and the stack view are redrawn. */
   onChange?: () => void
+  /** Merges and CI, from the forge (GitHub through gh). */
+  forge?: Pick<Forge, 'pr'>
+}
+
+/** One thing Clean up… can remove, ticked when it is safe. */
+export interface CleanupItem {
+  id: string
+  kind: 'tab' | 'worktree' | 'branch'
+  label: string
+  safe: boolean
+  why: string
 }
 
 interface TileRecord {
@@ -85,6 +98,7 @@ const READY_SETTLE_MS = 1500
 /** Activity is recorded at most this often per PR: hooks fire on every tool call. */
 const ACTIVITY_EVERY_MS = 60_000
 const BASE_FETCH_MS = 10 * 60_000
+const FORGE_MS = 2 * 60_000
 
 export class WorkflowRunner implements WorkflowTools {
   private tiles: TileRecord[] = []
@@ -98,8 +112,11 @@ export class WorkflowRunner implements WorkflowTools {
   private timer: NodeJS.Timeout | null = null
   private lastTick = 0
   private lastFetch = 0
+  private lastForge = 0
+  private readonly forge: Pick<Forge, 'pr'>
 
   constructor(private readonly d: RunnerDeps) {
+    this.forge = d.forge ?? new Forge()
     this.watcher = new HeadWatcher(d.git, (key, sha) => {
       const [ticketId, pr] = key.split(':')
       void this.run(ticketId!, { type: 'headMoved', pr: Number(pr), sha })
@@ -375,6 +392,118 @@ export class WorkflowRunner implements WorkflowTools {
       this.lastFetch = this.now
       for (const t of active) await this.fetchBases(t)
     }
+    if (this.now - this.lastForge >= FORGE_MS) {
+      this.lastForge = this.now
+      for (const t of active) await this.readForge(t)
+    }
+  }
+
+  /** Each pushed PR on GitHub: merged yet, and its CI. */
+  async readForge(t: Ticket): Promise<void> {
+    for (const p of t.prs.filter((x) => x.status === 'pushed' && x.prUrl)) {
+      const st = await this.forge.pr(p.prUrl!)
+      if (!st) continue
+      if (st.ci && this.d.store.get(t.id)?.ci?.[p.index] !== st.ci) {
+        const ci = st.ci
+        await this.d.store.update(t.id, (x) => { x.ci = { ...(x.ci ?? {}), [p.index]: ci } })
+        this.d.onChange?.()
+      }
+      if (st.state === 'merged') await this.run(t.id, { type: 'merged', pr: p.index })
+    }
+  }
+
+  /* ---------- Clean up… ---------- */
+
+  /**
+   * What Clean up… could remove for a finished or cancelled ticket, each
+   * ticked only when nothing would be lost: a clean worktree, a branch merged
+   * into its base. Nothing is ticked for a cancelled ticket.
+   */
+  async cleanupPlan(ticketId: string): Promise<CleanupItem[]> {
+    const t = this.d.store.get(ticketId)
+    if (!t) throw new ToolError(`no ticket ${ticketId}`)
+    const done = t.phase === 'done'
+    const items: CleanupItem[] = []
+    const project = t.projectId ? this.d.pm.list().find((p) => p.id === t.projectId) : undefined
+    if (project) {
+      const busy = project.sessions.some((s) => s.status === 'busy')
+      items.push({
+        id: 'tab', kind: 'tab', label: `The tab "${project.name}" and its ${project.sessions.length} tile(s)`,
+        safe: done && !busy, why: busy ? 'a tile in it is still working' : done ? 'the ticket is done' : 'the ticket was cancelled',
+      })
+    }
+    for (const p of t.prs) {
+      const repo = this.repoOf(t, p)!
+      if (p.worktree) {
+        const st = await this.d.git.check(p.worktree).catch(() => ({ head: '', clean: false }))
+        items.push({
+          id: `worktree:${p.index}`, kind: 'worktree', label: p.worktree,
+          safe: done && st.clean, why: st.clean ? 'no uncommitted changes' : 'it has uncommitted changes',
+        })
+      }
+      const merged = p.status === 'merged' && await this.d.git.isMerged(repo.root, p.branch, repo.baseBranch)
+      items.push({
+        id: `branch:${p.index}`, kind: 'branch', label: `${p.branch} (${repo.id})`,
+        safe: done && merged,
+        why: merged ? `merged into ${repo.baseBranch}` : p.status === 'merged'
+          ? `its PR was merged, but not as a merge into ${repo.baseBranch} (a squash?): git branch -d would refuse it; delete it yourself if you are sure`
+          : 'not merged',
+      })
+    }
+    return items
+  }
+
+  /** Removes what the user ticked, safely (never forced), then keeps the ticket only for the record. */
+  async cleanup(ticketId: string, ids: string[]): Promise<Array<{ id: string; error: string | null }>> {
+    const t = this.d.store.get(ticketId)
+    if (!t) throw new ToolError(`no ticket ${ticketId}`)
+    const want = new Set(ids)
+    const out: Array<{ id: string; error: string | null }> = []
+    for (const r of this.tiles.filter((x) => x.ticketId === t.id)) if (want.has('tab')) await this.close(t.id, r.role, r.pr)
+    // Worktrees before branches: git will not delete a branch checked out somewhere.
+    for (const p of t.prs) {
+      const repo = this.repoOf(t, p)!
+      if (want.has(`worktree:${p.index}`) && p.worktree) {
+        out.push({ id: `worktree:${p.index}`, error: await this.d.git.removeWorktree(repo.root, p.worktree) })
+      }
+    }
+    for (const p of t.prs) {
+      const repo = this.repoOf(t, p)!
+      if (want.has(`branch:${p.index}`)) out.push({ id: `branch:${p.index}`, error: await this.d.git.deleteBranch(repo.root, p.branch, repo.baseBranch) })
+    }
+    if (want.has('tab') && t.projectId) {
+      this.d.pm.deleteProject(t.projectId)
+      out.push({ id: 'tab', error: null })
+    }
+    await this.d.store.update(t.id, (x) => { x.archived = true; if (want.has('tab')) x.projectId = null })
+    this.rewatch()
+    this.d.onChange?.()
+    return out
+  }
+
+  /** What every screen needs for a ticket's tab badge and stack rail. */
+  ticketViews(): TicketView[] {
+    return this.d.store.list().filter((t) => !t.archived).map((t) => ({
+      id: t.id, localKey: t.localKey, title: t.title, projectId: t.projectId, phase: t.phase,
+      done: t.prs.filter((p) => ['review-clean', 'pushed', 'merged'].includes(p.status)).length,
+      total: t.prs.length,
+      repos: t.repos.map((repo) => ({
+        id: repo.id,
+        baseBranch: repo.baseBranch,
+        prs: (t.plan?.prs ?? []).filter((x) => x.repo === repo.id).map((x) => {
+          const p = prOf(t, x.index)
+          return {
+            index: x.index, key: localKeyOf(t, x.index), title: x.title,
+            status: p?.status ?? 'planned',
+            on: x.below !== null ? localKeyOf(t, x.below) : repo.baseBranch,
+            branch: p?.branch ?? '', prUrl: p?.prUrl ?? null, work: p?.work ?? 'idle', reviewing: !!p?.reviewing,
+            queued: !!p && p.status === 'planned' && t.phase === 'building',
+            needsRestack: !!p?.flags.needsRestack, blocked: p?.flags.blocked ?? null, paused: !!p?.paused,
+            slot: p?.coder?.slot ?? null,
+          }
+        }),
+      })),
+    }))
   }
 
   private async fetchBases(t: Ticket): Promise<void> {

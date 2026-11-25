@@ -1,6 +1,6 @@
 # Multi-PR workflow: one ticket, one tab, a stack of small reviewed PRs
 
-Status: **design grilled 2026-11-25 (Q1–Q16, see Decisions at the end); waiting for the owner's go-ahead.**
+Status: **built 2026-11-25** on `feat/multi-pr-workflow` (commits 0–7 below; decisions Q1–Q19 at the end). Not pushed.
 
 ## Context
 
@@ -401,6 +401,24 @@ ticket tab like any project.
   timeouts, hook "File not found", `ERR_INVALID_URL` from a Windows path, an auto-answer rule). Each PR of
   this feature adds no new failures and passes every test it adds or touches; the list goes in each PR
   description; fixing them is a separate ticket.
+
+## As built (notes against the design)
+
+- **Shared files**: a file several PRs need is owned by exactly one PR, which must cover it in its `owns`;
+  the others ask it with `request_change`. Ownership globs never overlap within a repo.
+- **Worktrees** are made when a PR starts, not at approval, so each branches from the PR below as it is then
+  (no restack before the first line of code).
+- **Engine and runner**: `workflow/engine.ts` is the pure stack engine; `workflow/runner.ts` carries out
+  its commands against tiles and git; cards are derived from the ticket (`cardsFor`), never stored.
+- **Phone notifications** for workflow cards say what kind of call is waiting and nothing from the card, as
+  every tring notification does; the feature card never buzzes.
+- **Clean up**: `git branch -d` is run with the branch's upstream pointed at `origin/<base>`, so it deletes
+  exactly what is merged into the base. A squash-merged branch is not an ancestor of the base; it is left
+  unticked, and -d refuses it.
+- **Restarts**: tiles keep their flags through `Session.claudeArgs`; tile tokens and places are in
+  `stack-tiles/tiles.json`; tickets in `tickets.json`.
+- **Not yet**: CI on Bitbucket (shows unknown), `maxPrLines`, `testFirst`, `integrationCheck` (shown
+  greyed in Settings), a global agents cap (dropped in Q19).
 
 ## 7. Building this feature
 

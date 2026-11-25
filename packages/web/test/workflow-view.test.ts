@@ -76,3 +76,40 @@ describe('workflow cards', () => {
     expect(cardSignature(a)).not.toBe(cardSignature({ ...a, actions: [{ id: 'push', label: 'Push' }] }))
   })
 })
+
+import type { TicketView } from '@tring/shared/workflow'
+import { railRows, tabBadges } from '../src/workflow-view.ts'
+
+const pr = (over: Partial<TicketView['repos'][number]['prs'][number]> & { index: number }): TicketView['repos'][number]['prs'][number] => ({
+  key: `CHV-9-${over.index}`, title: `PR ${over.index}`, status: 'planned', on: 'develop', branch: 'b', prUrl: null, work: 'idle',
+  reviewing: false, queued: false, needsRestack: false, blocked: null, paused: false, slot: null, ...over,
+})
+const view = (prs: TicketView['repos'][number]['prs']): TicketView => ({
+  id: 't1', localKey: 'CHV-9', title: 'Orders', projectId: 'p1', phase: 'building', done: 1, total: 3,
+  repos: [{ id: 'api', baseBranch: 'develop', prs }, { id: 'web', baseBranch: 'develop', prs: [] }],
+})
+
+describe('the stack rail and tab badge', () => {
+  it('badges a ticket\'s tab with how many PRs are reviewed of all', () => {
+    expect(tabBadges([view([])])).toEqual({ p1: '1/3' })
+    expect(tabBadges([{ ...view([]), total: 0, phase: 'planning' }])).toEqual({ p1: 'planning' })
+  })
+
+  it('draws a row per repo with PRs, bottom up, each with its status and what holds it', () => {
+    const rows = railRows(view([
+      pr({ index: 1, status: 'review-clean', slot: 2 }),
+      pr({ index: 2, status: 'coding', on: 'CHV-9-1', work: 'coding', needsRestack: true, slot: 3 }),
+      pr({ index: 3, status: 'planned', on: 'CHV-9-2', queued: true }),
+      pr({ index: 4, status: 'in-review', reviewing: true, blocked: 'conflict in a.ts' }),
+    ]))
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.repo).toBe('api')
+    expect(rows[0]!.chips.map((c) => [c.key, c.label, c.marks, c.slot])).toEqual([
+      ['CHV-9-1', 'review clean', [], 2],
+      ['CHV-9-2', 'coding', ['needs restack'], 3],
+      ['CHV-9-3', 'queued', [], null],
+      ['CHV-9-4', 'being reviewed', ['stuck: conflict in a.ts'], null],
+    ])
+    expect(rows[0]!.chips[1]!.on).toBe('CHV-9-1')
+  })
+})

@@ -8,6 +8,7 @@ import type { Session } from './session.ts'
 import type { Inbox } from './inbox.ts'
 import type { AutoAnswerer } from './auto-answer.ts'
 import type { OrchestratorAgent } from './orchestrator-agent.ts'
+import type { TicketView } from '@tring/shared/workflow'
 import { cleanPrompt, typePrompt } from './type-prompt.ts'
 import { SizeOwners } from './size-owner.ts'
 
@@ -23,7 +24,10 @@ export interface HubOptions {
   /** The orchestrator agent; its terminal is reachable by id like any session's. */
   agent?: OrchestratorAgent | null
   /** The multi-PR workflow: where its cards' buttons go. Resolves to why nothing happened, or null. */
-  workflow?: { act(ticketId: string, cardId: string, action: string, text?: string, value?: number): Promise<string | null> } | null
+  workflow?: {
+    act(ticketId: string, cardId: string, action: string, text?: string, value?: number): Promise<string | null>
+    ticketViews(): TicketView[]
+  } | null
 }
 
 interface Client {
@@ -426,7 +430,13 @@ export class Hub {
       projects: this.opts.pm.list(),
       activeProjectId: c.projectId ?? this.opts.pm.activeProjectId,
       update: this.update,
+      ...(this.opts.workflow ? { tickets: this.opts.workflow.ticketViews() } : {}),
     })
+  }
+
+  /** A ticket changed: every screen's badges and stack rails follow. */
+  refreshTickets(): void {
+    this.broadcastState()
   }
 
   private broadcastState(): void {

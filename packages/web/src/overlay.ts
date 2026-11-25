@@ -500,6 +500,36 @@ export function openUpdateNotice(current: string, latest: string): void {
   open(panel)
 }
 
+export interface CleanupChoice { id: string; label: string; safe: boolean; why: string }
+
+/**
+ * Clean up… for a finished or cancelled ticket: what could go, with only the
+ * safe things ticked. Nothing goes until Remove, and git is never forced.
+ */
+export function openCleanupDialog(title: string, items: CleanupChoice[], onRemove: (ids: string[]) => void): void {
+  const panel = el('div', 'panel')
+  panel.append(el('h2', undefined, title))
+  panel.append(el('p', 'hint', 'Ticked: nothing would be lost. Worktrees go with git worktree remove and branches with git branch -d, never forced; the ticket stays in the record.'))
+  const boxes: Array<[HTMLInputElement, string]> = []
+  for (const it of items) {
+    const row = el('label', 'field toggle cleanup-row')
+    const cb = el('input') as HTMLInputElement
+    cb.type = 'checkbox'
+    cb.checked = it.safe
+    row.append(cb, el('span', undefined, it.label), el('small', 'hint', it.why))
+    boxes.push([cb, it.id])
+    panel.append(row)
+  }
+  const actions = el('div', 'actions')
+  const cancel = el('button', 'btn', 'Cancel') as HTMLButtonElement
+  cancel.onclick = () => close()
+  const ok = el('button', 'btn primary', 'Remove') as HTMLButtonElement
+  ok.onclick = () => { close(); onRemove(boxes.filter(([b]) => b.checked).map(([, id]) => id)) }
+  actions.append(cancel, ok)
+  panel.append(actions)
+  open(panel)
+}
+
 export function openConfirm(title: string, body: string, onYes: () => void): void {
   const panel = el('div', 'panel')
   panel.append(el('h2', undefined, title))

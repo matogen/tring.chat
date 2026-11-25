@@ -47,6 +47,7 @@ function fakePm() {
     },
     findSession: (id: string) => projects.flatMap((p) => p.sessions).find((s) => s.id === id),
     kill(id: string) { for (const p of projects) p.sessions = p.sessions.filter((s) => s.id !== id) },
+    deleteProject(id: string) { projects.splice(projects.findIndex((p) => p.id === id), 1) },
   }
 }
 
@@ -62,6 +63,9 @@ function fakeGit(over: Partial<Record<keyof StackGit, unknown>> = {}): StackGit 
     diffChanged: async () => false,
     fetchBase: async () => ({ commits: 0, error: null }),
     conflicts: async () => false,
+    isMerged: async () => true,
+    removeWorktree: async () => null,
+    deleteBranch: async () => null,
     ...over,
   } as unknown as StackGit
 }
@@ -80,7 +84,7 @@ const plan: Plan = {
   ],
 }
 
-async function rig(git = fakeGit()) {
+async function rig(git = fakeGit(), forge?: { pr(url: string): Promise<{ state: 'open' | 'merged' | 'closed'; ci: 'green' | 'red' | 'pending' | null } | null> }) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'tring-runner-'))
   const store = new TicketStore(path.join(dir, 'tickets.json'), path.join(dir, 'tickets'))
   let now = 1_000_000
@@ -91,6 +95,7 @@ async function rig(git = fakeGit()) {
     tileDir: path.join(dir, 'tiles'), url: 'http://127.0.0.1:7331', mcpScript: '/opt/tring/tring-mcp.js', node: '/usr/bin/node',
     now: () => now,
     type: (s, text) => { (s as FakeSession).typed.push(text) },
+    ...(forge ? { forge } : {}),
   })
   await runner.load()
   const r = {
@@ -288,5 +293,64 @@ describe('WorkflowRunner: cards', () => {
     expect(items[1]!.actions!.map((a) => a.id)).toEqual(['approve', 'revise', 'cancel', 'agents'])
     await r.store.update(r.ticket().id, (t) => { t.archived = true })
     expect(r.runner.cardItems()).toEqual([])
+  })
+})
+
+describe('WorkflowRunner: after the push', () => {
+  /** PR 1 pushed (as if its coder had reported it). */
+  async function pushed(r: Awaited<ReturnType<typeof rig>>) {
+    await r.runner.startTicket({ key: 'CHV-9', title: 'Orders', text: 'x', source: 'goby', repos: [{ path: ROOT }] })
+    await new Promise((res) => setTimeout(res, 50))
+    await r.as('CHV-9 planner')('submit_plan', { plan: { ...plan, prs: [plan.prs[0]], interfaces: [] } })
+    await r.runner.ticketAction({ ticket: 'CHV-9', action: 'approve' })
+    await r.store.update(r.ticket().id, (t) => { t.prs[0]!.status = 'pushed'; t.prs[0]!.prUrl = 'https://github.com/o/r/pull/7' })
+  }
+
+  it('follows the PR on the forge: its CI onto the checklist, and its merge into the stack', async () => {
+    let state: 'open' | 'merged' = 'open'
+    const r = await rig(fakeGit(), { pr: async () => ({ state, ci: 'green' }) })
+    await pushed(r)
+    await r.runner.readForge(r.ticket())
+    expect(r.ticket().ci).toEqual({ 1: 'green' })
+    state = 'merged'
+    await r.runner.readForge(r.ticket())
+    expect(r.ticket()).toMatchObject({ phase: 'done', prs: [expect.objectContaining({ status: 'merged' })] })
+  })
+
+  it('offers to clean up only what is safe, and removes only what was ticked', async () => {
+    const removed: string[] = []
+    const r = await rig(fakeGit({
+      check: async (wt: string) => ({ head: 'a1', clean: !wt.endsWith('2') }),
+      removeWorktree: async (_repo: string, wt: string) => { removed.push(wt); return null },
+      deleteBranch: async (_repo: string, b: string) => { removed.push(b); return null },
+    }), { pr: async () => ({ state: 'merged', ci: 'green' }) })
+    await pushed(r)
+    await r.runner.readForge(r.ticket())
+    const items = await r.runner.cleanupPlan(r.ticket().id)
+    expect(items.map((i) => [i.id, i.safe])).toEqual([['tab', true], ['worktree:1', true], ['branch:1', true]])
+    await r.runner.cleanup(r.ticket().id, ['worktree:1'])
+    expect(removed).toEqual([path.resolve('/wt/1')])
+    expect(r.ticket().archived).toBe(true)
+    expect(r.pm.projects).toHaveLength(1)
+    expect(r.runner.ticketViews()).toEqual([])
+  })
+
+  it('ticks nothing for a cancelled ticket', async () => {
+    const r = await started()
+    await r.as('CHV-9 planner')('submit_plan', { plan })
+    await r.runner.ticketAction({ ticket: 'CHV-9', action: 'cancel' })
+    const items = await r.runner.cleanupPlan(r.ticket().id)
+    expect(items.length).toBeGreaterThan(0)
+    expect(items.every((i) => !i.safe)).toBe(true)
+  })
+
+  it('describes each ticket for its tab badge and stack rail', async () => {
+    const r = await approved()
+    const [v] = r.runner.ticketViews()
+    expect(v).toMatchObject({ localKey: 'CHV-9', projectId: 'p1', phase: 'building', done: 0, total: 2 })
+    expect(v!.repos[0]!.prs.map((p) => [p.key, p.on, p.status, p.queued])).toEqual([
+      ['CHV-9-1', 'develop', 'coding', false],
+      ['CHV-9-2', 'CHV-9-1', 'planned', true],
+    ])
   })
 })

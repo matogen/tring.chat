@@ -141,7 +141,9 @@ export function step(ticket: Ticket, event: EngineEvent, env: EngineEnv): StepRe
 
 /** Mutates `t` for one event and adds commands; a string means "refused, nothing changed". */
 function apply(t: Ticket, e: EngineEvent, env: EngineEnv, out: Command[]): string | null {
-  if ((t.phase === 'abandoned' || t.phase === 'done') && e.type !== 'tick') return `the ticket is ${t.phase}`
+  if ((t.phase === 'abandoned' || t.phase === 'done') && e.type !== 'tick') {
+    return e.type === 'action' && e.action === 'cleanup' ? 'clean up from its dialog' : `the ticket is ${t.phase}`
+  }
   switch (e.type) {
     case 'start':
       if (t.phase !== 'planning' || t.plan) return 'the ticket has already started'
@@ -791,6 +793,8 @@ export function cardsFor(t: Ticket): CardSpec[] {
 
 function featureCard(t: Ticket): CardSpec {
   const actions: CardAction[] = []
+  // Finished or cancelled: what is left is tidying up, chosen in a dialog (never automatic).
+  if (t.phase === 'done' || t.phase === 'abandoned') actions.push({ id: 'cleanup', label: 'Clean up…' })
   if (t.phase !== 'done' && t.phase !== 'abandoned') {
     actions.push({ id: 'agents', label: 'Agents', needsValue: { min: 4, max: 16, value: t.maxAgents } })
     for (const root of t.prs.filter((p) => parentOf(t, p) === null && p.status !== 'merged')) {
@@ -846,8 +850,16 @@ export function checklist(t: Ticket): Record<string, boolean | null> {
       const pr = owner && prOf(t, owner.index)
       return !!pr && atLeast(pr, 'review-clean')
     }),
-    'CI green': null,
+    'CI green': ci(t),
   }
+}
+
+/** Green when every pushed PR's CI is; red when any is; unknown until the forge says. */
+function ci(t: Ticket): boolean | null {
+  const pushed = t.prs.filter((p) => atLeast(p, 'pushed'))
+  const states = pushed.map((p) => t.ci?.[p.index])
+  if (states.some((s) => s === 'red')) return false
+  return pushed.length > 0 && pushed.length === t.prs.length && states.every((s) => s === 'green') ? true : null
 }
 
 /** 0..1: how far along the stack is, each PR counted by its status. */

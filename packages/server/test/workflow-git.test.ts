@@ -148,3 +148,31 @@ describe('HeadWatcher', () => {
     expect(seen).toEqual([{ key: 't1:1', sha }])
   })
 })
+
+describe('StackGit: cleaning up', () => {
+  it('knows a branch merged into the base, and removes worktrees and branches only the safe way', async () => {
+    const wt = await sg.createWorktree(repo, { branch: 'feat/done', from: 'origin/develop' })
+    const sha = commit(wt.path, 'done.ts', 'd\n')
+    expect(await sg.isMerged(repo, 'feat/done', 'develop')).toBe(false)
+    // Merged on the forge: develop on origin now has it.
+    git(other, 'fetch', '-q', 'origin')
+    git(repo, 'push', '-q', 'origin', `${sha}:refs/heads/develop`, '--force')
+    git(repo, 'fetch', '-q', 'origin')
+    expect(await sg.isMerged(repo, 'feat/done', 'develop')).toBe(true)
+
+    writeFileSync(path.join(wt.path, 'wip.ts'), 'not committed')
+    expect(await sg.removeWorktree(repo, wt.path)).toMatch(/.+/)
+    expect(existsSync(wt.path)).toBe(true)
+    rmSync(path.join(wt.path, 'wip.ts'))
+    expect(await sg.removeWorktree(repo, wt.path)).toBeNull()
+    expect(existsSync(wt.path)).toBe(false)
+    expect(await sg.deleteBranch(repo, 'feat/done', 'develop')).toBeNull()
+  })
+
+  it('will not delete a branch that is not merged', async () => {
+    const wt = await sg.createWorktree(repo, { branch: 'feat/unmerged', from: 'origin/develop' })
+    commit(wt.path, 'u.ts', 'u\n')
+    expect(await sg.removeWorktree(repo, wt.path)).toBeNull()
+    expect(await sg.deleteBranch(repo, 'feat/unmerged', 'develop')).toMatch(/not fully merged/)
+  })
+})

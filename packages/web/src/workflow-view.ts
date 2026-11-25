@@ -1,5 +1,5 @@
 import type { InboxItem } from '@tring/shared/protocol'
-import { MAX_AGENTS, MIN_AGENTS, type WorkflowSettings } from '@tring/shared/workflow'
+import { MAX_AGENTS, MIN_AGENTS, type PrStatus, type TicketView, type WorkflowSettings } from '@tring/shared/workflow'
 
 /** What Settings → Workflow shows: pure, so it is tested without a page (workflow-settings.ts draws it). */
 
@@ -93,4 +93,58 @@ export function orderCards(items: InboxItem[]): InboxItem[] {
 /** What a card shows; a card whose signature changed is drawn again. */
 export function cardSignature(item: InboxItem): string {
   return JSON.stringify([item.kind, item.title ?? null, item.message ?? null, item.actions ?? null])
+}
+
+/* ---------- the stack rail and tab badges ---------- */
+
+/** "2/5" on a ticket's tab: PRs reviewed or further, of all; its phase until it has a plan. */
+export function tabBadges(tickets: TicketView[]): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const t of tickets) if (t.projectId) out[t.projectId] = t.total ? `${t.done}/${t.total}` : t.phase.replace('-', ' ')
+  return out
+}
+
+export interface RailChip {
+  key: string
+  title: string
+  /** What the user reads on the chip: its status, or what it is doing. */
+  label: string
+  status: PrStatus
+  /** What holds it, in words. */
+  marks: string[]
+  /** What it sits on. */
+  on: string
+  /** The coder's tile, to focus on a click. */
+  slot: number | null
+  prUrl: string | null
+}
+
+export interface RailRow {
+  repo: string
+  base: string
+  chips: RailChip[]
+}
+
+const STATUS_LABEL: Record<PrStatus, string> = {
+  planned: 'planned', coding: 'coding', 'tests-passing': 'tests passing', 'in-review': 'in review',
+  'review-clean': 'review clean', pushed: 'pushed', merged: 'merged',
+}
+
+/** One row per repo that has PRs, each PR a chip, bottom up as the plan has them. */
+export function railRows(t: TicketView): RailRow[] {
+  return t.repos.filter((r) => r.prs.length).map((r) => ({
+    repo: r.id,
+    base: r.baseBranch,
+    chips: r.prs.map((p): RailChip => ({
+      key: p.key, title: p.title, status: p.status, on: p.on, slot: p.slot, prUrl: p.prUrl,
+      label: p.reviewing ? 'being reviewed' : p.queued ? 'queued'
+        : p.work === 'restacking' ? 'restacking' : p.work === 'checking-lane' ? 'testing the lane'
+        : p.work === 'pushing' ? 'pushing' : p.work === 'fixing' ? 'fixing' : STATUS_LABEL[p.status],
+      marks: [
+        ...(p.needsRestack ? ['needs restack'] : []),
+        ...(p.blocked ? [`stuck: ${p.blocked}`] : []),
+        ...(p.paused ? ['paused'] : []),
+      ],
+    })),
+  }))
 }

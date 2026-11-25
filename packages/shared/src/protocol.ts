@@ -1,6 +1,7 @@
 /** WebSocket and REST payloads shared by both sides (spec §4.4, §4.5). */
 
 import type { SessionStatus } from './status.ts'
+import type { TicketView } from './workflow.ts'
 
 export type { SessionStatus }
 
@@ -106,6 +107,8 @@ export type ServerMessage =
       projects: ProjectInfo[]
       activeProjectId: string | null
       update?: UpdateInfo | null
+      /** The multi-PR workflow's tickets, for tab badges and stack rails; absent while it has none. */
+      tickets?: TicketView[]
     }
   | {
       type: 'status'

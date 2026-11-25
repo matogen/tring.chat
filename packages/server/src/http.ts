@@ -68,6 +68,11 @@ export interface HttpOptions {
   onHook?: (sessionId: string, event: string) => void
   /** Each usage report as it is read; the workflow's quota guard uses its limits. */
   onUsage?: (report: UsageReport) => void
+  /** Clean up… for a finished or cancelled ticket (workflow/runner.ts). */
+  cleanup?: {
+    plan(ticketId: string): Promise<unknown>
+    run(ticketId: string, ids: string[]): Promise<unknown>
+  } | null
   /** Settings → Workflow (workflow/settings.ts). Null answers 503. */
   workflow?: Pick<WorkflowSettingsStore, 'get' | 'update'> | null
 }
@@ -432,6 +437,25 @@ export function createHandler(opts: HttpOptions) {
      * PC should use, installing it, switching it on, and turning speech into
      * text. The audio is a WAV the page recorded, and stays on this machine.
      */
+    const cleanup = url.pathname.match(/^\/api\/tickets\/([^/]+)\/cleanup$/)
+    if (cleanup) {
+      if (!opts.cleanup) return json(res, 503, { error: 'the multi-PR workflow is not available' })
+      const id = decodeURIComponent(cleanup[1]!)
+      try {
+        if (req.method === 'GET') return json(res, 200, { items: await opts.cleanup.plan(id) })
+        if (req.method === 'POST') {
+          const raw = await readBody(req)
+          if (raw === null) return tooLarge(req, res, 'body too large')
+          let body: { items?: unknown }
+          try { body = JSON.parse(raw || '{}') as typeof body } catch { return json(res, 400, { error: 'malformed body' }) }
+          const ids = Array.isArray(body.items) ? body.items.filter((x): x is string => typeof x === 'string') : []
+          return json(res, 200, { results: await opts.cleanup.run(id, ids) })
+        }
+      } catch (err) {
+        return json(res, 404, { error: (err as Error).message })
+      }
+    }
+
     if (url.pathname === '/api/workflow') {
       const workflow = opts.workflow
       if (!workflow) return json(res, 503, { error: 'workflow settings are not available' })

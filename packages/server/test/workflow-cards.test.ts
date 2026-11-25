@@ -105,7 +105,10 @@ describe('a workflow card\'s button over the socket', () => {
     const acts: unknown[] = []
     const hub = new Hub({
       pm, inbox, token: null,
-      workflow: { act: async (...a) => { acts.push(a); return a[2] === 'approve' ? null : 'that card or button is no longer current' } },
+      workflow: {
+        act: async (...a) => { acts.push(a); return a[2] === 'approve' ? null : 'that card or button is no longer current' },
+        ticketViews: () => [],
+      },
     })
     const server = createServer()
     hub.attach(new WebSocketServer({ server, verifyClient: upgradeGuard(createOriginCheck()) }))

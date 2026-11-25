@@ -1391,3 +1391,18 @@ body.card-full-open .term-voice { display: none; }
 .card-ask .card-reason { flex: 1 1 200px; }
 .card-range { flex: 1 1 140px; accent-color: var(--emerald); }
 .card-range-value { min-width: 2ch; text-align: right; }
+
+/* ---- a ticket tab's stack rail ---- */
+#stack { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 4px 8px; border-bottom: 1px solid var(--line); font-size: 12px; }
+#stack[hidden] { display: none; }
+.stack-title { color: var(--muted); font-weight: 600; margin-right: 4px; }
+.stack-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.stack-repo { color: var(--muted); margin-right: 2px; }
+.stack-chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; background: none; color: var(--text); font: inherit; cursor: pointer; }
+.stack-chip:disabled { cursor: default; opacity: 0.75; }
+.stack-chip.status-coding, .stack-chip.status-in-review { border-color: var(--amber, #d9a400); }
+.stack-chip.status-tests-passing, .stack-chip.status-review-clean { border-color: var(--emerald); }
+.stack-chip.status-pushed, .stack-chip.status-merged { border-color: var(--emerald); background: color-mix(in srgb, var(--emerald) 15%, transparent); }
+.stack-chip.held { border-style: dashed; }
+.ticket-badge { margin-left: 6px; font-size: 11px; color: var(--muted); }
+.cleanup-row small { display: block; margin-left: 22px; }

@@ -124,6 +124,41 @@ export interface Plan {
   docs: { files: Array<{ repo: string; path: string }> } | { none: string }
 }
 
+/** What a screen needs of a ticket for its tab badge and stack rail (state message). */
+export interface TicketView {
+  id: string
+  localKey: string
+  title: string
+  projectId: string | null
+  phase: TicketPhase
+  /** PRs reviewed or further, of all. */
+  done: number
+  total: number
+  /** One row per repo, its PRs bottom up. */
+  repos: Array<{
+    id: string
+    baseBranch: string
+    prs: Array<{
+      index: number
+      key: string
+      title: string
+      status: PrStatus
+      /** What it sits on: another PR's key, or the base branch. */
+      on: string
+      branch: string
+      prUrl: string | null
+      work: PrWork
+      reviewing: boolean
+      queued: boolean
+      needsRestack: boolean
+      blocked: string | null
+      paused: boolean
+      /** The coder's tile, when it is open. */
+      slot: number | null
+    }>
+  }>
+}
+
 export const MIN_PRS = 1
 export const MAX_PRS = 16
 
@@ -246,4 +281,6 @@ export interface Ticket {
   planErrors: string[]
   /** Cleaned up: kept for the record (Recent tickets), no longer on any card. */
   archived?: boolean
+  /** Each pushed PR's CI, where the forge says (GitHub through gh). */
+  ci?: Record<number, 'green' | 'red' | 'pending'>
 }
