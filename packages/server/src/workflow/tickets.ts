@@ -86,6 +86,10 @@ export class TicketStore {
       maxAgents: spec.maxAgents,
       log: [],
       createdAt: this.now(),
+      laneChecks: {},
+      amendments: [],
+      baseMoved: {},
+      planErrors: [],
     }
     this.tickets.set(t.id, t)
     await this.save(t)

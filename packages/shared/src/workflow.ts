@@ -147,6 +147,8 @@ export interface Finding {
   /** High and medium findings hold the PR; low and nit are advisory. */
   holds: boolean
   resolution: FindingResolution
+  /** The file belongs to another PR: that PR fixes it, and both are held until it does. */
+  routedTo: number | null
 }
 
 /** Where a tile is, in terms that survive a restart (as card-store.ts keeps them). */
@@ -163,11 +165,27 @@ export interface Review {
   findings: Finding[]
 }
 
+/** What a PR's coder is doing for the engine right now; anything but idle and queued is an agent at work. */
+export type PrWork = 'idle' | 'coding' | 'fixing' | 'restacking' | 'checking-lane' | 'pushing'
+
 export interface StackPr {
   index: number
   branch: string
   worktree: string | null
   status: PrStatus
+  work: PrWork
+  /** A fresh reviewer is reviewing it now. */
+  reviewing: boolean
+  /** Held by the user: nothing new is started for it. */
+  paused: boolean
+  /** The PR below moved: rebase onto its new head from `from` (its old head) once approved. */
+  restack: { from: string; approved: boolean; deferred: boolean } | null
+  /** The user clicked Push: its push hook lets one push through. */
+  pushAllowed: boolean
+  /** The last hook or report from its agents, for spotting a stuck one. */
+  lastActivity: number
+  /** Review rounds in a row that each brought new held findings. */
+  heldRounds: number
   coder: TileAt | null
   /** Kept after the coder's tile closes, for `claude --resume`. */
   coderConversation: string | null
@@ -176,6 +194,8 @@ export interface StackPr {
     baseFailing: boolean
     blocked: string | null
     interfaceReady: boolean
+    /** Its own tests are red. Everything waiting on it gets baseFailing. */
+    failing: boolean
   }
   /** The head of `below` (or of the base branch) this PR sits on. */
   baseSha: string | null
@@ -216,4 +236,12 @@ export interface Ticket {
   maxAgents: number
   log: WorkLogEntry[]
   createdAt: number
+  /** Lane checks that passed: the lane's top PR -> its head when its whole lane passed there. */
+  laneChecks: Record<number, string>
+  /** Interface changes a lower PR asked for, waiting for the user. */
+  amendments: Array<{ id: string; pr: number; name: string; contract: string; why: string }>
+  /** How far each repo's base branch moved on its remote since the lanes were based on it. */
+  baseMoved: Record<string, { commits: number; conflict: boolean }>
+  /** The planner's last errors, while it is revising. */
+  planErrors: string[]
 }

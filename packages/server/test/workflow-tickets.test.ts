@@ -28,8 +28,9 @@ const plan: Plan = {
 
 const stackPr: StackPr = {
   index: 1, branch: 'feature/CHV-3193-1-orders-table', worktree: '/src/api.worktrees/x', status: 'coding',
+  work: 'coding', reviewing: false, paused: false, restack: null, pushAllowed: false, lastActivity: 0, heldRounds: 0,
   coder: null, coderConversation: null,
-  flags: { needsRestack: false, baseFailing: false, blocked: null, interfaceReady: false },
+  flags: { needsRestack: false, baseFailing: false, blocked: null, interfaceReady: false, failing: false },
   baseSha: null, headSha: null, review: null, prUrl: null,
 }
 
