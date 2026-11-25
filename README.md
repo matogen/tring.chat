@@ -685,10 +685,12 @@ view, and in it:
   it, and may decline it with a reason) or *Skip with reason…*.
 - When a PR below moves, the ones above it are restacked bottom up (offered, or
   automatic). Each lane's tests run whole at its top. *Push & open PR* (draft, against
-  the branch below) is yours to click, per PR or for the whole stack. You merge; tring
-  follows the merge (GitHub through `gh`; *Mark merged* elsewhere), restacks what was on
-  it and retargets its PR. When it is done, *Clean up…* offers to remove the tab,
-  worktrees and branches, ticking only what is safe and never forcing git.
+  the branch below) is yours to click, per PR or for the whole stack: the coder pushes,
+  and tring opens the PR itself (see [Pull requests](#pull-requests-github-and-bitbucket)).
+  You merge; tring follows the merge and CI, restacks what was on it, and once you click
+  *Push* on the rebased branch, points its PR at the new base. When it is done,
+  *Clean up…* offers to remove the tab, worktrees and branches, ticking only what is
+  safe and never forcing git.
 
 The rules are enforced, not just asked for: each tile runs `claude --permission-mode
 auto` with its own settings, and tring's hook denies an edit outside the PR's files, any
@@ -697,6 +699,33 @@ server that only their own token opens, and a "tests pass" counts only for a com
 HEAD. At most *Agents per ticket* (4–16) work at once, and none start while the usage
 panel shows a limit at 90 % or more. The ticket's feature card (pinned at the top of the
 inbox, on the phone too) shows its progress and checklist; the tab shows a stack rail.
+
+### Pull requests: GitHub and Bitbucket
+
+The agents never hold a forge token and never open, edit or merge a PR; tring does the
+opening and retargeting, and only reads the rest. It knows the forge from each repo's
+`origin`.
+
+- **GitHub** goes through your own `gh` (`gh pr create --draft`, `gh pr edit --base`,
+  `gh pr view` for the merge and checks).
+- **Bitbucket Cloud** goes through its REST API with a scoped
+  [API token](https://support.atlassian.com/bitbucket-cloud/docs/create-an-api-token/)
+  you create for tring: *Create API token with scopes*, app Bitbucket, scopes
+  `read:pullrequest:bitbucket` and `write:pullrequest:bitbucket`. Put it in
+  `~/.config/tring/bitbucket.json` (keep it to yourself: `chmod 600`):
+
+  ```json
+  { "token": "ATATT…", "email": "you@example.com" }
+  ```
+
+  With `email` (your Atlassian account email) the token goes as basic auth; without it,
+  as a bearer token, which also suits a repository or workspace access token. Or set
+  `TRING_BITBUCKET_TOKEN` (and `TRING_BITBUCKET_EMAIL`) for the daemon. It is read on
+  each use, so no restart is needed; Settings → Workflow says whether tring has one.
+  Builds on the PR (Pipelines or any CI that posts commit statuses) go on the checklist.
+- **Without a token** (or when `gh` fails), the push is still recorded and the card gives
+  you the link to open the PR yourself. A merge is then seen once the branch is in the
+  base on `origin` (a merge commit or fast-forward); a squash merge needs *Mark merged*.
 
 ## Claude Code
 

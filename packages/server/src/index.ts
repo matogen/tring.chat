@@ -34,6 +34,7 @@ import { realGit } from './git-worktrees.ts'
 import { WorkflowSettingsStore } from './workflow/settings.ts'
 import { TicketStore } from './workflow/tickets.ts'
 import { StackGit } from './workflow/git.ts'
+import { Forge, bitbucketCreds } from './workflow/forge.ts'
 import { WorkflowRunner } from './workflow/runner.ts'
 import type { Limit } from './usage.ts'
 
@@ -256,6 +257,7 @@ async function main(): Promise<void> {
     mcpScript,
     node: process.execPath,
     onChange: () => onTickets(),
+    forge: new Forge({ bitbucket: () => bitbucketCreds(configDir) }),
   })
   await runner.load()
   runner.start()
@@ -342,6 +344,7 @@ async function main(): Promise<void> {
         return next
       },
     },
+    forges: () => ({ bitbucket: bitbucketCreds(configDir) !== null, file: path.join(configDir, 'bitbucket.json') }),
     stack: runner,
     gate: (id, tool, input) => runner.gate(id, tool, input),
     onHook: (id) => runner.onHook(id),

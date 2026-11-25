@@ -75,6 +75,8 @@ export interface HttpOptions {
   } | null
   /** Settings → Workflow (workflow/settings.ts). Null answers 503. */
   workflow?: Pick<WorkflowSettingsStore, 'get' | 'update'> | null
+  /** Whether tring has a Bitbucket token, and the file it goes in; never the token. */
+  forges?: () => { bitbucket: boolean; file: string }
 }
 
 /**
@@ -454,6 +456,11 @@ export function createHandler(opts: HttpOptions) {
       } catch (err) {
         return json(res, 404, { error: (err as Error).message })
       }
+    }
+
+    if (url.pathname === '/api/workflow/forges' && req.method === 'GET') {
+      if (!opts.forges) return json(res, 503, { error: 'not available' })
+      return json(res, 200, opts.forges())
     }
 
     if (url.pathname === '/api/workflow') {

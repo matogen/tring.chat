@@ -40,16 +40,28 @@ const PLANNER: ToolDef[] = [{
 const CODER: ToolDef[] = [
   {
     name: 'report',
-    description: 'Tell tring where your PR is. interface_ready: the interfaces you provide are committed. tests_passing / restacked / lane_passing: give the commit sha you ran the tests on and their summary lines (tring checks it is HEAD and nothing is uncommitted). tests_failing / lane_failing: what failed. pushed: the PR URL.',
+    description: 'Tell tring where your PR is. interface_ready: the interfaces you provide are committed. tests_passing / restacked / lane_passing: give the commit sha you ran the tests on and their summary lines (tring checks it is HEAD and nothing is uncommitted). tests_failing / lane_failing: what failed.',
     inputSchema: {
       type: 'object',
       properties: {
-        kind: { type: 'string', enum: ['interface_ready', 'tests_passing', 'tests_failing', 'restacked', 'lane_passing', 'lane_failing', 'pushed'] },
+        kind: { type: 'string', enum: ['interface_ready', 'tests_passing', 'tests_failing', 'restacked', 'lane_passing', 'lane_failing'] },
         sha: { type: 'string', description: 'The commit the tests ran on.' },
         evidence: { type: 'string', description: 'The test commands and their summary lines.' },
-        url: { type: 'string', description: 'pushed: the PR URL.' },
       },
       required: ['kind'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'open_pr',
+    description: 'Once you have pushed your branch (only when tring tells you to push): tring opens your draft PR against the branch below, or, after a restack, points the PR you already have at it. You never open or edit PRs yourself.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'The PR title.' },
+        body: { type: 'string', description: 'The PR description (Markdown). Say it is part of a stack and what it sits on.' },
+      },
+      required: ['title', 'body'],
       additionalProperties: false,
     },
   },

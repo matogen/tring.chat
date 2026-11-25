@@ -3,7 +3,7 @@ import { mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { InboxItem, ProjectInfo, SessionStatus } from '@tring/shared/protocol'
 import type { StackPr, Ticket, TicketRepo, TicketView, WorkflowSettings } from '@tring/shared/workflow'
-import { Forge } from './forge.ts'
+import { Forge, isPrUrl } from './forge.ts'
 import { writeAtomic } from '../card-store.ts'
 import type { GateDecision } from '../hook-route.ts'
 import { secretEquals } from '../security.ts'
@@ -65,8 +65,8 @@ export interface RunnerDeps {
   type?: (s: RunnerSession, text: string) => void
   /** The tickets changed: cards and the stack view are redrawn. */
   onChange?: () => void
-  /** Merges and CI, from the forge (GitHub through gh). */
-  forge?: Pick<Forge, 'pr'>
+  /** Opens and retargets PRs, and reads their merges and CI: gh on GitHub, the REST API on Bitbucket. */
+  forge?: Pick<Forge, 'pr' | 'open' | 'retarget'>
 }
 
 /** One thing Clean up… can remove, ticked when it is safe. */
@@ -92,7 +92,9 @@ interface TileRecord {
 
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell'])
-const PUSH = /\bgit\b[^;&|\n]*\bpush\b|\bgh\s+pr\s+create\b/
+const PUSH = /\bgit\b[^;&|\n]*\bpush\b/
+/** tring opens and retargets PRs itself (open_pr), with its own token. */
+const PR_EDIT = /\bgh\s+pr\s+(create|edit|ready)\b|\bapi\.bitbucket\.org\b/
 const MERGE = /\bgh\s+pr\s+merge\b|\bgit\b[^;&|\n]*\bmerge\b[^;&|\n]*\borigin\b/
 const READY_SETTLE_MS = 1500
 /** Activity is recorded at most this often per PR: hooks fire on every tool call. */
@@ -113,7 +115,7 @@ export class WorkflowRunner implements WorkflowTools {
   private lastTick = 0
   private lastFetch = 0
   private lastForge = 0
-  private readonly forge: Pick<Forge, 'pr'>
+  private readonly forge: Pick<Forge, 'pr' | 'open' | 'retarget'>
 
   constructor(private readonly d: RunnerDeps) {
     this.forge = d.forge ?? new Forge()
@@ -398,11 +400,19 @@ export class WorkflowRunner implements WorkflowTools {
     }
   }
 
-  /** Each pushed PR on GitHub: merged yet, and its CI. */
+  /**
+   * Each pushed PR: merged yet, and its CI. Where the forge cannot say (no
+   * token, a PR opened by hand), git does: merged once its branch is in the
+   * base on origin. A squash merge is then left to Mark merged.
+   */
   async readForge(t: Ticket): Promise<void> {
-    for (const p of t.prs.filter((x) => x.status === 'pushed' && x.prUrl)) {
-      const st = await this.forge.pr(p.prUrl!)
-      if (!st) continue
+    for (const p of t.prs.filter((x) => x.status === 'pushed')) {
+      const st = p.prUrl && isPrUrl(p.prUrl) ? await this.forge.pr(p.prUrl) : null
+      if (!st) {
+        const repo = this.repoOf(t, p)
+        if (repo && await this.d.git.isMerged(repo.root, p.branch, repo.baseBranch)) await this.run(t.id, { type: 'merged', pr: p.index })
+        continue
+      }
       if (st.ci && this.d.store.get(t.id)?.ci?.[p.index] !== st.ci) {
         const ci = st.ci
         await this.d.store.update(t.id, (x) => { x.ci = { ...(x.ci ?? {}), [p.index]: ci } })
@@ -545,6 +555,7 @@ export class WorkflowRunner implements WorkflowTools {
     if (SHELL_TOOLS.has(tool)) {
       const cmd = String(input['command'] ?? '')
       if (MERGE.test(cmd) && /\bgh\s+pr\s+merge\b/.test(cmd)) return { decision: 'deny', reason: 'tring never merges: the user merges on the forge.' }
+      if (PR_EDIT.test(cmd)) return { decision: 'deny', reason: 'tring opens and retargets PRs itself: once your push is through, call open_pr.' }
       if (!PUSH.test(cmd)) return null
       const pr = r.pr !== null ? prOf(t, r.pr) : undefined
       if (r.role !== 'coder' || !pr) return { decision: 'deny', reason: `A ${r.role} never pushes.` }
@@ -629,6 +640,7 @@ export class WorkflowRunner implements WorkflowTools {
         return 'Submitted. The user approves it on a card; you will hear back if they want changes.'
       }
       case 'report': return this.report(t, r, args)
+      case 'open_pr': return this.openPr(t, r, args)
       case 'resolve_finding':
         return say(await this.run(t.id, {
           type: 'resolveFinding', pr: r.pr!, finding: str('id'),
@@ -672,12 +684,6 @@ export class WorkflowRunner implements WorkflowTools {
     switch (kind) {
       case 'interface_ready': e = { type: 'report', pr: pr.index, kind }; break
       case 'tests_failing': case 'lane_failing': e = { type: 'report', pr: pr.index, kind, evidence }; break
-      case 'pushed': {
-        const url = typeof args['url'] === 'string' ? args['url'].trim() : ''
-        if (!/^https?:\/\//.test(url)) throw new ToolError('give the PR\'s URL')
-        e = { type: 'report', pr: pr.index, kind, url }
-        break
-      }
       case 'tests_passing': case 'restacked': case 'lane_passing': {
         if (!sha) throw new ToolError('give the sha of the commit the tests ran on')
         if (!evidence.trim()) throw new ToolError('give the test commands and their summary lines as evidence')
@@ -701,6 +707,55 @@ export class WorkflowRunner implements WorkflowTools {
     if (notice) throw new ToolError(notice)
     const now = prOf(this.d.store.get(t.id)!, pr.index)!
     return `Recorded. ${localKeyOf(t, pr.index)} is ${now.status}${now.work !== 'idle' ? ` (${now.work})` : ''}.`
+  }
+
+  /**
+   * After the coder's push: tring opens its draft PR against the branch below
+   * (or points the one it has there, after a restack). Without a way to open
+   * it, the push is recorded with the link for the user to open it by hand.
+   */
+  private async openPr(t: Ticket, r: TileRecord, args: Record<string, unknown>): Promise<string> {
+    const pr = prOf(t, r.pr!)
+    if (!pr) throw new ToolError('your PR is not in the stack')
+    if (pr.work !== 'pushing') throw new ToolError('tring has not asked you to push; carry on, it tells you when')
+    const repo = this.repoOf(t, pr)!
+    const below = t.plan?.prs.find((x) => x.index === pr.index)?.below
+    const parent = below != null ? prOf(t, below) : undefined
+    const base = parent && parent.status !== 'merged' ? parent.branch : repo.baseBranch
+    const key = localKeyOf(t, pr.index)
+    let url: string
+    let byHand = false
+    let said: string
+    if (pr.prUrl && isPrUrl(pr.prUrl)) {
+      url = pr.prUrl
+      const err = await this.forge.retarget(url, base)
+      said = err ? `tring could not point ${url} at ${base} (${err}); the user is told to.` : `${url} now targets ${base}.`
+      if (err) {
+        const prUrl = url
+        await this.d.store.update(t.id, (x) => { x.log.push({ at: this.now, pr: pr.index, who: 'tring', text: `could not retarget ${prUrl} to ${base}: ${err}; change its target on the forge` }) })
+      }
+    } else if (pr.prUrl) {
+      // Opened by hand before: tring does not know that PR, only the link.
+      url = pr.prUrl
+      byHand = true
+      said = `The user opened this PR by hand; if it targets anything but ${base}, they change it.`
+    } else {
+      const origin = await this.d.git.originUrl(repo.root)
+      const opened = origin
+        ? await this.forge.open({ origin, head: pr.branch, base, title: String(args['title'] ?? '').trim() || key, body: String(args['body'] ?? '') })
+        : { error: `${repo.id} has no origin remote` }
+      if ('url' in opened) {
+        url = opened.url
+        said = `Draft PR opened: ${url}`
+      } else {
+        url = opened.link ?? (origin ?? repo.root).replace(/\/\/[^@/]+@/, '//')
+        byHand = true
+        said = `tring could not open the PR (${opened.error}), so the user opens it by hand from ${url}.`
+      }
+    }
+    const notice = await this.run(t.id, { type: 'report', pr: pr.index, kind: 'pushed', url, ...(byHand ? { byHand } : {}) })
+    if (notice) throw new ToolError(notice)
+    return `Recorded: ${key} is pushed. ${said}`
   }
 
   private stackStatus(t: Ticket): string {

@@ -5,6 +5,7 @@ import path from 'node:path'
 import type { ProjectInfo, SessionStatus } from '@tring/shared/protocol'
 import { DEFAULT_WORKFLOW, type Plan, type PlannedPr } from '@tring/shared/workflow'
 import { ToolError } from '../src/orchestrator-tools.ts'
+import type { Forge } from '../src/workflow/forge.ts'
 import type { StackGit } from '../src/workflow/git.ts'
 import { WorkflowRunner, type RunnerSession } from '../src/workflow/runner.ts'
 import { TicketStore } from '../src/workflow/tickets.ts'
@@ -64,6 +65,7 @@ function fakeGit(over: Partial<Record<keyof StackGit, unknown>> = {}): StackGit 
     fetchBase: async () => ({ commits: 0, error: null }),
     conflicts: async () => false,
     isMerged: async () => true,
+    originUrl: async () => 'git@bitbucket.org:matogen/api.git',
     removeWorktree: async () => null,
     deleteBranch: async () => null,
     ...over,
@@ -84,7 +86,7 @@ const plan: Plan = {
   ],
 }
 
-async function rig(git = fakeGit(), forge?: { pr(url: string): Promise<{ state: 'open' | 'merged' | 'closed'; ci: 'green' | 'red' | 'pending' | null } | null> }) {
+async function rig(git = fakeGit(), forge?: Partial<Pick<Forge, 'pr' | 'open' | 'retarget'>>) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'tring-runner-'))
   const store = new TicketStore(path.join(dir, 'tickets.json'), path.join(dir, 'tickets'))
   let now = 1_000_000
@@ -95,7 +97,7 @@ async function rig(git = fakeGit(), forge?: { pr(url: string): Promise<{ state: 
     tileDir: path.join(dir, 'tiles'), url: 'http://127.0.0.1:7331', mcpScript: '/opt/tring/tring-mcp.js', node: '/usr/bin/node',
     now: () => now,
     type: (s, text) => { (s as FakeSession).typed.push(text) },
-    ...(forge ? { forge } : {}),
+    ...(forge ? { forge: forge as Pick<Forge, 'pr' | 'open' | 'retarget'> } : {}),
   })
   await runner.load()
   const r = {
@@ -244,6 +246,9 @@ describe('WorkflowRunner: the gates', () => {
     expect(r.runner.gate(coder.id, 'Bash', { command: 'npm test' })).toBeNull()
     await r.store.update(r.ticket().id, (t) => { t.prs[0]!.pushAllowed = true })
     expect(r.runner.gate(coder.id, 'Bash', { command: 'git push -u origin HEAD' })).toBeNull()
+    // Opening and retargeting PRs is tring's job, with its own token.
+    expect(r.runner.gate(coder.id, 'Bash', { command: 'gh pr create --draft --base develop' })).toMatchObject({ decision: 'deny', reason: expect.stringMatching(/open_pr/) })
+    expect(r.runner.gate(coder.id, 'Bash', { command: 'gh pr edit 12 --base develop' })).toMatchObject({ decision: 'deny', reason: expect.stringMatching(/open_pr/) })
   })
 
   it('keeps reviewers read-only, and has no say over tiles that are not the workflow\'s', async () => {
@@ -313,6 +318,64 @@ describe('WorkflowRunner: after the push', () => {
     await r.runner.readForge(r.ticket())
     expect(r.ticket().ci).toEqual({ 1: 'green' })
     state = 'merged'
+    await r.runner.readForge(r.ticket())
+    expect(r.ticket()).toMatchObject({ phase: 'done', prs: [expect.objectContaining({ status: 'merged' })] })
+  })
+
+  /** PR 1 cleared to push: the user clicked Push, and its coder is pushing. */
+  async function pushing(r: Awaited<ReturnType<typeof rig>>, over: Partial<import('@tring/shared/workflow').StackPr> = {}) {
+    await r.runner.startTicket({ key: 'CHV-9', title: 'Orders', text: 'x', source: 'goby', repos: [{ path: ROOT }] })
+    await new Promise((res) => setTimeout(res, 50))
+    await r.as('CHV-9 planner')('submit_plan', { plan: { ...plan, prs: [plan.prs[0]], interfaces: [] } })
+    await r.runner.ticketAction({ ticket: 'CHV-9', action: 'approve' })
+    await new Promise((res) => setTimeout(res, 50))
+    await r.store.update(r.ticket().id, (t) => Object.assign(t.prs[0]!, { status: 'review-clean', work: 'pushing', pushAllowed: true, ...over }))
+  }
+  const BB_PR = 'https://bitbucket.org/matogen/api/pull-requests/42'
+
+  it('opens the PR itself once the coder has pushed, against the branch below', async () => {
+    const opened: unknown[] = []
+    const r = await rig(fakeGit(), { open: async (o) => { opened.push(o); return { url: BB_PR } } })
+    await pushing(r)
+    expect(await r.as('CHV-9-1')('open_pr', { title: 'Orders table', body: 'Part 1 of a stack.' })).toMatch(BB_PR)
+    expect(opened).toEqual([{ origin: 'git@bitbucket.org:matogen/api.git', head: r.ticket().prs[0]!.branch, base: 'develop', title: 'Orders table', body: 'Part 1 of a stack.' }])
+    expect(r.ticket().prs[0]).toMatchObject({ status: 'pushed', prUrl: BB_PR, pushAllowed: false })
+  })
+
+  it('without a token, records the push and hands the user the link to open the PR', async () => {
+    const link = 'https://bitbucket.org/matogen/api/pull-requests/new?source=x&dest=develop'
+    const r = await rig(fakeGit(), { open: async () => ({ error: 'no Bitbucket token: …', link }) })
+    await pushing(r)
+    expect(await r.as('CHV-9-1')('open_pr', { title: 'T', body: 'B' })).toMatch(/no Bitbucket token.*opens it by hand/s)
+    expect(r.ticket().prs[0]).toMatchObject({ status: 'pushed', prUrl: link })
+    expect(r.ticket().log.at(-1)!.text).toMatch(/by hand/)
+  })
+
+  it('opens nothing before the user has said push', async () => {
+    const r = await rig(fakeGit(), { open: async () => { throw new Error('must not open') } })
+    await pushing(r, { work: 'idle', pushAllowed: false })
+    await expect(r.as('CHV-9-1')('open_pr', { title: 'T', body: 'B' })).rejects.toThrow(/not asked you to push/)
+  })
+
+  it('after a restack, points the PR it already has at the branch below instead of opening another', async () => {
+    const retargeted: unknown[] = []
+    const r = await rig(fakeGit(), {
+      open: async () => { throw new Error('must not open') },
+      retarget: async (url, base) => { retargeted.push([url, base]); return null },
+    })
+    await pushing(r, { status: 'pushed', prUrl: BB_PR, flags: { needsRestack: false, baseFailing: false, blocked: null, interfaceReady: true, failing: false, repush: true } })
+    expect(await r.as('CHV-9-1')('open_pr', { title: 'T', body: 'B' })).toMatch(BB_PR)
+    expect(retargeted).toEqual([[BB_PR, 'develop']])
+    expect(r.ticket().prs[0]).toMatchObject({ status: 'pushed', prUrl: BB_PR, flags: expect.objectContaining({ repush: false }) })
+  })
+
+  it('without the forge, counts a PR merged once its branch is in the base on origin', async () => {
+    let merged = false
+    const r = await rig(fakeGit({ isMerged: async () => merged }), { pr: async () => null })
+    await pushed(r)
+    await r.runner.readForge(r.ticket())
+    expect(r.ticket().prs[0]!.status).toBe('pushed')
+    merged = true
     await r.runner.readForge(r.ticket())
     expect(r.ticket()).toMatchObject({ phase: 'done', prs: [expect.objectContaining({ status: 'merged' })] })
   })

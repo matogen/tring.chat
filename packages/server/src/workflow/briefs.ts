@@ -118,16 +118,18 @@ ${job.findings.map((f) => `- ${f.id} [${f.severity}]${f.file ? ` ${f.file}${f.li
       return `Restack now: the branch you build on moved. Run \`git rebase --onto ${job.onto} ${job.from}\` in your worktree.
 Resolve conflicts in files you own; if one is in a file you do not own, run \`git rebase --abort\` and call
 \`blocked\` naming the file. Then run your tests and call \`report\` with kind "restacked", the new HEAD sha and
-the evidence.${job.retarget ? ` Your PR (${pr.prUrl}) now targets ${job.retarget}: update it (\`gh pr edit --base ${job.retarget}\` on GitHub) and push with --force-with-lease once tring tells you to push.` : ''}`
+the evidence.${pr.prUrl ? ` Your PR (${pr.prUrl}) is already open: do not push the rebased branch until tring tells you to${job.retarget ? `; tring then points it at ${job.retarget}` : ''}.` : ''}`
     case 'checkLane':
       return `Every PR in your lane is reviewed: ${job.prs.map((i) => localKeyOf(t, i)).join(', ')}. Your branch holds all of them.
 Run every one of their test commands, plus the repository's full test suite, on your HEAD. Call \`report\` with kind
 "lane_passing" (and the sha and evidence) if all pass, or "lane_failing" with what failed.`
     case 'push':
-      return `The user says push. Push your branch and open a draft PR against \`${job.base}\`
-(\`gh pr create --draft --base ${job.base}\` on GitHub; the Bitbucket CLI or API on Bitbucket; use the pr skill for
-the body if it is installed, and say it is part of a stack). If the branch was pushed before and has been rebased,
-use --force-with-lease. Then call \`report\` with kind "pushed" and the PR's URL.`
+      return pr.prUrl
+        ? `The user says push. Push your rebased branch with \`git push --force-with-lease\`, then call \`open_pr\`
+(any title and body; your PR ${pr.prUrl} keeps its own): tring points it at \`${job.base}\`.`
+        : `The user says push. Push your branch (\`git push -u origin HEAD\`), then call \`open_pr\` with a title and body:
+tring opens the draft PR against \`${job.base}\`. Write the body with the pr skill if it is installed, and say it is
+part of a stack and what it sits on. Never open or edit the PR yourself.`
   }
 }
 

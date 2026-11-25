@@ -516,6 +516,32 @@ describe('stack engine: lanes, pushes and merges', () => {
     expect(r.t.phase).toBe('done')
   })
 
+  it('asks before pushing a pushed PR\'s restacked branch, then pushes it to the same PR', () => {
+    const r = allClean({ restack: 'auto' })
+    r.send({ type: 'report', pr: 2, kind: 'lane_passing', sha: 'b1', evidence: 'ok', git: { head: 'b1', clean: true } })
+    r.click('feature', 'push-stack:1')
+    r.send({ type: 'report', pr: 1, kind: 'pushed', url: 'u1' })
+    r.send({ type: 'report', pr: 2, kind: 'pushed', url: 'u2' })
+    r.click('feature', 'merged:1')
+    expect(r.card('push', 2)).toBeUndefined()
+    r.send({ type: 'report', pr: 2, kind: 'restacked', sha: 'b2', evidence: 'ok', git: { head: 'b2', clean: true, diffChanged: false } })
+    const card = r.card('push', 2)!
+    expect(card.title).toMatch(/rebased branch/)
+    const push = r.click('push', 'push', { pr: 2 })
+    expect(push.commands).toContainEqual({ do: 'work', pr: 2, newTile: true, job: { kind: 'push', base: 'develop' } })
+    r.send({ type: 'report', pr: 2, kind: 'pushed', url: 'u2' })
+    expect(r.pr(2)).toMatchObject({ status: 'pushed', prUrl: 'u2', pushAllowed: false, flags: expect.objectContaining({ repush: false }) })
+    expect(r.card('push', 2)).toBeUndefined()
+  })
+
+  it('logs a PR left to open by hand as such', () => {
+    const r = allClean()
+    r.send({ type: 'report', pr: 2, kind: 'lane_passing', sha: 'b1', evidence: 'ok', git: { head: 'b1', clean: true } })
+    r.click('push', 'push', { pr: 1 })
+    r.send({ type: 'report', pr: 1, kind: 'pushed', url: 'https://bitbucket.org/w/r/pull-requests/new?source=x', byHand: true })
+    expect(r.t.log.at(-1)!.text).toMatch(/open its PR by hand/)
+  })
+
   it('changes an interface only when the user agrees, and tells every PR that uses it', () => {
     const r = rig()
     r.approve()

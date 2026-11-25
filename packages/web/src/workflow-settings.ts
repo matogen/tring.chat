@@ -29,12 +29,33 @@ export function workflowSection(): HTMLElement {
   const paint = (s: WorkflowSettings): void => {
     state.textContent = ''
     body.replaceChildren(...workflowControls(s).map((c) => control(c, set)))
+    if (s.multiPr) body.append(forgesNote())
   }
 
   void api<WorkflowSettings>('/api/workflow').then(paint, (err: Error) => {
     state.textContent = `Workflow settings are not available: ${err.message}`
   })
   return box
+}
+
+/**
+ * How tring opens and follows PRs: gh on GitHub; on Bitbucket, a scoped API
+ * token the user puts in a file (tring never asks for it here).
+ */
+function forgesNote(): HTMLElement {
+  const wrap = el('div', 'workflow-control')
+  wrap.append(el('span', 'workflow-label', 'Pull requests'))
+  const hint = el('p', 'hint', 'GitHub: tring opens and follows PRs with your gh.')
+  const bb = el('p', 'hint')
+  wrap.append(hint, bb)
+  void api<{ bitbucket: boolean; file: string }>('/api/workflow/forges').then((f) => {
+    bb.textContent = f.bitbucket
+      ? 'Bitbucket: tring has an API token, so it opens PRs, retargets them and reads their builds.'
+      : `Bitbucket: no API token, so you open each PR from the link tring gives, and a merge is seen once the branch is in the base. ` +
+        `To let tring do it, create an Atlassian API token with the read:pullrequest:bitbucket and write:pullrequest:bitbucket scopes ` +
+        `and put {"token": "…", "email": "your Atlassian email"} in ${f.file}.`
+  }, () => { bb.textContent = '' })
+  return wrap
 }
 
 function control(c: WorkflowControl, set: (patch: Partial<WorkflowSettings>) => void): HTMLElement {

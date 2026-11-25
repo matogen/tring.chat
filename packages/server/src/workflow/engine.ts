@@ -47,7 +47,8 @@ export type EngineEvent =
   | { type: 'report'; pr: number; kind: 'interface_ready' }
   | { type: 'report'; pr: number; kind: 'tests_passing' | 'restacked' | 'lane_passing'; sha: string; evidence: string; git: GitCheck }
   | { type: 'report'; pr: number; kind: 'tests_failing' | 'lane_failing'; evidence: string }
-  | { type: 'report'; pr: number; kind: 'pushed'; url: string }
+  /** byHand: tring could not open the PR, and url is the link for the user to open it. */
+  | { type: 'report'; pr: number; kind: 'pushed'; url: string; byHand?: boolean }
   | { type: 'blocked'; pr: number; reason: string }
   | { type: 'resolveFinding'; pr: number; finding: string; outcome: 'fixed' | 'declined'; note: string }
   | { type: 'review'; pr: number; findings: ReviewFinding[]; testsPassed: boolean; evidence: string; range: { base: string; head: string } }
@@ -352,6 +353,7 @@ function report(t: Ticket, e: Extract<EngineEvent, { type: 'report' }>, env: Eng
         pr.review = null
       }
       log(t, env, pr.index, 'coder', `restacked to ${e.git.head.slice(0, 8)}${e.git.diffChanged ? ' (its diff changed)' : ''}: ${e.evidence}`)
+      if (pr.status === 'pushed' && pr.headSha !== e.git.head) pr.flags.repush = true
       if (pr.headSha !== e.git.head) moved(t, pr, e.git.head, true, env, out)
       return null
     }
@@ -373,7 +375,8 @@ function report(t: Ticket, e: Extract<EngineEvent, { type: 'report' }>, env: Eng
       pr.prUrl = e.url
       pr.pushAllowed = false
       pr.work = 'idle'
-      log(t, env, pr.index, 'coder', `pushed: ${e.url}`)
+      pr.flags.repush = false
+      log(t, env, pr.index, 'coder', e.byHand ? `pushed; tring could not open its PR, so open its PR by hand: ${e.url}` : `pushed: ${e.url}`)
       out.push({ do: 'closeCoder', pr: pr.index })
       return null
   }
@@ -511,7 +514,7 @@ function act(t: Ticket, e: Extract<EngineEvent, { type: 'action' }>, env: Engine
       log(t, env, pr!.index, 'user', 'push and open the PR')
       return null
     case 'push-stack':
-      for (const p of lanePrs(t, Number(arg))) if (!atLeast(p, 'pushed')) p.pushAllowed = true
+      for (const p of lanePrs(t, Number(arg))) if (!atLeast(p, 'pushed') || p.flags.repush) p.pushAllowed = true
       log(t, env, null, 'user', `push the stack from PR ${arg}`)
       return null
     case 'merged':
@@ -781,11 +784,17 @@ export function cardsFor(t: Ticket): CardSpec[] {
       }
     }
     if (pushable(t, pr) && !pr.pushAllowed && pr.work === 'idle') {
-      cards.push({
-        id: `${t.id}:push:${pr.index}`, kind: 'push', prIndex: pr.index, title: `${key} ${title} is ready to push`,
-        body: 'Reviewed, and its whole lane passes. Pushing opens a draft PR against the branch below.',
-        actions: [{ id: 'push', label: 'Push & open PR', primary: true }],
-      })
+      cards.push(pr.flags.repush
+        ? {
+          id: `${t.id}:push:${pr.index}`, kind: 'push', prIndex: pr.index, title: `${key} ${title}: push the rebased branch`,
+          body: `Restacked${pr.prUrl ? ` (${pr.prUrl})` : ''} and its tests pass. Pushing updates its PR with --force-with-lease and points it at the branch below.`,
+          actions: [{ id: 'push', label: 'Push', primary: true }],
+        }
+        : {
+          id: `${t.id}:push:${pr.index}`, kind: 'push', prIndex: pr.index, title: `${key} ${title} is ready to push`,
+          body: 'Reviewed, and its whole lane passes. Pushing opens a draft PR against the branch below.',
+          actions: [{ id: 'push', label: 'Push & open PR', primary: true }],
+        })
     }
   }
   return cards
@@ -937,10 +946,13 @@ function leavesOver(t: Ticket, p: StackPr): StackPr[] {
   return kids.length ? kids.flatMap((c) => leavesOver(t, c)) : [p]
 }
 
-/** Reviewed, every lane through it tested whole, what it sits on pushed, and no conflict with a moved base. */
+/** Reviewed, every lane through it tested whole (or pushed and since restacked), what it sits on pushed, and no conflict with a moved base. */
 function pushable(t: Ticket, p: StackPr): boolean {
-  if (p.status !== 'review-clean' || p.restack || p.flags.blocked) return false
-  if (!leavesOver(t, p).every((leaf) => leaf.headSha && t.laneChecks[leaf.index] === leaf.headSha)) return false
+  if (p.restack || p.flags.blocked) return false
+  // A pushed PR's rebased branch: its restack report carried its tests.
+  if (p.status === 'pushed' && !p.flags.repush) return false
+  if (p.status !== 'review-clean' && p.status !== 'pushed') return false
+  if (p.status === 'review-clean' && !leavesOver(t, p).every((leaf) => leaf.headSha && t.laneChecks[leaf.index] === leaf.headSha)) return false
   const parent = parentOf(t, p)
   if (parent && !atLeast(parent, 'pushed')) return false
   const repo = plannedOf(t, p)?.repo

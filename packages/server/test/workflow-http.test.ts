@@ -19,7 +19,7 @@ afterEach(async () => {
 const TOKEN = 't0ken'
 const auth = { authorization: `Bearer ${TOKEN}` }
 
-async function rig(withStore = true): Promise<Rig> {
+async function rig(withStore = true, forges?: () => { bitbucket: boolean; file: string }): Promise<Rig> {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'tring-workflow-http-'))
   const pm = await ProjectManager.open({
     url: 'http://127.0.0.1:0', scrollback: 50, idleMs: 150, statePath: path.join(dir, 'projects.json'),
@@ -29,7 +29,7 @@ async function rig(withStore = true): Promise<Rig> {
     workflow = new WorkflowSettingsStore(path.join(dir, 'workflow.json'))
     await workflow.load()
   }
-  const handler = createHandler({ pm, webRoot: path.join(dir, 'dist'), token: TOKEN, workflow })
+  const handler = createHandler({ pm, webRoot: path.join(dir, 'dist'), token: TOKEN, workflow, ...(forges ? { forges } : {}) })
   const server = createServer((req, res) => void handler(req, res))
   await new Promise<void>((res) => server.listen(0, '127.0.0.1', res))
   const r = { pm, server, base: `http://127.0.0.1:${(server.address() as { port: number }).port}` }
@@ -39,6 +39,18 @@ async function rig(withStore = true): Promise<Rig> {
 
 const post = (base: string, body: string, headers: Record<string, string> = auth): Promise<Response> =>
   fetch(`${base}/api/workflow`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body })
+
+describe('/api/workflow/forges', () => {
+  it('says whether tring has a Bitbucket token and where it goes, never the token', async () => {
+    let has = false
+    const r = await rig(true, () => ({ bitbucket: has, file: '/home/me/.config/tring/bitbucket.json' }))
+    expect(await (await fetch(`${r.base}/api/workflow/forges`, { headers: auth })).json())
+      .toEqual({ bitbucket: false, file: '/home/me/.config/tring/bitbucket.json' })
+    has = true
+    expect(await (await fetch(`${r.base}/api/workflow/forges`, { headers: auth })).json()).toMatchObject({ bitbucket: true })
+    expect((await fetch(`${r.base}/api/workflow/forges`)).status).toBe(401)
+  })
+})
 
 describe('/api/workflow', () => {
   it('reports the settings, off by default', async () => {

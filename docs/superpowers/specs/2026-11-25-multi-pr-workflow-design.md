@@ -1,6 +1,6 @@
 # Multi-PR workflow: one ticket, one tab, a stack of small reviewed PRs
 
-Status: **built 2026-11-25** on `feat/multi-pr-workflow` (commits 0–7 below; decisions Q1–Q19 at the end). Not pushed.
+Status: **built 2026-11-25** on `feat/multi-pr-workflow` (commits 0–8 below; decisions Q1–Q20 at the end). Not pushed.
 
 ## Context
 
@@ -224,17 +224,24 @@ after a restart by `TileRef`, exactly as cards are.
    green → phase `integrating` ends. Cross-repo end-to-end checks are the future `integrationCheck`.
 9. **Push / PRs** (decided 2026-11-25). Nothing is pushed until the user clicks. A PR that is `review-clean`
    with a green whole-stack check gets *Push & open PR* on its card; the feature card offers *Push stack*
-   (bottom-up). The click lifts that PR's push hold and prompts its coder to push and open the PR against the
-   branch below — `gh pr create --draft --base <lower>` on GitHub, the Bitbucket CLI/API on Bitbucket, the
-   `pr` skill for the body when installed — and `report(pushed, url)`. The click is the consent (tiles run in auto mode,
-   see §4). Status `pushed`. CI is read with `gh pr checks` on GitHub; "unknown" on
-   Bitbucket for now. Drafts by default.
-10. **Merge** (decided 2026-11-25). The user merges on the forge; tring never merges. Detection: `gh pr view`
-    polled on GitHub; a *Mark merged* button on Bitbucket. On merge of PR k: `merged`, its coder tile closes
+   (bottom-up). The click lifts that PR's push hold and prompts its coder to push, then call `open_pr`
+   with a title and body (the `pr` skill for the body when installed). **tring opens the draft PR against the
+   branch below itself** (Q20, decided 2026-11-25): `gh pr create --draft` on GitHub, the Bitbucket Cloud REST
+   API (`POST …/pullrequests`, `draft: true`) with a scoped API token the user puts in `bitbucket.json`. The
+   agents never hold a forge token; the hook denies `gh pr create|edit|ready` and `api.bitbucket.org` in a tile.
+   Without a token (or when `gh` fails) the push is recorded with the link to open the PR by hand. The click is
+   the consent (tiles run in auto mode, see §4). Status `pushed`. CI: `gh pr view --json statusCheckRollup` on
+   GitHub, `GET …/pullrequests/{id}/statuses` (latest per build key; STOPPED counts as red) on Bitbucket.
+10. **Merge** (decided 2026-11-25). The user merges on the forge; tring never merges. Detection, every 2 min:
+    the PR's state from the forge (GitHub `MERGED`; Bitbucket `MERGED`, with `DECLINED`/`SUPERSEDED` as closed);
+    where the forge cannot say, git (the branch is an ancestor of `origin/<base>`); *Mark merged* always works,
+    and is the only way for a squash merge without a token. On merge of PR k: `merged`, its coder tile closes
     (worktree kept), and PR k+1 is offered *Restack onto `<base>`* (automatic under `autoRestack: auto`): the
     tile runs `git rebase --onto <base> <PR k's old head>` — correct after a squash merge — runs its tests,
-    and retargets its PR (`gh pr edit --base <base>`). Re-pushing a pushed PR after a restack needs
-    `--force-with-lease` and is always a *Push* click. All merged → phase `done`.
+    and reports `restacked`. A pushed PR whose head moved gets `flags.repush` and a card *push the rebased
+    branch*: re-pushing needs `--force-with-lease` and is always a *Push* click. Its coder then calls
+    `open_pr` again, and tring retargets the PR it already has (`gh pr edit --base`; Bitbucket `PUT` with
+    the new `destination`) rather than opening another. All merged → phase `done`.
 11. **Clean-up** (decided 2026-11-25), never automatic. The feature card becomes *Done ✓* with *Clean up…*: a
     dialog listing the tab, its tiles, each worktree and each local branch, pre-ticking only what is safe (no
     uncommitted changes; branch merged or its PR closed). Removal is `git worktree remove` / `git branch -d`,
@@ -417,12 +424,12 @@ ticket tab like any project.
   unticked, and -d refuses it.
 - **Restarts**: tiles keep their flags through `Session.claudeArgs`; tile tokens and places are in
   `stack-tiles/tiles.json`; tickets in `tickets.json`.
-- **Not yet**: CI on Bitbucket (shows unknown), `maxPrLines`, `testFirst`, `integrationCheck` (shown
+- **Not yet**: `maxPrLines`, `testFirst`, `integrationCheck` (shown
   greyed in Settings), a global agents cap (dropped in Q19).
 
 ## 7. Building this feature
 
-One branch (`feat/multi-pr-workflow`), **one PR**, eight commits in this order (decided 2026-11-25). Each
+One branch (`feat/multi-pr-workflow`), **one PR**, nine commits in this order (decided 2026-11-25). Each
 commit builds, typechecks and passes its tests on its own (against the baseline above), so it can be reviewed
 commit by commit and split along commits later if needed. The setting is off by default throughout.
 
@@ -436,6 +443,7 @@ commit by commit and split along commits later if needed. The setting is off by 
 | 5 | Tiles + tools | `start_ticket`/`list_tickets`/`ticket_status`/`ticket_action` (+`tell`), ticket tab, role launch (auto mode, `--settings`, `--mcp-config`, briefs), `tring-stack` + per-tile tokens, hooks (ownership, push hold, read-only roles), `send_prompt` refusal | HTTP/hook, capability, tools |
 | 6 | Cards | `workflow` kind + `action` message; plan/finding/restack/stuck/conflict/push cards; feature card; desktop, phone, push, restart | card/action, web view-models |
 | 7 | Stack rail + finish | lanes rail, tab badge, *Push & open PR* / *Push stack*, `gh` merge detection + *Mark merged*, retarget, clean-up dialog, README + spec | view-models, `gh` stubs, clean-up safety |
+| 8 | Forges | tring opens and retargets PRs itself (`open_pr`): `gh` on GitHub, the Bitbucket Cloud REST API with a scoped token (`bitbucket.json`); Bitbucket state and build statuses; git merge detection without a token; *push the rebased branch* card; Settings shows whether a token is set | forge (fake gh + fake fetch), engine repush, runner `open_pr`/retarget/fallback, gate, `/api/workflow/forges` |
 
 Nothing is pushed or opened as a PR until the owner says so.
 
@@ -450,4 +458,4 @@ active, agents per ticket on a 4–16 slider, 90 % quota guard · Q10 tiles in a
 tests: evidence + HEAD/clean check + reviewer re-run · Q12 only high/medium findings hold; *Fix* means
 investigate, the coder may decline with a reason · Q13 base moves: fetch, offer *Update lane*, required only
 on a `merge-tree` conflict; base defaults to `develop` · Q14 orchestrator relays through `ticket_action
-tell` · Q15 the 30 failing tests are the baseline · Q16 one PR, green commits in order · Q17 local tickets per PR (`<KEY>-n`, `TRING-<n>` parent), never written to Goby · Q18 24 slots on every tab (commit 0) · Q19 agents slider per ticket (4–16, default 4), no overall cap.
+tell` · Q15 the 30 failing tests are the baseline · Q16 one PR, green commits in order · Q17 local tickets per PR (`<KEY>-n`, `TRING-<n>` parent), never written to Goby · Q18 24 slots on every tab (commit 0) · Q19 agents slider per ticket (4–16, default 4), no overall cap · Q20 forges: tring opens and retargets PRs itself (`open_pr`), `gh` on GitHub and the Bitbucket Cloud REST API with a scoped API token in `bitbucket.json`; no token falls back to a by-hand link and git merge detection.

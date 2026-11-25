@@ -59,6 +59,13 @@ describe('StackGit', () => {
     expect(await sg.branchPrefix(other)).toBe('feature/')
   })
 
+  it('says where origin is, so tring knows the forge, and null without one', async () => {
+    expect(await sg.originUrl(repo)).toBe(origin)
+    const lone = path.join(tmp, 'lone')
+    git(tmp, 'init', '-q', lone)
+    expect(await sg.originUrl(lone)).toBeNull()
+  })
+
   it('tells a git repository from a plain directory', async () => {
     expect(await sg.isRepo(repo)).toBe(true)
     expect(await sg.isRepo(tmp)).toBe(false)

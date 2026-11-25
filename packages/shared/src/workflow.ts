@@ -231,6 +231,8 @@ export interface StackPr {
     interfaceReady: boolean
     /** Its own tests are red. Everything waiting on it gets baseFailing. */
     failing: boolean
+    /** Pushed, then restacked: the rebased branch waits for the user's push. */
+    repush?: boolean
   }
   /** The head of `below` (or of the base branch) this PR sits on. */
   baseSha: string | null

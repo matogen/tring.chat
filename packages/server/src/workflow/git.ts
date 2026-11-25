@@ -138,6 +138,12 @@ export class StackGit {
     return false
   }
 
+  /** origin's URL, as git has it; null when there is no origin. */
+  async originUrl(repo: string): Promise<string | null> {
+    const r = await git(repo, ['remote', 'get-url', 'origin'])
+    return r.ok && r.out.trim() ? r.out.trim() : null
+  }
+
   /** `git worktree remove`, never forced: one with changes in it stays. Git's words, or null. */
   async removeWorktree(repo: string, worktree: string): Promise<string | null> {
     const r = await git(repo, ['worktree', 'remove', worktree], { plain: true })
