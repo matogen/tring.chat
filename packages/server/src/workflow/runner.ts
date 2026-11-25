@@ -262,7 +262,31 @@ export class WorkflowRunner implements WorkflowTools {
           `Status: ${pr.status}. Read \`git log\` and \`git status\` in your worktree, then carry on.`)
         return
       }
-      case 'integrate': return this.integrate(t, c.repo, c.base, c.tips)
+      case 'integrate': return this.integrate(t, c.repo, c.base, c.tips, c.assemble)
+      case 'pushCombined': {
+        const repo = t.repos.find((x) => x.id === c.repo)!
+        const combined = t.combined[c.repo]!
+        const err = await this.d.git.pushBranch(repo.root, c.sha, combined.branch, c.expect)
+        if (err) {
+          await this.apply(t.id, { type: 'combinedPushed', repo: c.repo, sha: c.sha, error: err })
+          return
+        }
+        if (combined.status !== 'local') {
+          await this.apply(t.id, { type: 'combinedPushed', repo: c.repo, sha: c.sha })
+          return
+        }
+        const origin = await this.d.git.originUrl(repo.root)
+        const body = [t.plan?.summary ?? '', '', `One commit per unit of ${t.localKey}, each reviewed on its own and tested together:`,
+          ...combined.units.map((u) => `- ${localKeyOf(t, u)} ${t.plan?.prs.find((x) => x.index === u)?.title ?? ''}`)].join('\n')
+        const opened = origin
+          ? await this.forge.open({ origin, head: combined.branch, base: combined.base, title: `${t.localKey} ${t.title}`, body })
+          : { error: `${repo.id} has no origin remote` }
+        await this.apply(t.id, {
+          type: 'combinedPushed', repo: c.repo, sha: c.sha,
+          ...('url' in opened ? { url: opened.url } : { url: opened.link ?? (origin ?? repo.root), byHand: true }),
+        })
+        return
+      }
       case 'prepareCombined': {
         const repo = t.repos.find((x) => x.id === c.repo)!
         const err = await this.d.git.pushBranch(repo.root, `origin/${c.from}`, t.combined[c.repo]!.branch)
@@ -293,21 +317,22 @@ export class WorkflowRunner implements WorkflowTools {
    * A repo's integration check: tring merges the tips onto the base (no
    * branch moves), then a fresh read-only integrator tile tests the merge.
    */
-  private async integrate(t: Ticket, repoId: string, base: string, tips: Array<{ unit: number; branch: string; sha: string }>): Promise<void> {
+  private async integrate(t: Ticket, repoId: string, base: string, tips: Array<{ unit: number; branch: string; sha: string }>,
+    assemble?: Array<{ unit: number; from: string; head: string; message: string }>): Promise<void> {
     const repo = t.repos.find((x) => x.id === repoId)!
     const report = (result: IntegrationResult): Promise<string | null> => this.apply(t.id, { type: 'integration', repo: repoId, result })
     try {
-      const made = await this.d.git.integrate(repo.root, {
-        base,
-        // The heads the engine recorded, not wherever the branches are by now.
-        tips: tips.map((x) => ({ unit: x.unit, branch: x.sha })),
-        name: `tring-${safeName(t.localKey)}-${safeName(repoId)}-integration`,
-      })
+      const name = `tring-${safeName(t.localKey)}-${safeName(repoId)}-integration`
+      // A single PR is assembled, a commit per unit; otherwise the tips are merged. Either way at the heads the engine recorded.
+      const made = assemble
+        ? await this.d.git.assemble(repo.root, { base, name, units: assemble })
+        : await this.d.git.integrate(repo.root, { base, tips: tips.map((x) => ({ unit: x.unit, branch: x.sha })), name })
       if ('conflict' in made) {
         await report({ status: 'conflict', ...made.conflict })
         return
       }
-      if (await report({ status: 'merged', sha: made.sha, base: made.base, worktree: made.worktree })) return
+      const commits = 'commits' in made ? made.commits as Array<{ unit: number; sha: string; verified: boolean }> : undefined
+      if (await report({ status: 'merged', sha: made.sha, base: made.base, worktree: made.worktree, ...(commits ? { commits } : {}) })) return
       await this.close(t.id, 'integrator', null, repoId)
       const fresh = this.d.store.get(t.id)!
       await this.spawn(fresh, 'integrator', null, made.worktree, null, undefined, repoId)
@@ -462,7 +487,8 @@ export class WorkflowRunner implements WorkflowTools {
    * base on origin. A squash merge is then left to Mark merged.
    */
   async readForge(t: Ticket): Promise<void> {
-    for (const p of t.prs.filter((x) => x.status === 'pushed')) {
+    // A single PR's units are followed through the one PR they are in.
+    for (const p of t.prs.filter((x) => x.status === 'pushed' && t.strategy !== 'single')) {
       const st = p.prUrl && isPrUrl(p.prUrl) ? await this.forge.pr(p.prUrl) : null
       if (!st) {
         const repo = this.repoOf(t, p)
@@ -482,6 +508,11 @@ export class WorkflowRunner implements WorkflowTools {
       if (c.status !== 'pushed') continue
       const repo = t.repos.find((x) => x.id === repoId)
       const st = c.prUrl && isPrUrl(c.prUrl) ? await this.forge.pr(c.prUrl) : null
+      if (st?.ci && t.strategy === 'single') {
+        const ci = st.ci
+        await this.d.store.update(t.id, (x) => { x.ci = { ...(x.ci ?? {}), ...Object.fromEntries(c.units.map((u) => [u, ci])) } })
+        this.d.onChange?.()
+      }
       const merged = st ? st.state === 'merged' : !!repo && await this.d.git.isMerged(repo.root, c.branch, c.base)
       if (!merged) continue
       const feature = cardsFor(this.d.store.get(t.id)!).find((x) => x.kind === 'feature')!
@@ -983,6 +1014,7 @@ export class WorkflowRunner implements WorkflowTools {
       push: () => [byKind('push'), 'push'],
       'push-stack': () => [cards[0], `push-stack:${pr}`],
       'open-final': () => [cards.find((c) => c.id.includes(':final:') && c.repo === args['repo']), 'open-final'],
+      'push-single': () => [cards.find((c) => c.id.includes(':single:') && c.repo === args['repo']), 'push-single'],
       'merged-final': () => [cards[0], `merged-final:${args['repo']}`],
       merged: () => [cards[0], `merged:${pr}`],
       resume: () => [cards[0], `resume:${pr}`],

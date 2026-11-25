@@ -793,3 +793,103 @@ describe('stack engine: independent PRs', () => {
     expect(r.t.log.at(-1)!.text).toMatch(/could not push feature\/CHV-1-orders: rejected/)
   })
 })
+
+describe('stack engine: a single PR of agent commits', () => {
+  function allClean() {
+    const r = rig()
+    r.approve(ordersPlan(), 'single')
+    r.clean(1, 'a1')
+    r.clean(2, 'b1')
+    r.clean(3, 'c1')
+    return r
+  }
+  /** The runner's side: assembled as s-<repo> (one commit per unit), then the integrator's verdict. */
+  function assembled(r: ReturnType<typeof rig>, repo: string, units: number[], status: 'passing' | 'failing' = 'passing') {
+    const sha = `s-${repo}-${r.t.log.length}`
+    r.send({
+      type: 'integration', repo,
+      result: { status: 'merged', sha, base: 'b0', commits: units.map((u, n) => ({ unit: u, sha: n === units.length - 1 ? sha : `c${u}`, verified: true })) },
+    })
+    r.send({ type: 'integration', repo, result: { status, sha, evidence: 'all pass' } })
+    return sha
+  }
+
+  it('keeps each unit on a local branch of its own, stacked where the plan says, and one PR per repo', () => {
+    const r = rig()
+    const res = r.approve(ordersPlan(), 'single')
+    expect(r.t.strategy).toBe('single')
+    expect(r.pr(1).branch).toBe('tring/CHV-1-1-orders-table')
+    expect(res.commands).toContainEqual(expect.objectContaining({ do: 'createWorktree', pr: 1, branch: 'tring/CHV-1-1-orders-table', from: 'origin/develop' }))
+    expect(r.t.combined['api']).toMatchObject({ branch: 'feature/CHV-1-orders', base: 'develop', units: [1, 2], status: 'local' })
+    expect(r.t.combined['web']).toMatchObject({ units: [3] })
+    r.send({ type: 'report', pr: 1, kind: 'interface_ready' })
+    expect(r.t.prs.find((p) => p.index === 2)!.worktree).toBe('/wt/2')
+  })
+
+  it('assembles every unit of a repo, in order, from each one\'s own change', () => {
+    const r = rig()
+    r.approve(ordersPlan(), 'single')
+    r.clean(1, 'a1')
+    r.send({ type: 'report', pr: 2, kind: 'interface_ready' })
+    r.pass(2, 'b1')
+    const res = r.review(2)
+    expect(res.commands).toContainEqual({
+      do: 'integrate', repo: 'api', base: 'develop',
+      tips: [{ unit: 1, branch: 'tring/CHV-1-1-orders-table', sha: 'a1' }, { unit: 2, branch: 'tring/CHV-1-2-orders-api', sha: 'b1' }],
+      assemble: [
+        { unit: 1, from: r.pr(1).baseSha, head: 'a1', message: 'Orders table\n\nsmall\n\nCHV-1-1' },
+        { unit: 2, from: r.pr(2).baseSha, head: 'b1', message: 'Orders API\n\nsmall\n\nCHV-1-2' },
+      ],
+    })
+  })
+
+  it('pushes the whole repo as one PR once it is assembled and passes, and nothing per unit', () => {
+    const r = allClean()
+    expect(r.card('push', 1)).toBeUndefined()
+    const sha = assembled(r, 'api', [1, 2])
+    expect(r.t.combined['api']!.commits.map((c) => c.unit)).toEqual([1, 2])
+    expect(r.card('push', 1)).toBeUndefined()
+    const card = r.card('push')!
+    expect(card.title).toMatch(/api.*single PR/)
+    expect(r.click('push', 'push-single').commands).toEqual([{ do: 'pushCombined', repo: 'api', sha, expect: null }])
+    r.send({ type: 'combinedPushed', repo: 'api', sha, url: 'https://github.com/o/api/pull/3' })
+    expect(r.t.combined['api']).toMatchObject({ status: 'pushed', prUrl: 'https://github.com/o/api/pull/3', pushedSha: sha })
+    expect(r.t.prs.filter((p) => p.index < 3).map((p) => [p.status, p.prUrl])).toEqual([
+      ['pushed', 'https://github.com/o/api/pull/3'], ['pushed', 'https://github.com/o/api/pull/3'],
+    ])
+    expect(r.card('feature')!.actions.map((a) => a.id)).toContain('merged-final:api')
+    expect(r.card('feature')!.actions.map((a) => a.id)).not.toContain('merged:1')
+  })
+
+  it('assembles again when the base moves, and offers to update the pushed PR with a lease on what it held', () => {
+    const r = allClean()
+    const first = assembled(r, 'api', [1, 2])
+    r.click('push', 'push-single')
+    r.send({ type: 'combinedPushed', repo: 'api', sha: first, url: 'u' })
+    expect(kinds(r.send({ type: 'baseMoved', repo: 'api', commits: 1, conflict: false }).commands)).toContain('integrate')
+    const second = assembled(r, 'api', [1, 2])
+    expect(r.card('push')!.title).toMatch(/update/)
+    expect(r.click('push', 'push-single').commands).toEqual([{ do: 'pushCombined', repo: 'api', sha: second, expect: first }])
+  })
+
+  it('on a clash with the base, rebases that unit; between units, stacks the later on the earlier', () => {
+    const r = allClean()
+    r.send({ type: 'integration', repo: 'web', result: { status: 'conflict', units: [3], files: ['app.ts'] } })
+    const res = r.click('integration', 'rebase:3')
+    expect(res.commands).toContainEqual(expect.objectContaining({ do: 'work', pr: 3, job: expect.objectContaining({ kind: 'restack', onto: 'origin/develop' }) }))
+  })
+
+  it('is done when every repo\'s single PR is merged', () => {
+    const r = allClean()
+    for (const [repo, units] of [['api', [1, 2]], ['web', [3]]] as const) {
+      const sha = assembled(r, repo, [...units])
+      r.click('push', 'push-single')
+      r.send({ type: 'combinedPushed', repo, sha, url: `u-${repo}` })
+    }
+    r.click('feature', 'merged-final:api')
+    expect(r.t.prs.filter((p) => p.index < 3).every((p) => p.status === 'merged')).toBe(true)
+    expect(r.t.phase).not.toBe('done')
+    r.click('feature', 'merged-final:web')
+    expect(r.t.phase).toBe('done')
+  })
+})

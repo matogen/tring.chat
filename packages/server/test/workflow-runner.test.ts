@@ -555,3 +555,50 @@ describe('WorkflowRunner: independent PRs and a final combined PR', () => {
     expect(r.ticket()).toMatchObject({ phase: 'done', combined: { api: { status: 'merged' } } })
   })
 })
+
+describe('WorkflowRunner: a single PR of agent commits', () => {
+  /** One unit, review-clean at a1, approved as a single PR: the next step is its assembly. */
+  async function clean(git = fakeGit(), forge?: Partial<Pick<Forge, 'pr' | 'open' | 'retarget'>>) {
+    const r = await rig(git, forge)
+    await r.runner.startTicket({ key: 'CHV-9', title: 'Orders', text: 'x', source: 'goby', repos: [{ path: ROOT }] })
+    await new Promise((res) => setTimeout(res, 50))
+    await r.as('CHV-9 planner')('submit_plan', { plan: { ...plan, prs: [plan.prs[0]], interfaces: [] } })
+    await r.runner.ticketAction({ ticket: 'CHV-9', action: 'approve', strategy: 'single' })
+    await r.store.update(r.ticket().id, (t) => Object.assign(t.prs[0]!, { status: 'review-clean', work: 'idle', headSha: 'a1', baseSha: 'b0' }))
+    await r.runner.run(r.ticket().id, { type: 'tick' })
+    await new Promise((res) => setTimeout(res, 50))
+    return r
+  }
+  const assembledGit = (over: Partial<Record<keyof StackGit, unknown>> = {}) => fakeGit({
+    assemble: async () => ({ sha: 's1', base: 'b0', worktree: path.resolve('/wt/integration'), commits: [{ unit: 1, sha: 's1', verified: false }] }),
+    ...over,
+  })
+
+  it('assembles the units into commits and has the integrator check the ones that differ from what was reviewed', async () => {
+    const asked: unknown[] = []
+    const r = await clean(assembledGit({ assemble: async (...a: unknown[]) => { asked.push(a); return { sha: 's1', base: 'b0', worktree: path.resolve('/wt/integration'), commits: [{ unit: 1, sha: 's1', verified: false }] } } }))
+    expect(asked).toEqual([[ROOT, {
+      base: 'develop', name: 'tring-CHV-9-api-integration',
+      units: [{ unit: 1, from: 'b0', head: 'a1', message: 'Table\n\nsmall\n\nCHV-9-1' }],
+    }]])
+    expect(r.ticket().combined['api']!.commits).toEqual([{ unit: 1, sha: 's1', verified: false }])
+    await r.flush()
+    const brief = r.tile('CHV-9 api integration')!.typed[0]!
+    expect(brief).toMatch(/one commit per unit/)
+    expect(brief).toMatch(/s1.*CHV-9-1.*check it out and run its tests/s)
+  })
+
+  it('pushes the assembled branch on the user\'s Push and opens its one PR', async () => {
+    const pushed: unknown[] = []
+    const opened: unknown[] = []
+    const r = await clean(assembledGit({ pushBranch: async (...a: unknown[]) => { pushed.push(a); return null } }), {
+      open: async (o) => { opened.push(o); return { url: 'https://bitbucket.org/matogen/api/pull-requests/7' } },
+    })
+    await r.as('CHV-9 api integration')('report_integration', { sha: 's1', passed: true, evidence: 'all pass' })
+    expect(await r.runner.ticketAction({ ticket: 'CHV-9', action: 'push-single', repo: 'api' })).toMatch(/Done/)
+    expect(pushed).toEqual([[ROOT, 's1', 'feat/CHV-9-orders', null]])
+    expect(opened).toEqual([expect.objectContaining({ head: 'feat/CHV-9-orders', base: 'develop', title: 'CHV-9 Orders' })])
+    expect(r.ticket().combined['api']).toMatchObject({ status: 'pushed', pushedSha: 's1', prUrl: 'https://bitbucket.org/matogen/api/pull-requests/7' })
+    expect(r.ticket().prs[0]).toMatchObject({ status: 'pushed', prUrl: 'https://bitbucket.org/matogen/api/pull-requests/7' })
+  })
+})

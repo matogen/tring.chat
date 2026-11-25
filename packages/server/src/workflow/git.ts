@@ -31,6 +31,9 @@ async function git(cwd: string, args: string[], opts: { timeout?: number; plain?
 
 const lastLines = (s: string): string => s.trim().split(/\r?\n/).slice(-3).join(' ')
 
+/** Who tring's own commits are by: integration merges, which no one pushes. */
+const TRING_IDENTITY = { GIT_AUTHOR_NAME: 'tring', GIT_AUTHOR_EMAIL: 'tring@localhost', GIT_COMMITTER_NAME: 'tring', GIT_COMMITTER_EMAIL: 'tring@localhost' }
+
 export interface WorktreeMade {
   path: string
   /** What `from` pointed at when the branch was made: what the PR sits on. */
@@ -158,12 +161,14 @@ export class StackGit {
    * branch, made from origin's base): the one push tring makes itself, on the
    * user's Push. Never prompts. Git's words, or null.
    */
-  async pushBranch(repo: string, from: string, branch: string): Promise<string | null> {
+  async pushBranch(repo: string, from: string, branch: string, expect?: string | null): Promise<string | null> {
     const ok = await git(repo, ['check-ref-format', '--branch', branch])
     if (!ok.ok || branch.startsWith('-')) return `${branch} is not a valid branch name`
     const sha = await git(repo, ['rev-parse', '--verify', '--quiet', `${from}^{commit}`])
     if (!sha.ok || from.startsWith('-')) return `${from} does not exist in ${repo}`
-    const r = await git(repo, ['push', '--quiet', 'origin', `${sha.out.trim()}:refs/heads/${branch}`], {
+    // Replacing what tring pushed before (a single PR, assembled again): only if it is still that.
+    const lease = expect ? [`--force-with-lease=refs/heads/${branch}:${expect}`] : []
+    const r = await git(repo, ['push', '--quiet', ...lease, 'origin', `${sha.out.trim()}:refs/heads/${branch}`], {
       plain: true, timeout: 60_000, env: { GIT_TERMINAL_PROMPT: '0' },
     })
     return r.ok ? null : lastLines(r.err) || 'git push failed'
@@ -202,14 +207,9 @@ export class StackGit {
    */
   async integrate(repo: string, spec: { base: string; tips: Array<{ unit: number; branch: string }>; name: string }):
     Promise<{ sha: string; base: string; worktree: string } | { conflict: { units: number[]; files: string[] } }> {
-    let base = ''
-    for (const ref of [`refs/remotes/origin/${spec.base}`, `refs/heads/${spec.base}`]) {
-      const r = await git(repo, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])
-      if (r.ok) { base = r.out.trim(); break }
-    }
-    if (!base) throw new Error(`${spec.base} does not exist in ${repo}`)
+    const base = await this.baseCommit(repo, spec.base)
     const touched = new Map<number, string[]>()
-    const env = { GIT_AUTHOR_NAME: 'tring', GIT_AUTHOR_EMAIL: 'tring@localhost', GIT_COMMITTER_NAME: 'tring', GIT_COMMITTER_EMAIL: 'tring@localhost' }
+    const env = TRING_IDENTITY
     let at = base
     for (const tip of spec.tips) {
       if (tip.branch.startsWith('-')) throw new Error(`"${tip.branch}" is not a branch`)
@@ -228,16 +228,70 @@ export class StackGit {
       if (!c.ok) throw new Error(`git commit-tree failed: ${lastLines(c.err)}`)
       at = c.out.trim()
     }
+    return { sha: at, base, worktree: await this.checkoutDetached(repo, spec.name, at) }
+  }
+
+  /**
+   * A single PR's branch, as objects: on the base, one commit per unit in
+   * order, each made of that unit's own change (`from`..`head`, applied with
+   * a three-way merge on `from`) and titled with `message`. A commit whose
+   * tree is the unit's own head tree is exactly what was reviewed and tested
+   * (verified). Checked out, detached, in the integration worktree. On a
+   * clash, the units whose changes meet there.
+   */
+  async assemble(repo: string, spec: { base: string; name: string; units: Array<{ unit: number; from: string; head: string; message: string }> }):
+    Promise<{ sha: string; base: string; worktree: string; commits: Array<{ unit: number; sha: string; verified: boolean }> } | { conflict: { units: number[]; files: string[] } }> {
+    const base = await this.baseCommit(repo, spec.base)
+    const touched = new Map<number, string[]>()
+    const commits: Array<{ unit: number; sha: string; verified: boolean }> = []
+    let at = base
+    for (const u of spec.units) {
+      if ([u.from, u.head].some((x) => x.startsWith('-')) || !u.head) throw new Error(`"${u.head}" is not a commit`)
+      // A unit whose base tring did not record (rebased onto the base): its change starts where it meets the base.
+      const from = u.from || (await git(repo, ['merge-base', base, u.head])).out.trim()
+      if (!from) throw new Error(`${u.head} shares no history with ${spec.base}`)
+      const diff = await git(repo, ['diff', '--name-only', from, u.head])
+      touched.set(u.unit, diff.out.split(/\r?\n/).filter(Boolean))
+      const m = await git(repo, ['merge-tree', '--write-tree', '--name-only', '--no-messages', `--merge-base=${from}`, at, u.head])
+      if (!m.ok && m.code === 1) {
+        const files = [...new Set(m.out.split(/\r?\n/).slice(1).filter(Boolean))].sort()
+        const units = spec.units.filter((x) => x.unit === u.unit || (touched.get(x.unit) ?? []).some((f) => files.includes(f))).map((x) => x.unit)
+        return { conflict: { units: [...new Set(units)].sort((a, b) => a - b), files } }
+      }
+      if (!m.ok) throw new Error(`git merge-tree failed: ${lastLines(m.err)}`)
+      const tree = m.out.split(/\r?\n/)[0]!.trim()
+      // The user's own identity, as for any commit of theirs; tring's only when git has none.
+      let c = await git(repo, ['commit-tree', tree, '-p', at, '-m', u.message])
+      if (!c.ok) c = await git(repo, ['commit-tree', tree, '-p', at, '-m', u.message], { env: TRING_IDENTITY })
+      if (!c.ok) throw new Error(`git commit-tree failed: ${lastLines(c.err)}`)
+      const own = await git(repo, ['rev-parse', `${u.head}^{tree}`])
+      at = c.out.trim()
+      commits.push({ unit: u.unit, sha: at, verified: own.ok && own.out.trim() === tree })
+    }
+    return { sha: at, base, worktree: await this.checkoutDetached(repo, spec.name, at), commits }
+  }
+
+  /** origin's `base` (or the local one, without a remote), as a commit. */
+  private async baseCommit(repo: string, name: string): Promise<string> {
+    for (const ref of [`refs/remotes/origin/${name}`, `refs/heads/${name}`]) {
+      const r = await git(repo, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])
+      if (r.ok) return r.out.trim()
+    }
+    throw new Error(`${name} does not exist in ${repo}`)
+  }
+
+  /** `sha` checked out, detached, in the worktree called `name`, made beside the others on first use. */
+  private async checkoutDetached(repo: string, name: string, sha: string): Promise<string> {
     const place = await this.ops.place(repo)
     if (!place) throw new Error(`${repo} is not a git repository`)
     const trees = await this.ops.worktrees(repo)
-    const there = trees.find((w) => path.basename(w.path) === spec.name && !w.prunable)
-    const dir = path.resolve(there ? there.path : defaultWorktreePath(place.commonDir, trees, spec.name))
+    const there = trees.find((w) => path.basename(w.path) === name && !w.prunable)
+    const dir = path.resolve(there ? there.path : defaultWorktreePath(place.commonDir, trees, name))
     const r = there
-      ? await git(dir, ['checkout', '--quiet', '--detach', at], { plain: true, timeout: 60_000 })
-      : await git(repo, ['worktree', 'add', '--quiet', '--detach', dir, at], { plain: true, timeout: 60_000 })
-    if (!r.ok) throw new Error(`could not check out the integration merge: ${lastLines(r.err)}`)
-    return { sha: at, base, worktree: dir }
+      ? await git(dir, ['checkout', '--quiet', '--detach', sha], { plain: true, timeout: 60_000 })
+      : await git(repo, ['worktree', 'add', '--quiet', '--detach', dir, sha], { plain: true, timeout: 60_000 })
+    if (!r.ok) throw new Error(`could not check out ${sha.slice(0, 8)}: ${lastLines(r.err)}`)
+    return dir
   }
 
   /** Whether `branch` would conflict with `onto` (merge-tree, nothing written to any worktree). */

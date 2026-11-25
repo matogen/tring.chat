@@ -263,3 +263,62 @@ describe('StackGit: a final PR\'s feature branch', () => {
     rmSync(dir, { recursive: true, force: true })
   })
 })
+
+describe('StackGit: a single PR\'s commits', () => {
+  let dir: string
+  let clone: string
+  let base: string
+  const head = (ref: string): string => git(clone, 'rev-parse', ref)
+  beforeAll(() => {
+    dir = mkdtempSync(path.join(os.tmpdir(), 'tring-assemble-'))
+    const bare = path.join(dir, 'origin.git')
+    git(dir, 'init', '-q', '--bare', bare)
+    clone = path.join(dir, 'app')
+    git(dir, 'clone', '-q', bare, clone)
+    git(clone, 'checkout', '-qb', 'develop')
+    base = commit(clone, 'app.ts', 'export const a = 1\n')
+    git(clone, 'push', '-q', '-u', 'origin', 'develop')
+    // Unit 1 in two commits; unit 2 on unit 1; unit 3 alone on the base; unit 4 clashing with unit 3.
+    git(clone, 'checkout', '-qb', 'tring/u1', 'origin/develop')
+    commit(clone, 'one.ts', 'export const one = 1\n')
+    commit(clone, 'one.test.ts', 'test\n')
+    git(clone, 'checkout', '-qb', 'tring/u2')
+    commit(clone, 'two.ts', 'export const two = 2\n')
+    git(clone, 'checkout', '-qb', 'tring/u3', 'origin/develop')
+    commit(clone, 'app.ts', 'export const a = 3\n')
+    git(clone, 'checkout', '-qb', 'tring/u4', 'origin/develop')
+    commit(clone, 'app.ts', 'export const a = 4\n')
+    git(clone, 'checkout', '-q', 'develop')
+  })
+  afterAll(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('makes one commit per unit, in order, from each unit\'s own change, and marks the ones that are exactly what was reviewed', async () => {
+    const r = await sg.assemble(clone, {
+      base: 'develop', name: 'tring-CHV-9-api-integration',
+      units: [
+        { unit: 1, from: base, head: head('tring/u1'), message: 'Orders table\n\nCHV-9-1' },
+        { unit: 2, from: head('tring/u1'), head: head('tring/u2'), message: 'Orders API' },
+        // Its base unrecorded (rebased onto the base): its change starts where it meets the base.
+        { unit: 3, from: '', head: head('tring/u3'), message: 'Bump a' },
+      ],
+    })
+    if (!('sha' in r)) throw new Error(JSON.stringify(r))
+    const log = git(r.worktree, 'log', '--format=%s', `${base}..HEAD`).split('\n')
+    expect(log).toEqual(['Bump a', 'Orders API', 'Orders table'])
+    expect(r.commits.map((c) => [c.unit, c.verified])).toEqual([[1, true], [2, true], [3, false]])
+    expect(r.commits.at(-1)!.sha).toBe(r.sha)
+    expect(git(r.worktree, 'show', 'HEAD:app.ts')).toBe('export const a = 3')
+    expect(git(clone, 'branch', '--list', 'feature*')).toBe('')
+  })
+
+  it('names the units whose changes clash', async () => {
+    const r = await sg.assemble(clone, {
+      base: 'develop', name: 'tring-CHV-9-api-integration',
+      units: [
+        { unit: 3, from: base, head: head('tring/u3'), message: 'three' },
+        { unit: 4, from: base, head: head('tring/u4'), message: 'four' },
+      ],
+    })
+    expect(r).toEqual({ conflict: { units: [3, 4], files: ['app.ts'] } })
+  })
+})

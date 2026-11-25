@@ -400,5 +400,7 @@ export interface CombinedPr {
   status: 'local' | 'pushed' | 'merged'
   /** Its branch exists on origin (independent PRs target it); while being pushed there, 'pushing'. */
   onOrigin: boolean | 'pushing'
+  /** A single PR: the assembled head last pushed, which the next push replaces only if it is still there. */
+  pushedSha?: string | null
   prUrl: string | null
 }

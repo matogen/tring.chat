@@ -92,7 +92,10 @@ ${list(p?.tests.run ?? [])}
 Acceptance criteria:
 ${list(p?.acceptance ?? [])}
 
-When it is done: commit everything, run the commands above on that commit, and call \`report\` with
+${t.strategy === 'single' ? `Your unit lands as one commit, titled "${p?.title}", of a single PR that tring assembles from every unit of the
+ticket and pushes itself: you never push. Keep your commits about this unit only.
+
+` : ''}When it is done: commit everything, run the commands above on that commit, and call \`report\` with
 kind "tests_passing", the commit sha and the summary lines as evidence. A report for a commit that is not HEAD,
 or with uncommitted changes, is refused. If tests fail and you cannot fix them, report "tests_failing". If you
 are stuck, call \`blocked\` with what you need.
@@ -122,7 +125,12 @@ ${list(repoTests(t, repo))}
 Your tile is read-only: do not edit, commit or push anything. If a command needs setup (installing dependencies,
 a build), do it without changing tracked files.
 
-Then call \`report_integration\` with sha "${sha}", passed true or false, the commands and their summary lines as
+${t.strategy === 'single' && t.combined[repo] ? `This is a single PR: one commit per unit, in this order on top of the base. A commit marked verified is
+exactly the code its unit was reviewed and tested on; for each one not marked, check it out (git checkout --detach
+<sha>), run that unit's commands, and come back to ${sha} for the rest:
+${t.combined[repo]!.commits.map((c) => `- ${c.sha} ${localKeyOf(t, c.unit)}${c.verified ? ' (verified)' : ': check it out and run its tests'}`).join('\n')}
+
+` : ''}Then call \`report_integration\` with sha "${sha}", passed true or false, the commands and their summary lines as
 evidence, and for a failure each failing test with the unit whose files it exercises when you can tell
 (failures: [{ test, unit }]). Then you are done; this tile closes.`
 }
