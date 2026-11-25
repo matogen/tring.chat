@@ -67,7 +67,7 @@ All of this goes away when node-pty publishes a stable release carrying the fix.
 
 `tring` starts the daemon and opens a chromeless browser window — no address bar, no
 tab strip, its own taskbar entry. In that window the browser stops reserving
-`Ctrl+1`–`Ctrl+8` for tab switching, so slots 11–16 get their natural keys.
+`Ctrl+1`–`Ctrl+8` for tab switching, so slots 11–20 get their natural keys.
 
 ### Windows
 
@@ -230,7 +230,7 @@ with a new token replaces the remembered one.
 
 ## Projects
 
-A project is a name and a root directory, and it owns its own 16 slots and its own
+A project is a name and a root directory, and it owns its own 24 slots and its own
 picker. The first run asks you to create one. Add more with `+` in the tab bar, and
 switch with a click or `p` inside the picker.
 
@@ -261,7 +261,8 @@ streams thumbnails, which is what keeps several projects cheap.
 |---|---|
 | `Ctrl+Space` | open the picker |
 | `1`–`9`, `0` | focus slot 1–10 |
-| `Ctrl+1`–`Ctrl+6` or `Shift+1`–`Shift+6` | focus slot 11–16 |
+| `Ctrl+1`–`Ctrl+0` or `Shift+1`–`Shift+0` | focus slot 11–20 |
+| `Alt+1`–`Alt+4` | focus slot 21–24 (on a Mac Option+digit types characters: use the switcher) |
 | `n` | focus the next finished session |
 | `p` | switch project |
 | `Space` | back to the previous session |
@@ -327,10 +328,10 @@ blocks startup and fails silently when offline. Opt out with
 
 ## Ring size
 
-Sixteen terminals is the default. The gear in the tab bar offers 4, 8, 12 and 16, and the
+Sixteen terminals is the default. The gear in the tab bar offers 4, 8, 12, 16 and 24, and the
 choice is remembered per browser.
 
-Twelve and sixteen are rings. Four and eight are bands — a row above and a row below, with
+Twelve, sixteen and twenty-four are rings. Four and eight are bands — a row above and a row below, with
 the focus terminal spanning the full width, because below twelve slots a ring's side
 columns cost the centre more width than the tiles are worth:
 
@@ -345,10 +346,11 @@ columns cost the centre more width than the tiles are worth:
 └────────┴────────┘      └────┴────┴────┴────┘
 ```
 
-The daemon is unaffected: every project still owns sixteen slots, so this is a view onto
+The daemon is unaffected: every project owns twenty-four slots, so this is a view onto
 them rather than a limit on them. Shrinking below a slot that is in use is refused with a
 notice rather than hiding a session that would still ring and still count in the tab badge
-— close those sessions first, or switch back up.
+— close those sessions first, or switch back up. The same goes the other way: a project
+with a session above slot 16 shows the ring of 24 until that slot is free again.
 
 ## Claude usage
 

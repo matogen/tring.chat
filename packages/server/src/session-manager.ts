@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { SLOT_COUNT } from '@tring/shared/keymap'
 import { Session, type ClaudeConversation } from './session.ts'
 
 export interface SessionSpec {
@@ -24,11 +25,12 @@ export interface SessionManagerOptions {
   shell?: string
 }
 
-export const SLOT_COUNT = 16
+/** One number for both sides: the keymap binds exactly these slots. */
+export { SLOT_COUNT }
 
 const HEX = /^#[0-9a-f]{6}$/i
 
-/** The 16 fixed slots of one project (spec §4.3). */
+/** The fixed slots of one project (spec §4.3): SLOT_COUNT of them. */
 export class SessionManager {
   private readonly bySlot = new Map<number, Session>()
   private readonly byId = new Map<string, Session>()
@@ -44,7 +46,7 @@ export class SessionManager {
 
   create(spec: SessionSpec = {}): Session {
     const slot = spec.slot ?? this.firstEmptySlot()
-    if (slot === null) throw new Error('all 16 slots are full')
+    if (slot === null) throw new Error(`all ${SLOT_COUNT} slots are full`)
     if (slot < 1 || slot > SLOT_COUNT) throw new Error(`slot ${slot} out of range`)
     if (this.bySlot.has(slot)) throw new Error(`slot ${slot} is occupied`)
 

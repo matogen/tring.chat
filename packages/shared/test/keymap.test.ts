@@ -13,9 +13,9 @@ describe('keymap', () => {
     expect(slotForEvent(ev('Digit0'))).toBe(10)
   })
 
-  it('maps both Ctrl+digit and Shift+digit to slots 11-16', () => {
-    for (let s = 11; s <= SLOT_COUNT; s++) {
-      const d = s - 10
+  it('maps both Ctrl+digit and Shift+digit to slots 11-20, 0 standing in for 10', () => {
+    for (let s = 11; s <= 20; s++) {
+      const d = (s - 10) % 10
       expect(slotForEvent(ev(`Digit${d}`, { ctrlKey: true }))).toBe(s)
       expect(slotForEvent(ev(`Digit${d}`, { shiftKey: true }))).toBe(s)
     }
@@ -26,21 +26,32 @@ describe('keymap', () => {
     expect(slotForEvent(ev('Digit1', { ctrlKey: true }))).toBe(11)
   })
 
-  it('prints both legends on slots 11-16 so either can be used', () => {
-    expect(legendForSlot(1)).toBe('1')
-    expect(legendForSlot(11)).toBe('Ctrl+1 / Shift+1')
+  it('maps Alt+1 to Alt+4 to slots 21-24', () => {
+    for (let s = 21; s <= 24; s++) expect(slotForEvent(ev(`Digit${s - 20}`, { altKey: true }))).toBe(s)
   })
 
-  it('covers all 16 slots and nothing else', () => {
+  it('prints both legends on slots 11-20 so either can be used', () => {
+    expect(legendForSlot(1)).toBe('1')
+    expect(legendForSlot(11)).toBe('Ctrl+1 / Shift+1')
+    expect(legendForSlot(17)).toBe('Ctrl+7 / Shift+7')
+    expect(legendForSlot(20)).toBe('Ctrl+0 / Shift+0')
+    expect(legendForSlot(21)).toBe('Alt+1')
+  })
+
+  it('covers all 24 slots and nothing else', () => {
+    expect(SLOT_COUNT).toBe(24)
     const slots = new Set(SLOT_BINDINGS.map((b) => b.slot))
     expect(slots.size).toBe(SLOT_COUNT)
     expect(Math.min(...slots)).toBe(1)
     expect(Math.max(...slots)).toBe(SLOT_COUNT)
   })
 
-  it('ignores Alt and Meta combinations', () => {
-    expect(slotForEvent(ev('Digit1', { altKey: true }))).toBeNull()
+  it('ignores Meta, Alt past 4, and Ctrl+Alt (AltGr on Windows types characters)', () => {
     expect(slotForEvent(ev('Digit1', { metaKey: true }))).toBeNull()
+    expect(slotForEvent(ev('Digit5', { altKey: true }))).toBeNull()
+    expect(slotForEvent(ev('Digit0', { altKey: true }))).toBeNull()
+    expect(slotForEvent(ev('Digit1', { altKey: true, ctrlKey: true }))).toBeNull()
+    expect(slotForEvent(ev('Digit1', { altKey: true, shiftKey: true }))).toBeNull()
   })
 
   it('sends ESC+CR for Ctrl+Enter and Shift+Enter, plain CR for Enter', () => {

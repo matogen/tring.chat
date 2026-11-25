@@ -95,7 +95,7 @@ describe('SessionManager.move', () => {
     m.move(s.id, 3)
     m.move('nobody', 4)
     m.move(s.id, 0)
-    m.move(s.id, 17)
+    m.move(s.id, 25)
     m.move(s.id, 2.5)
     expect(changes).toBe(0)
     expect(m.at(3)).toBe(s)
@@ -106,5 +106,20 @@ describe('SessionManager.move', () => {
     const s = m.create({ slot: 1 })
     m.move(s.id, 9)
     expect(m.respawn(s.id)!.slot).toBe(9)
+  })
+})
+
+describe('SessionManager slots', () => {
+  it('holds 24 slots: 24 is a slot, 25 is not', () => {
+    const m = manager()
+    expect(m.create({ slot: 24 }).slot).toBe(24)
+    expect(() => m.create({ slot: 25 })).toThrow(/out of range/)
+  })
+
+  it('moves a session up to slot 24', () => {
+    const m = manager()
+    const s = m.create({ slot: 3 })
+    m.move(s.id, 20)
+    expect(m.at(20)).toBe(s)
   })
 })

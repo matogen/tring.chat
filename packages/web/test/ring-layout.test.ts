@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { layoutFor, RING_SIZES } from '../src/ring-layout.ts'
+import { SLOT_COUNT } from '@tring/shared/keymap'
+import { fitRing, layoutFor, RING_SIZES } from '../src/ring-layout.ts'
 
 /** `grid-area: r / c / rEnd / cEnd` — end lines are exclusive. */
 function focusArea(focus: string) {
@@ -50,6 +51,30 @@ describe('ring layout', () => {
     expect(cells.get(9)).toEqual({ row: 5, col: 5 })   // bottom-right corner
     expect(cells.get(13)).toEqual({ row: 5, col: 1 })  // bottom-left corner
     expect(cells.get(16)).toEqual({ row: 2, col: 1 })  // last cell up the left side
+  })
+
+  it('offers 4, 8, 12, 16 and 24, one per slot count the daemon can hold', () => {
+    expect([...RING_SIZES]).toEqual([4, 8, 12, 16, 24])
+    expect(Math.max(...RING_SIZES)).toBe(SLOT_COUNT)
+  })
+
+  it('lays 24 out as the perimeter of a 7×7 grid around a 5×5 focus', () => {
+    const { cols, rows, focus, cells } = layoutFor(24)
+    expect({ cols, rows, focus }).toEqual({ cols: 7, rows: 7, focus: '2 / 2 / 7 / 7' })
+    expect(cells.get(7)).toEqual({ row: 1, col: 7 })   // end of the top row
+    expect(cells.get(13)).toEqual({ row: 7, col: 7 })  // bottom-right corner
+    expect(cells.get(19)).toEqual({ row: 7, col: 1 })  // bottom-left corner
+    expect(cells.get(24)).toEqual({ row: 2, col: 1 })  // last cell up the left side
+  })
+
+  it('grows the chosen ring to fit the highest slot in use, and back once it is free', () => {
+    expect(fitRing(16, 17)).toBe(24)
+    expect(fitRing(16, 24)).toBe(24)
+    expect(fitRing(16, 16)).toBe(16)
+    expect(fitRing(16, 3)).toBe(16)   // slot 17 closed again: back to the ring you chose
+    expect(fitRing(8, 13)).toBe(16)
+    expect(fitRing(4, 0)).toBe(4)
+    expect(fitRing(24, 2)).toBe(24)   // never smaller than the choice
   })
 
   it('lays 4 and 8 out as bands so the focus terminal gets the full width', () => {

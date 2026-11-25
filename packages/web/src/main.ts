@@ -24,7 +24,7 @@ import { attachImagePaste, pasteFromClipboard, type PasteOptions } from './paste
 import { copyToClipboard, recentLinks, screenText } from './copy.ts'
 import { Thumbnail } from './thumbnail.ts'
 import {
-  applyRing, placeInGrid, RING_SIZES, ringSize, setRingSize, type RingSize,
+  applyRing, fitRing, placeInGrid, ringSize, setRingSize, type RingSize,
 } from './ring-layout.ts'
 import { renderBar } from './project-bar.ts'
 import { MOBILE_QUERY, renderSwitcher } from './switcher.ts'
@@ -273,16 +273,9 @@ const sessionAt = (slot: number): SessionInfo | undefined => sessions().find((s)
 const sessionById = (id: string): SessionInfo | undefined =>
   projects.flatMap((p) => p.sessions).find((s) => s.id === id)
 
-/**
- * The ring you chose, grown to fit if the viewed project holds sessions in
- * higher slots. A restored project can arrive with slot 13 occupied long after
- * you picked a ring of 8, and a running session that renders nowhere — still
- * ringing, still counted in the tab badge — is the one outcome worth spending
- * code to make impossible.
- */
+/** The ring you chose, grown to fit the viewed project's sessions (fitRing). */
 function effectiveSize(): RingSize {
-  const highest = Math.max(0, ...sessions().map((s) => s.slot))
-  return RING_SIZES.find((n) => n >= highest && n >= ringSize()) ?? RING_SIZES[RING_SIZES.length - 1]!
+  return fitRing(ringSize(), Math.max(0, ...sessions().map((s) => s.slot)))
 }
 
 /** Global across every project: the title's job is to reach you elsewhere. */
@@ -1113,7 +1106,7 @@ function pickerKey(e: KeyboardEvent): void {
   }
 
   const slot = slotForEvent(e)
-  // The keymap always binds all 16; a smaller ring simply has no slot 13.
+  // The keymap always binds all 24; a smaller ring simply has no slot 13.
   if (slot !== null && slot <= effectiveSize() && overlayMode === 'picker') {
     e.preventDefault()
     ui.close()

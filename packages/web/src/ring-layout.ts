@@ -3,7 +3,7 @@
  *
  * Two families, both numbered clockwise from the top-left:
  *
- *   Rings (12, 16) — the perimeter of an N×N grid with the focus terminal
+ *   Rings (12, 16, 24) — the perimeter of an N×N grid with the focus terminal
  *   filling the inner (N-2)×(N-2). This is the original 5×5 layout, generalised.
  *
  *   Bands (4, 8) — a top row and a bottom row with the focus terminal spanning
@@ -21,7 +21,7 @@
  *   └────┴────┘      └──┴──┴──┴──┘
  */
 
-export const RING_SIZES = [4, 8, 12, 16] as const
+export const RING_SIZES = [4, 8, 12, 16, 24] as const
 export type RingSize = (typeof RING_SIZES)[number]
 
 export const DEFAULT_RING_SIZE: RingSize = 16
@@ -89,6 +89,18 @@ function read(): RingSize {
     // Private windows and blocked storage still get the default.
     return DEFAULT_RING_SIZE
   }
+}
+
+/**
+ * The ring you chose, grown to fit the highest slot in use. A restored project
+ * can arrive with slot 13 occupied long after you picked a ring of 8, and a
+ * busy ticket tab spills past 16; a running session that renders nowhere —
+ * still ringing, still counted in the tab badge — is the one outcome worth
+ * spending code to make impossible. Once those slots are free it is your ring
+ * again.
+ */
+export function fitRing(chosen: RingSize, highestSlot: number): RingSize {
+  return RING_SIZES.find((n) => n >= highestSlot && n >= chosen) ?? RING_SIZES[RING_SIZES.length - 1]!
 }
 
 export function isRingSize(n: number): n is RingSize {

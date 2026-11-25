@@ -173,13 +173,13 @@ describe('ProjectManager', () => {
     expect(pm.findSession(s2.id)?.projectId).toBe(b)
   })
 
-  it('allocates the first empty slot and refuses a seventeenth session', async () => {
+  it('allocates the first empty slot and refuses a twenty-fifth session', async () => {
     const { dir, pm } = await fixture()
     const id = pm.createProject('full', dir)
     const mgr = pm.managerFor(id)!
-    for (let i = 0; i < 16; i++) mgr.create({})
-    expect(mgr.list().map((s) => s.slot)).toEqual([...Array(16)].map((_, i) => i + 1))
-    expect(() => mgr.create({})).toThrow(/full/)
+    for (let i = 0; i < 24; i++) mgr.create({})
+    expect(mgr.list().map((s) => s.slot)).toEqual([...Array(24)].map((_, i) => i + 1))
+    expect(() => mgr.create({})).toThrow(/all 24 slots are full/)
 
     mgr.kill(mgr.at(7)!.id)
     expect(mgr.create({}).slot).toBe(7)
