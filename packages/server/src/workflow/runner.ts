@@ -611,9 +611,15 @@ export class WorkflowRunner implements WorkflowTools {
       id: t.id, localKey: t.localKey, title: t.title, projectId: t.projectId, phase: t.phase,
       done: t.prs.filter((p) => ['review-clean', 'pushed', 'merged'].includes(p.status)).length,
       total: t.prs.length,
+      strategy: t.strategy,
       repos: t.repos.map((repo) => ({
         id: repo.id,
         baseBranch: repo.baseBranch,
+        integration: t.integration[repo.id] ? { status: t.integration[repo.id]!.status, sha: t.integration[repo.id]!.sha } : null,
+        combined: t.combined[repo.id] ? {
+          branch: t.combined[repo.id]!.branch, status: t.combined[repo.id]!.status, prUrl: t.combined[repo.id]!.prUrl,
+          commits: t.combined[repo.id]!.commits.map((c) => ({ unit: c.unit, verified: c.verified })),
+        } : null,
         prs: (t.plan?.prs ?? []).filter((x) => x.repo === repo.id).map((x) => {
           const p = prOf(t, x.index)
           return {

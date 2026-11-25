@@ -128,15 +128,19 @@ describe('workflow cards', () => {
 })
 
 import type { TicketView } from '@tring/shared/workflow'
-import { railRows, tabBadges } from '../src/workflow-view.ts'
+import { tabBadges, workRows, workTitle } from '../src/workflow-view.ts'
 
 const pr = (over: Partial<TicketView['repos'][number]['prs'][number]> & { index: number }): TicketView['repos'][number]['prs'][number] => ({
   key: `CHV-9-${over.index}`, title: `PR ${over.index}`, status: 'planned', on: 'develop', branch: 'b', prUrl: null, work: 'idle',
   reviewing: false, queued: false, needsRestack: false, blocked: null, paused: false, slot: null, ...over,
 })
-const view = (prs: TicketView['repos'][number]['prs']): TicketView => ({
-  id: 't1', localKey: 'CHV-9', title: 'Orders', projectId: 'p1', phase: 'building', done: 1, total: 3,
-  repos: [{ id: 'api', baseBranch: 'develop', prs }, { id: 'web', baseBranch: 'develop', prs: [] }],
+const view = (prs: TicketView['repos'][number]['prs'], over: Partial<TicketView> = {}, repo: Partial<TicketView['repos'][number]> = {}): TicketView => ({
+  id: 't1', localKey: 'CHV-9', title: 'Orders', projectId: 'p1', phase: 'building', done: 1, total: 3, strategy: 'stacked',
+  repos: [
+    { id: 'api', baseBranch: 'develop', prs, integration: null, combined: null, ...repo },
+    { id: 'web', baseBranch: 'develop', prs: [], integration: null, combined: null },
+  ],
+  ...over,
 })
 
 describe('the stack rail and tab badge', () => {
@@ -146,7 +150,7 @@ describe('the stack rail and tab badge', () => {
   })
 
   it('draws a row per repo with PRs, bottom up, each with its status and what holds it', () => {
-    const rows = railRows(view([
+    const rows = workRows(view([
       pr({ index: 1, status: 'review-clean', slot: 2 }),
       pr({ index: 2, status: 'coding', on: 'CHV-9-1', work: 'coding', needsRestack: true, slot: 3 }),
       pr({ index: 3, status: 'planned', on: 'CHV-9-2', queued: true }),
@@ -161,5 +165,38 @@ describe('the stack rail and tab badge', () => {
       ['CHV-9-4', 'being reviewed', ['stuck: conflict in a.ts'], null],
     ])
     expect(rows[0]!.chips[1]!.on).toBe('CHV-9-1')
+  })
+
+  it('joins a stack\'s units bottom up, and leaves independent ones side by side on the base', () => {
+    const stacked = workRows(view([pr({ index: 1 }), pr({ index: 2, on: 'CHV-9-1' }), pr({ index: 3 })]))[0]!
+    expect(stacked.shape).toBe('stack')
+    expect(stacked.chips.map((c) => c.joined)).toEqual([false, true, false])
+    const side = workRows(view([pr({ index: 1 }), pr({ index: 2 })], { strategy: 'independent' }))[0]!
+    expect(side.shape).toBe('side')
+    expect(side.chips.map((c) => c.joined)).toEqual([false, false])
+  })
+
+  it('draws a single PR as one chip of commits, each a unit, with its branch', () => {
+    const row = workRows(view([pr({ index: 1, status: 'review-clean' }), pr({ index: 2, on: 'CHV-9-1', status: 'coding' })], { strategy: 'single' }, {
+      combined: { branch: 'feature/CHV-9-orders', status: 'local', prUrl: null, commits: [{ unit: 1, verified: true }, { unit: 2, verified: false }] },
+    }))[0]!
+    expect(row.shape).toBe('single')
+    expect(row.combined).toEqual({ branch: 'feature/CHV-9-orders', label: 'not pushed yet', prUrl: null })
+    expect(row.chips.map((c) => [c.key, c.verified])).toEqual([['CHV-9-1', true], ['CHV-9-2', false]])
+  })
+
+  it('ends each row with its integration check, and a final PR when there is one', () => {
+    const row = workRows(view([pr({ index: 1 })], { strategy: 'independent' }, {
+      integration: { status: 'failing', sha: 'abc' },
+      combined: { branch: 'feature/CHV-9-orders', status: 'pushed', prUrl: 'https://x/pr/9', commits: [] },
+    }))[0]!
+    expect(row.integration).toEqual({ state: 'failing', label: 'fails together' })
+    expect(row.combined).toEqual({ branch: 'feature/CHV-9-orders', label: 'final PR open', prUrl: 'https://x/pr/9' })
+    expect(workRows(view([pr({ index: 1 })]))[0]!.integration).toBeNull()
+  })
+
+  it('titles the work view with the ticket, its strategy and its phase', () => {
+    expect(workTitle(view([], { strategy: 'single', phase: 'awaiting-approval' }))).toBe('CHV-9 · single PR · awaiting approval')
+    expect(workTitle(view([], { strategy: null, phase: 'planning' }))).toBe('CHV-9 · planning')
   })
 })

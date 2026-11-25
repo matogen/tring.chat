@@ -208,10 +208,16 @@ export interface TicketView {
   /** PRs reviewed or further, of all. */
   done: number
   total: number
+  /** How its units land; null until the plan is approved (or picked on the plan card). */
+  strategy: Strategy | null
   /** One row per repo, its PRs bottom up. */
   repos: Array<{
     id: string
     baseBranch: string
+    /** Its integration check, once one has run. */
+    integration: { status: Integration['status']; sha: string | null } | null
+    /** Its single PR, or independent PRs' final PR. */
+    combined: { branch: string; status: CombinedPr['status']; prUrl: string | null; commits: Array<{ unit: number; verified: boolean }> } | null
     prs: Array<{
       index: number
       key: string

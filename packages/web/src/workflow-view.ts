@@ -1,6 +1,6 @@
 import type { InboxItem } from '@tring/shared/protocol'
 import {
-  AGENT_ROLES, EFFORTS, MAX_AGENTS, MIN_AGENTS, type AgentRole, type PrStatus, type RoleModel, type TicketView, type WorkflowSettings,
+  AGENT_ROLES, EFFORTS, MAX_AGENTS, MIN_AGENTS, STRATEGY_NAMES, type AgentRole, type PrStatus, type RoleModel, type TicketView, type WorkflowSettings,
 } from '@tring/shared/workflow'
 
 /** What Settings → Workflow shows: pure, so it is tested without a page (workflow-settings.ts draws it). */
@@ -190,12 +190,36 @@ export interface RailChip {
   /** The coder's tile, to focus on a click. */
   slot: number | null
   prUrl: string | null
+  /** It sits on the chip before it (a stack): drawn joined to it. */
+  joined: boolean
+  /** In a single PR: its commit is exactly what was reviewed and tested; null before it is assembled. */
+  verified: boolean | null
 }
 
-export interface RailRow {
+/**
+ * A repo's row of the work view: a stack (units joined bottom up), units
+ * side by side on the base (independent), or one PR of a commit per unit
+ * (single), then its integration check and any final or single PR.
+ */
+export interface WorkRow {
   repo: string
   base: string
+  shape: 'stack' | 'side' | 'single'
   chips: RailChip[]
+  integration: { state: 'waiting' | 'running' | 'passing' | 'failing' | 'conflict'; label: string } | null
+  combined: { branch: string; label: string; prUrl: string | null } | null
+}
+
+const INTEGRATION_LABEL = {
+  waiting: 'to test together', running: 'testing together', passing: 'tested together', failing: 'fails together', conflict: 'units conflict',
+} as const
+
+const COMBINED_LABEL = { local: 'not pushed yet', pushed: 'open', merged: 'merged' } as const
+
+/** The work view's heading: the ticket, how it lands, and where it is. */
+export function workTitle(t: TicketView): string {
+  const name = t.strategy ? STRATEGY_NAMES[t.strategy].replace(/^\w/, (c) => c.toLowerCase()) : null
+  return [t.localKey, ...(name ? [name] : []), t.phase.replace('-', ' ')].join(' · ')
 }
 
 const STATUS_LABEL: Record<PrStatus, string> = {
@@ -203,13 +227,22 @@ const STATUS_LABEL: Record<PrStatus, string> = {
   'review-clean': 'review clean', pushed: 'pushed', merged: 'merged',
 }
 
-/** One row per repo that has PRs, each PR a chip, bottom up as the plan has them. */
-export function railRows(t: TicketView): RailRow[] {
+/** One row per repo that has units, each a chip, bottom up as the plan has them. */
+export function workRows(t: TicketView): WorkRow[] {
   return t.repos.filter((r) => r.prs.length).map((r) => ({
     repo: r.id,
     base: r.baseBranch,
-    chips: r.prs.map((p): RailChip => ({
+    shape: t.strategy === 'single' ? 'single' : t.strategy === 'independent' ? 'side' : 'stack',
+    integration: r.integration ? { state: r.integration.status, label: INTEGRATION_LABEL[r.integration.status] } : null,
+    combined: r.combined ? {
+      branch: r.combined.branch, prUrl: r.combined.prUrl,
+      label: t.strategy === 'single' ? COMBINED_LABEL[r.combined.status] === 'open' ? 'PR open' : COMBINED_LABEL[r.combined.status]
+        : `final PR ${COMBINED_LABEL[r.combined.status]}`,
+    } : null,
+    chips: r.prs.map((p, n): RailChip => ({
       key: p.key, title: p.title, status: p.status, on: p.on, slot: p.slot, prUrl: p.prUrl,
+      joined: t.strategy !== 'independent' && n > 0 && r.prs[n - 1]!.key === p.on,
+      verified: r.combined?.commits.find((c) => c.unit === p.index)?.verified ?? null,
       label: p.reviewing ? 'being reviewed' : p.queued ? 'queued'
         : p.work === 'restacking' ? 'restacking'
         : p.work === 'pushing' ? 'pushing' : p.work === 'fixing' ? 'fixing' : STATUS_LABEL[p.status],

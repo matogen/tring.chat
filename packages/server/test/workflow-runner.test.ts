@@ -432,7 +432,8 @@ describe('WorkflowRunner: after the push', () => {
   it('describes each ticket for its tab badge and stack rail', async () => {
     const r = await approved()
     const [v] = r.runner.ticketViews()
-    expect(v).toMatchObject({ localKey: 'CHV-9', projectId: 'p1', phase: 'building', done: 0, total: 2 })
+    expect(v).toMatchObject({ localKey: 'CHV-9', projectId: 'p1', phase: 'building', done: 0, total: 2, strategy: 'stacked' })
+    expect(v!.repos[0]).toMatchObject({ integration: null, combined: null })
     expect(v!.repos[0]!.prs.map((p) => [p.key, p.on, p.status, p.queued])).toEqual([
       ['CHV-9-1', 'develop', 'coding', false],
       ['CHV-9-2', 'CHV-9-1', 'planned', true],
