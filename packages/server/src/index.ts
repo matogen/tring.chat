@@ -31,6 +31,7 @@ import { pushApi } from './push-api.ts'
 import { sendPush } from './web-push.ts'
 import { vocabulary, Whisper } from './whisper.ts'
 import { realGit } from './git-worktrees.ts'
+import { WorkflowSettingsStore } from './workflow/settings.ts'
 
 interface Auth {
   token: string | null
@@ -272,6 +273,8 @@ async function main(): Promise<void> {
   // and the branches they are on, with the ticket numbers in them.
   const whisper = new Whisper(path.join(configDir, 'whisper'), path.join(configDir, 'whisper.json'))
   await whisper.load()
+  const workflow = new WorkflowSettingsStore(path.join(configDir, 'workflow.json'))
+  await workflow.load()
   let vocab = { at: 0, text: '' }
   const voiceVocabulary = async (): Promise<string> => {
     if (Date.now() - vocab.at < 60_000) return vocab.text
@@ -294,6 +297,7 @@ async function main(): Promise<void> {
     tools,
     agentSession: (id) => agent.find(id),
     push: pushApi(pushStore, notifier),
+    workflow,
     voice: {
       status: () => whisper.status(),
       install: (model) => whisper.install(model),

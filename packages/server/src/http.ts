@@ -15,6 +15,7 @@ import { routeHook } from './hook-route.ts'
 import type { InboxItem } from '@tring/shared/protocol'
 import { hooksStatus, installHooks, type HooksStatus } from './hooks-install.ts'
 import { ToolError, TOOLS, type OrchestratorTools } from './orchestrator-tools.ts'
+import type { WorkflowSettingsStore } from './workflow/settings.ts'
 import type { Session } from './session.ts'
 import { claudeConversation } from './session.ts'
 import type { PushApi } from './push-api.ts'
@@ -58,6 +59,8 @@ export interface HttpOptions {
   push?: PushApi | null
   /** Local speech recognition for the desktop microphone (whisper.ts). Null answers 503. */
   voice?: VoiceApi | null
+  /** Settings → Workflow (workflow/settings.ts). Null answers 503. */
+  workflow?: Pick<WorkflowSettingsStore, 'get' | 'update'> | null
 }
 
 export interface VoiceApi {
@@ -371,6 +374,23 @@ export function createHandler(opts: HttpOptions) {
      * PC should use, installing it, switching it on, and turning speech into
      * text. The audio is a WAV the page recorded, and stays on this machine.
      */
+    if (url.pathname === '/api/workflow') {
+      const workflow = opts.workflow
+      if (!workflow) return json(res, 503, { error: 'workflow settings are not available' })
+      if (req.method === 'GET') return json(res, 200, workflow.get())
+      if (req.method === 'POST') {
+        const raw = await readBody(req)
+        if (raw === null) return tooLarge(req, res, 'body too large')
+        let patch: unknown
+        try {
+          patch = JSON.parse(raw || '{}')
+        } catch {
+          return json(res, 400, { error: 'malformed body' })
+        }
+        return json(res, 200, await workflow.update(patch))
+      }
+    }
+
     if (url.pathname.startsWith('/api/voice')) {
       const voice = opts.voice
       if (!voice) return json(res, 503, { error: 'local speech recognition is not available' })

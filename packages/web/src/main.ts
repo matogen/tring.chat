@@ -19,6 +19,7 @@ import { attachFileDrop, filePicker, insertFiles, refuseStrayDrops } from './dro
 import { Dictation, recognitionFactory } from './dictation.ts'
 import { Voice, type VoiceTarget } from './voice.ts'
 import { voiceSection } from './voice-settings.ts'
+import { workflowSection } from './workflow-settings.ts'
 import { attachTileDrag } from './tile-drag.ts'
 import { attachImagePaste, pasteFromClipboard, type PasteOptions } from './paste.ts'
 import { copyToClipboard, recentLinks, screenText } from './copy.ts'
@@ -892,10 +893,11 @@ function openSettings(): void {
     if (v.ring !== ringSize()) changeRingSize(v.ring)
     else { paintBar(); void refreshUsage() }
     // Notifications are a phone's: a desktop is not offered them at all.
-  }, detectPhone() ? [notificationsSection()] : [voiceSection(() => {
+    // The workflow is the daemon's, so both are offered it.
+  }, detectPhone() ? [notificationsSection(), workflowSection()] : [voiceSection(() => {
     voice.forget()
     void voice.engine().then((engine) => document.body.classList.toggle('no-voice', engine === null))
-  })])
+  }), workflowSection()])
 }
 
 function changeRingSize(size: RingSize): void {

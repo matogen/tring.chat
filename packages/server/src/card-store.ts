@@ -221,7 +221,7 @@ function validCard(v: unknown): v is SavedCard {
  * closed console window, a shutdown) leaves the old file, never half a new one.
  * The cards quote agents' messages and commands, so the file is private.
  */
-async function writeAtomic(file: string, text: string): Promise<void> {
+export async function writeAtomic(file: string, text: string): Promise<void> {
   await mkdir(path.dirname(file), { recursive: true })
   const tmp = `${file}.${process.pid}.tmp`
   await writeFile(tmp, text, { mode: 0o600 })

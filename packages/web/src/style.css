@@ -1221,6 +1221,12 @@ pre.card-body {
 .notify-body .field.toggle.notify-choice { margin: 6px 0; padding: 0; border: none; }
 .notify-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
 .notify-result { color: var(--muted); font-size: 12px; }
+.workflow-control { margin: 8px 0; }
+.workflow-control .hint { margin: 2px 0 0; }
+.workflow-control.later { opacity: 0.5; }
+.workflow-label { color: var(--text); font-size: 12.5px; display: block; margin-bottom: 4px; }
+.workflow-slider { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 10px; }
+.workflow-slider input[type=range] { grid-column: 1 / -1; width: 100%; accent-color: var(--emerald); }
 
 /* ---------- choice buttons on finished cards (choices.ts) ---------- */
 
