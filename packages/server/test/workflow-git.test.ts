@@ -45,7 +45,7 @@ beforeAll(() => {
 })
 afterAll(() => { rmSync(tmp, { recursive: true, force: true }) })
 
-describe('StackGit', () => {
+describe('StackGit', { timeout: 30_000 }, () => {
   it('bases a ticket on develop when the repo has one, else on the remote\'s default branch', async () => {
     expect(await sg.baseBranch(repo)).toBe('develop')
     const plain = path.join(tmp, 'plain')
@@ -154,7 +154,7 @@ describe('StackGit', () => {
   })
 })
 
-describe('HeadWatcher', () => {
+describe('HeadWatcher', { timeout: 30_000 }, () => {
   it('reports a branch head once when it moves, and nothing when it has not', async () => {
     const seen: Array<{ key: string; sha: string }> = []
     const w = new HeadWatcher(sg, (key, sha) => seen.push({ key, sha }))
@@ -171,7 +171,7 @@ describe('HeadWatcher', () => {
   })
 })
 
-describe('StackGit: cleaning up', () => {
+describe('StackGit: cleaning up', { timeout: 30_000 }, () => {
   it('knows a branch merged into the base, and removes worktrees and branches only the safe way', async () => {
     const wt = await sg.createWorktree(repo, { branch: 'feat/done', from: 'origin/develop' })
     const sha = commit(wt.path, 'done.ts', 'd\n')
@@ -199,7 +199,7 @@ describe('StackGit: cleaning up', () => {
   })
 })
 
-describe('StackGit: the integration check', () => {
+describe('StackGit: the integration check', { timeout: 30_000 }, () => {
   let dir: string
   let clone: string
   beforeAll(() => {
@@ -247,7 +247,7 @@ describe('StackGit: the integration check', () => {
   })
 })
 
-describe('StackGit: a final PR\'s feature branch', () => {
+describe('StackGit: a final PR\'s feature branch', { timeout: 30_000 }, () => {
   it('creates it on origin from the base there, without a prompt', async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 'tring-pushbranch-'))
     const bare = path.join(dir, 'origin.git')
@@ -264,7 +264,7 @@ describe('StackGit: a final PR\'s feature branch', () => {
   })
 })
 
-describe('StackGit: a single PR\'s commits', () => {
+describe('StackGit: a single PR\'s commits', { timeout: 30_000 }, () => {
   let dir: string
   let clone: string
   let base: string

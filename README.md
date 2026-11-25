@@ -663,7 +663,8 @@ and when an agent has finished.
 
 ### Multi-PR workflow
 
-For a complex feature or bug fix, built as a stack of small, tested, reviewed PRs.
+For a complex feature or bug fix, built by several agents as small, tested, reviewed units,
+landed the way that suits the ticket: independent PRs, a stack, or one PR of their commits.
 Switch it on in **Settings → Workflow → Multi-PR workflow** (off by default; off, nothing
 of it runs or shows). The orchestrator agent restarts in the same conversation to pick up
 its ticket tools.
@@ -673,24 +674,43 @@ ticket up the way it already does (or asks you to paste it), works out which loc
 it touches, and calls `start_ticket`. tring opens a tab for the ticket without moving your
 view, and in it:
 
-- A **planner** (read-only) splits the ticket into 1–16 small PRs, in lanes per repo:
-  each with its scope, the files only it may edit, the interfaces it provides and uses,
-  its tests and acceptance criteria. You approve the plan on a card before any code.
-  tring keeps its own local tickets (`<KEY>-1`, `<KEY>-2`… under
-  `~/.config/tring/tickets/`); it never writes to your tracker.
-- A **coder** per PR, in its own worktree branched from the PR below it. Lower PRs commit
-  their interfaces first; upper ones start once those exist and code against the plan.
+- A **planner** (read-only) splits the ticket into 1–16 small units (aim: 100–400 changed
+  lines each): each with its scope, the files only it may edit, the interfaces it provides
+  and uses, its tests and acceptance criteria. It also **recommends how they land**, with a
+  line each on coupling, file overlap, size, repos, review load and shipping. tring keeps
+  its own local tickets (`<KEY>-1`, `<KEY>-2`… under `~/.config/tring/tickets/`); it never
+  writes to your tracker.
+- **You choose, on every plan card**, with one *Approve plan* under a strategy picker
+  (the planner's pick marked ★; your Settings default pre-selected):
+
+  | | Independent PRs | Stacked PRs | Single PR |
+  | --- | --- | --- | --- |
+  | For | units that do not depend on each other | layers that build on each other | tightly coupled or small changes, or one PR per ticket |
+  | Branches | each off the base | each on the unit below | local only; tring makes one branch |
+  | PRs | one per unit, into the base (or a feature branch and one final PR) | one per unit, on the one below | one per repo, a commit per unit |
+  | Merge | any order | bottom up | once |
+  | Base moves | only a unit that would conflict is rebased | the stack is restacked bottom up | tring re-assembles |
+
+  A pick the plan does not fit (independent PRs for units that depend on each other)
+  reads *(re-plans)*: the planner reshapes the plan for it, and you choose again.
+- A **coder** per unit, in its own worktree. Units commit their interfaces first; the ones
+  using them start once those exist and code against the plan.
 - A **fresh reviewer** per review round, read-only, using a code-review skill if you have
-  one. High and medium findings hold the PR; each is a card: *Fix* (the coder looks into
-  it, and may decline it with a reason) or *Skip with reason…*.
-- When a PR below moves, the ones above it are restacked bottom up (offered, or
-  automatic). Each lane's tests run whole at its top. *Push & open PR* (draft, against
-  the branch below) is yours to click, per PR or for the whole stack: the coder pushes,
-  and tring opens the PR itself (see [Pull requests](#pull-requests-github-and-bitbucket)).
-  You merge; tring follows the merge and CI, restacks what was on it, and once you click
-  *Push* on the rebased branch, points its PR at the new base. When it is done,
-  *Clean up…* offers to remove the tab, worktrees and branches, ticking only what is
-  safe and never forcing git.
+  one. A high or medium finding holds the unit only with proof (a failing command, or a
+  line it changed); one already on the base becomes a follow-up instead. Each held one is
+  a card: *Fix* (the coder looks into it, and may decline it with a reason) or *Skip with
+  reason…*. A review stands across a rebase as long as the unit's change has the same
+  `git patch-id`.
+- An **integration check** per repo once its units are all reviewed: tring merges them
+  onto the base (or, for a single PR, assembles one commit per unit) in a worktree of its
+  own, and a read-only **integrator** runs every unit's tests and the full suite there.
+  Pushes wait for it; a failure is a card that sends it to the unit that should fix it.
+- *Push* is yours to click. Coders push their units and tring opens each PR itself; a
+  single PR tring pushes and opens on its own (see
+  [Pull requests](#pull-requests-github-and-bitbucket)). You merge; tring follows the
+  merge and CI, and keeps a stack's PRs pointed at the right base. When it is done,
+  *Clean up…* offers to remove the tab, worktrees and branches, ticking only what is safe
+  and never forcing git.
 
 The rules are enforced, not just asked for: each tile runs `claude --permission-mode
 auto` with its own settings, and tring's hook denies an edit outside the PR's files, any
@@ -698,7 +718,13 @@ push before you click Push, and any merge. Agents report through a `tring-stack`
 server that only their own token opens, and a "tests pass" counts only for a committed
 HEAD. At most *Agents per ticket* (4–16) work at once, and none start while the usage
 panel shows a limit at 90 % or more. The ticket's feature card (pinned at the top of the
-inbox, on the phone too) shows its progress and checklist; the tab shows a stack rail.
+inbox, on the phone too) shows its progress and checklist; the tab shows a work view: a
+stack joined bottom up, independent units side by side, or a single PR's commits, each
+repo ending with its integration check.
+
+Settings → Workflow also sets the default strategy, the final combined PR for independent
+PRs, the integration check, and a model and effort for each role (planner, coders,
+reviewers, integration checks; each tile starts with `claude --model … --effort …`).
 
 ### Pull requests: GitHub and Bitbucket
 

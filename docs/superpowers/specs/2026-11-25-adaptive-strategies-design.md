@@ -1,7 +1,7 @@
 # Multi-PR workflow: adaptive strategies (design)
 
-Status: **design, not built** (2026-11-25). Builds on `2026-11-25-multi-pr-workflow-design.md`
-(branch `feat/multi-pr-workflow`). Nothing here is implemented until the owner says go.
+Status: **built 2026-11-25** on `feat/adaptive-strategies` (commits 1–9 in §10, stacked on
+`feat/multi-pr-workflow`). Builds on `2026-11-25-multi-pr-workflow-design.md`. Not pushed. As-built notes in §11.
 
 The ask: stacked PRs are one way to land a ticket, not the only one. Each ticket can be landed as
 **independent PRs**, **stacked PRs** or **a single PR of several agent-made commits**. The planner
@@ -285,17 +285,41 @@ role on every tile it launches.
 ## 10. Split
 
 A new branch, `feat/adaptive-strategies`, from `feat/multi-pr-workflow`, as **one PR stacked on the
-multi-PR PR**, in ordered commits that each build and pass on their own (behaviour stays "stacked" until
-commit 3 lets you choose):
+multi-PR PR**, in ordered commits that each build and pass on their own. As built, the picker moved after
+the strategies it offers (so no commit offers a strategy that does not work yet):
 
 | # | Commit | Contents |
 | --- | --- | --- |
 | 1 | Strategy model and settings | types, migration, Settings controls, model/effort per role on tile launch |
 | 2 | Planner advice | brief rubric, `advice` validation, `fits()` |
-| 3 | Choose the strategy on the plan card | strategy picker + Approve plan, re-plan on a misfit, `ticket_action approve strategy` |
-| 4 | Integration check | `integrate`, integrator role and tool, gate on push, replaces the lane check |
-| 5 | Review carry-over and proof | `patchId`, `Finding.proof`/`preExisting`, follow-ups |
-| 6 | Independent PRs | scheduling off the base, conflict cards, no cascade, combined PR |
-| 7 | Single PR | unit branches, assembly, one push and PR, reassembly |
-| 8 | Work view | rail → work view for all three, feature card |
-| 9 | End to end and docs | scripted-agent suite, smoke, README, specs |
+| 3 | Integration check | `integrate`, integrator role and `report_integration`, gate on push, replaces the lane check |
+| 4 | Review carry-over and proof | `patchId`, `Finding.proof`/`preExisting`, follow-ups |
+| 5 | Independent PRs | approve with a strategy, scheduling off the base, update only conflicting units, stack-on, final combined PR |
+| 6 | Single PR | local unit branches, `assemble`, tring's push and PR, reassembly with a lease |
+| 7 | Choose the strategy on the plan card | strategy picker + Approve plan, re-plan on a misfit, Settings live |
+| 8 | Work view | rail → work view for all three |
+| 9 | End to end and docs | scripted-agent suite (real git, bare origin), README, specs |
+
+## 11. As built
+
+- **Integration check** replaces the lane check everywhere (`laneChecks` and the `checkLane` job are gone;
+  old tickets are upgraded on load). It is snapshotted per ticket at approval, and always on for a single
+  PR, which it assembles. Merges are plain objects (`merge-tree --write-tree`, `commit-tree`), so no branch
+  moves; the worktree is reused, offered by Clean up.
+- **Single PR assembly** applies each unit's own change with `merge-tree --merge-base=<its base>`; a unit
+  rebased onto the base (base unrecorded) starts where it meets the base (`merge-base`). Commits carry the
+  user's git identity (tring's only when git has none). The PR's branch is pushed by tring itself on the
+  user's Push, with `--force-with-lease` on what it pushed before.
+- **Final combined PR**: tring pushes the feature branch from `origin/<base>` on the first Push in a repo;
+  the integration check then runs on the feature branch; merge detection without the forge checks ancestry
+  against it.
+- **Choosing**: the picker pre-selects the user's earlier pick across a re-plan, else Settings, else the
+  planner's pick under Auto. A misfit sends the planner the reasons; the advice must recommend a strategy
+  the new plan fits.
+- **Not built**: cross-repo end-to-end checks; GitHub native stacks; retarget-free stacks on Bitbucket.
+  The integrator's stuck detection uses no activity timer yet (its tile closes on its report).
+- **Tests**: engine per strategy, real-git tests for `integrate`, `assemble`, `patchId`, `pushBranch`,
+  runner tests for the integrator, final and single PRs, web view-models for the picker and work view, and
+  `workflow-e2e.test.ts`: one ticket per strategy from plan to merged with scripted agents and real git.
+  Checked in Chrome on a seeded daemon: the picker (misfit relabel, combined checkbox) and the work view of
+  all three.
