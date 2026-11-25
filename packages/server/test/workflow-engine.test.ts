@@ -71,16 +71,16 @@ function rig(o: RigOptions = {}) {
     card(kind: string, pr?: number) {
       return cardsFor(t).find((c) => c.kind === kind && (pr === undefined || c.prIndex === pr))
     },
-    click(kind: string, action: string, opts: { pr?: number; text?: string; value?: number } = {}): StepResult {
+    click(kind: string, action: string, opts: { pr?: number; text?: string; value?: number | string } = {}): StepResult {
       const c = r.card(kind, opts.pr)
       if (!c) throw new Error(`no ${kind} card${opts.pr ? ` for PR ${opts.pr}` : ''}`)
       return r.send({ type: 'action', cardId: c.id, action, ...(opts.text ? { text: opts.text } : {}), ...(opts.value !== undefined ? { value: opts.value } : {}) })
     },
     pr: (i: number) => prOf(t, i)!,
-    approve(plan = o.plan ?? ordersPlan()): StepResult {
+    approve(plan = o.plan ?? ordersPlan(), strategy?: string): StepResult {
       r.send({ type: 'start' })
       r.send({ type: 'planSubmitted', plan })
-      return r.click('plan', 'approve')
+      return r.click('plan', 'approve', strategy ? { value: strategy } : {})
     },
     pass(i: number, sha: string): StepResult {
       return r.send({ type: 'report', pr: i, kind: 'tests_passing', sha, evidence: '12 passed', git: { head: sha, clean: true } })
@@ -516,7 +516,7 @@ describe('stack engine: lanes, pushes and merges', () => {
     r.approve()
     r.clean(1, 'a1')
     const res = (() => { r.send({ type: 'report', pr: 2, kind: 'interface_ready' }); r.pass(2, 'b1'); return r.review(2) })()
-    expect(res.commands).toContainEqual({ do: 'integrate', repo: 'api', tips: [{ unit: 2, branch: 'feature/CHV-1-2-orders-api', sha: 'b1' }] })
+    expect(res.commands).toContainEqual({ do: 'integrate', repo: 'api', base: 'develop', tips: [{ unit: 2, branch: 'feature/CHV-1-2-orders-api', sha: 'b1' }] })
   })
 
   it('takes the integrator\'s verdict only for the merge it was given', () => {
@@ -679,5 +679,117 @@ describe('stack engine: lanes, pushes and merges', () => {
     expect(r.click('feature', 'cancel').commands).toEqual([{ do: 'closeAll' }])
     expect(r.t.phase).toBe('abandoned')
     expect(r.send({ type: 'report', pr: 1, kind: 'interface_ready' }).notice).toMatch(/abandoned/)
+  })
+})
+
+describe('stack engine: independent PRs', () => {
+  /** Two api units that do not touch, and a web page coding against the table across repos. */
+  const independentPlan = (): Plan => ({
+    version: 1, summary: 'orders and audit', shared: [], deployOrder: null, addRepos: [], docs: { none: 'internal' },
+    advice: advice('independent'),
+    prs: [
+      planned({ index: 1, title: 'Orders table', owns: ['db/**'] }),
+      planned({ index: 2, title: 'Audit log', owns: ['src/audit/**'] }),
+      planned({ index: 3, repo: 'web', title: 'Orders page', owns: ['src/orders/**'], uses: ['OrdersTable'] }),
+    ],
+    interfaces: [{ name: 'OrdersTable', owner: 1, contract: 'orders(id)' }],
+  })
+  function allClean(strategy = 'independent') {
+    const r = rig({ plan: independentPlan() })
+    r.approve(undefined, strategy)
+    r.clean(1, 'a1')
+    r.clean(2, 'b1')
+    r.clean(3, 'c1')
+    return r
+  }
+
+  it('starts every unit off the base at once, as far as the agents allow', () => {
+    const r = rig({ plan: independentPlan() })
+    const res = r.approve(undefined, 'independent')
+    expect(r.t.strategy).toBe('independent')
+    expect(jobs(res.commands)).toEqual([{ pr: 1, job: 'code' }, { pr: 2, job: 'code' }])
+    expect(res.commands.filter((c) => c.do === 'createWorktree').map((c) => (c as { from: string }).from)).toEqual(['origin/develop', 'origin/develop'])
+  })
+
+  it('sends a plan that does not fit back to the planner, saying why', () => {
+    const r = rig()
+    const res = r.approve(ordersPlan(), 'independent')
+    expect(r.t.phase).toBe('planning')
+    expect(r.t.strategy).toBe('independent')
+    expect(res.commands).toEqual([{ do: 'notePlanner', note: { kind: 'revise', text: expect.stringMatching(/independent PRs[\s\S]*PR 2 sits on PR 1/) } }])
+  })
+
+  it('tests the units together, then pushes each against the base, in any order', () => {
+    const r = allClean()
+    expect(r.t.integration['api']).toMatchObject({ status: 'running', tips: { 1: 'a1', 2: 'b1' } })
+    r.integrate('api')
+    expect(r.card('push', 1)).toBeDefined()
+    expect(r.card('push', 2)).toBeDefined()
+    expect(r.click('push', 'push', { pr: 2 }).commands).toContainEqual({ do: 'work', pr: 2, newTile: true, job: { kind: 'push', base: 'develop' } })
+    r.send({ type: 'report', pr: 2, kind: 'pushed', url: 'u2' })
+    const merged = r.click('feature', 'merged:2')
+    expect(jobs(merged.commands)).toEqual([])
+    expect(r.pr(1).restack).toBeNull()
+  })
+
+  it('updates only the unit that conflicts with a moved base', () => {
+    const r = allClean()
+    r.send({ type: 'baseMoved', repo: 'api', commits: 2, conflict: true, units: [2] })
+    const res = r.click('feature', 'update:api')
+    expect(jobs(res.commands)).toEqual([{ pr: 2, job: 'restack' }])
+    expect(r.pr(1).restack).toBeNull()
+  })
+
+  it('stacks one unit on the other when they conflict, if the user says so', () => {
+    const r = allClean()
+    r.send({ type: 'integration', repo: 'api', result: { status: 'conflict', units: [1, 2], files: ['package.json'] } })
+    const card = r.card('integration')!
+    expect(card.actions.map((a) => a.id)).toEqual(['stack-on:2:1', 'retry'])
+    const res = r.click('integration', 'stack-on:2:1')
+    expect(r.t.plan!.prs.find((p) => p.index === 2)!.below).toBe(1)
+    expect(res.commands).toContainEqual(expect.objectContaining({ do: 'work', pr: 2, job: expect.objectContaining({ kind: 'restack', onto: 'feature/CHV-1-1-orders-table' }) }))
+  })
+
+  it('with a final combined PR: units target a feature branch, then one PR takes it into the base', () => {
+    const r = allClean('independent:combined')
+    expect(r.t.combined['api']).toMatchObject({ branch: 'feature/CHV-1-orders', base: 'develop', units: [1, 2], status: 'local', onOrigin: false })
+    r.integrate('api')
+    // The feature branch goes to origin with the first push, before any unit's.
+    expect(r.click('push', 'push', { pr: 1 }).commands).toEqual([{ do: 'prepareCombined', repo: 'api', from: 'develop' }])
+    const ready = r.send({ type: 'combinedReady', repo: 'api' })
+    expect(ready.commands).toContainEqual({ do: 'work', pr: 1, newTile: true, job: { kind: 'push', base: 'feature/CHV-1-orders' } })
+    r.send({ type: 'report', pr: 1, kind: 'pushed', url: 'u1' })
+    r.click('push', 'push', { pr: 2 })
+    r.send({ type: 'report', pr: 2, kind: 'pushed', url: 'u2' })
+    r.click('feature', 'merged:1')
+    expect(r.card('push')).toBeUndefined()
+    r.click('feature', 'merged:2')
+    const final = r.card('push')!
+    expect(final.title).toMatch(/final PR for api/)
+    expect(r.click('push', 'open-final').commands).toEqual([{ do: 'openFinal', repo: 'api' }])
+    r.send({ type: 'combinedOpened', repo: 'api', url: 'https://github.com/o/api/pull/9' })
+    expect(r.t.combined['api']).toMatchObject({ status: 'pushed', prUrl: 'https://github.com/o/api/pull/9' })
+    r.click('feature', 'merged-final:api')
+    // web has a final PR of its own.
+    expect(r.t.phase).not.toBe('done')
+    r.integrate('web')
+    r.click('push', 'push', { pr: 3 })
+    r.send({ type: 'combinedReady', repo: 'web' })
+    r.send({ type: 'report', pr: 3, kind: 'pushed', url: 'u3' })
+    r.click('feature', 'merged:3')
+    r.click('push', 'open-final')
+    r.send({ type: 'combinedOpened', repo: 'web', url: 'w9' })
+    r.click('feature', 'merged-final:web')
+    expect(r.t.phase).toBe('done')
+  })
+
+  it('stops a push when the feature branch could not be pushed', () => {
+    const r = allClean('independent:combined')
+    r.integrate('api')
+    r.click('push', 'push', { pr: 1 })
+    r.send({ type: 'combinedReady', repo: 'api', error: 'rejected' })
+    expect(r.pr(1).pushAllowed).toBe(false)
+    expect(r.t.combined['api']!.onOrigin).toBe(false)
+    expect(r.t.log.at(-1)!.text).toMatch(/could not push feature\/CHV-1-orders: rejected/)
   })
 })

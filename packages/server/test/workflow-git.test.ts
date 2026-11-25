@@ -246,3 +246,20 @@ describe('StackGit: the integration check', () => {
     expect(r).toEqual({ conflict: { units: [3, 4], files: ['app.ts'] } })
   })
 })
+
+describe('StackGit: a final PR\'s feature branch', () => {
+  it('creates it on origin from the base there, without a prompt', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'tring-pushbranch-'))
+    const bare = path.join(dir, 'origin.git')
+    git(dir, 'init', '-q', '--bare', bare)
+    const clone = path.join(dir, 'app')
+    git(dir, 'clone', '-q', bare, clone)
+    git(clone, 'checkout', '-qb', 'develop')
+    const base = commit(clone, 'a.ts', 'a\n')
+    git(clone, 'push', '-q', '-u', 'origin', 'develop')
+    expect(await sg.pushBranch(clone, 'origin/develop', 'feature/CHV-9-orders')).toBeNull()
+    expect(git(bare, 'rev-parse', 'refs/heads/feature/CHV-9-orders')).toBe(base)
+    expect(await sg.pushBranch(clone, 'origin/develop', 'bad name..x')).toMatch(/not a valid branch name/)
+    rmSync(dir, { recursive: true, force: true })
+  })
+})

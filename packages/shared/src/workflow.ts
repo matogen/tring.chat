@@ -354,7 +354,7 @@ export interface Ticket {
   /** Interface changes a lower PR asked for, waiting for the user. */
   amendments: Array<{ id: string; pr: number; name: string; contract: string; why: string }>
   /** How far each repo's base branch moved on its remote since the lanes were based on it. */
-  baseMoved: Record<string, { commits: number; conflict: boolean }>
+  baseMoved: Record<string, { commits: number; conflict: boolean; units?: number[] }>
   /** The planner's last errors, while it is revising. */
   planErrors: string[]
   /** Cleaned up: kept for the record (Recent tickets), no longer on any card. */
@@ -398,5 +398,7 @@ export interface CombinedPr {
   /** In order: each unit's commit, verified when its tree is the one its unit was reviewed and tested on. */
   commits: Array<{ unit: number; sha: string; verified: boolean }>
   status: 'local' | 'pushed' | 'merged'
+  /** Its branch exists on origin (independent PRs target it); while being pushed there, 'pushing'. */
+  onOrigin: boolean | 'pushing'
   prUrl: string | null
 }

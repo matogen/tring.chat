@@ -153,6 +153,22 @@ export class StackGit {
     return false
   }
 
+  /**
+   * Creates `branch` on origin at what `from` is here (a final PR's feature
+   * branch, made from origin's base): the one push tring makes itself, on the
+   * user's Push. Never prompts. Git's words, or null.
+   */
+  async pushBranch(repo: string, from: string, branch: string): Promise<string | null> {
+    const ok = await git(repo, ['check-ref-format', '--branch', branch])
+    if (!ok.ok || branch.startsWith('-')) return `${branch} is not a valid branch name`
+    const sha = await git(repo, ['rev-parse', '--verify', '--quiet', `${from}^{commit}`])
+    if (!sha.ok || from.startsWith('-')) return `${from} does not exist in ${repo}`
+    const r = await git(repo, ['push', '--quiet', 'origin', `${sha.out.trim()}:refs/heads/${branch}`], {
+      plain: true, timeout: 60_000, env: { GIT_TERMINAL_PROMPT: '0' },
+    })
+    return r.ok ? null : lastLines(r.err) || 'git push failed'
+  }
+
   /** origin's URL, as git has it; null when there is no origin. */
   async originUrl(repo: string): Promise<string | null> {
     const r = await git(repo, ['remote', 'get-url', 'origin'])

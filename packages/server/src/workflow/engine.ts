@@ -1,8 +1,8 @@
 import {
-  clampAgents, STRATEGIES, STRATEGY_NAMES, strategyPhrase, type StrategyAdvice, type Finding, type FindingSeverity, type PlannedPr, type PrStatus, type StackPr, type Ticket,
+  clampAgents, STRATEGIES, STRATEGY_NAMES, strategyPhrase, type Strategy, type StrategyAdvice, type Finding, type FindingSeverity, type PlannedPr, type PrStatus, type StackPr, type Ticket,
   type TicketRepo, type WorkflowSettings,
 } from '@tring/shared/workflow'
-import { matches, validatePlan } from './plan.ts'
+import { fits, matches, validatePlan } from './plan.ts'
 
 /**
  * The stack engine: every rule of the multi-PR workflow, as a pure function.
@@ -46,7 +46,8 @@ export interface ReviewFinding {
 export type EngineEvent =
   | { type: 'start' }
   | { type: 'planSubmitted'; plan: unknown; addedRepos?: TicketRepo[] }
-  | { type: 'action'; cardId: string; action: string; text?: string; value?: number }
+  /** value: a number for the agents slider; for approve, the strategy (`independent:combined` for the final PR). */
+  | { type: 'action'; cardId: string; action: string; text?: string; value?: number | string }
   | { type: 'worktree'; pr: number; path: string; baseSha: string }
   | { type: 'report'; pr: number; kind: 'interface_ready' }
   | { type: 'report'; pr: number; kind: 'tests_passing' | 'restacked'; sha: string; evidence: string; git: GitCheck }
@@ -62,7 +63,11 @@ export type EngineEvent =
   | { type: 'amendInterface'; pr: number; name: string; contract: string; why: string }
   | { type: 'tell'; pr: number; text: string }
   | { type: 'headMoved'; pr: number; sha: string }
-  | { type: 'baseMoved'; repo: string; commits: number; conflict: boolean }
+  /** units: the ones that would conflict with the moved base. */
+  | { type: 'baseMoved'; repo: string; commits: number; conflict: boolean; units?: number[] }
+  /** A combined PR's feature branch is on origin now, or could not be pushed there. */
+  | { type: 'combinedReady'; repo: string; error?: string }
+  | { type: 'combinedOpened'; repo: string; url: string; byHand?: boolean }
   | { type: 'merged'; pr: number }
   | { type: 'tileClosed'; role: 'coder'; pr: number }
   | { type: 'activity'; pr: number }
@@ -82,6 +87,8 @@ export interface EngineEnv {
   repoIdForPath: (path: string) => string
   /** The branch for a PR, named like the repo's own; a default otherwise. */
   branchFor?: (t: Ticket, p: PlannedPr) => string
+  /** The feature branch of a repo's combined PR, named like the repo's own. */
+  combinedBranchFor?: (t: Ticket, repo: string) => string
 }
 
 /* ---------- outputs ---------- */
@@ -120,7 +127,11 @@ export type Command =
   /** The coder's tile again, with a fresh conversation and its brief. */
   | { do: 'freshCoder'; pr: number }
   /** Merge `tips` (each unit's branch at its head) onto the repo's base and have an integrator test the result. */
-  | { do: 'integrate'; repo: string; tips: Array<{ unit: number; branch: string; sha: string }> }
+  | { do: 'integrate'; repo: string; base: string; tips: Array<{ unit: number; branch: string; sha: string }> }
+  /** Push the combined PR's feature branch to origin, made from `from` on origin. */
+  | { do: 'prepareCombined'; repo: string; from: string }
+  /** Open the final PR: the combined PR's branch into its base. */
+  | { do: 'openFinal'; repo: string }
   | { do: 'closeAll' }
 
 export interface StepResult {
@@ -255,7 +266,7 @@ function apply(t: Ticket, e: EngineEvent, env: EngineEnv, out: Command[]): strin
     }
 
     case 'baseMoved': {
-      t.baseMoved[e.repo] = { commits: e.commits, conflict: e.conflict }
+      t.baseMoved[e.repo] = { commits: e.commits, conflict: e.conflict, ...(e.units?.length ? { units: e.units } : {}) }
       // What was tested together no longer sits on the base as it is: test it again.
       const i = t.integration[e.repo]
       if (e.commits > 0 && i && i.status !== 'running') i.status = 'waiting'
@@ -263,6 +274,24 @@ function apply(t: Ticket, e: EngineEvent, env: EngineEnv, out: Command[]): strin
     }
 
     case 'integration': return integration(t, e.repo, e.result, env)
+
+    case 'combinedReady': {
+      const c = t.combined[e.repo]
+      if (!c || c.onOrigin !== 'pushing') return `no feature branch is being pushed for ${e.repo}`
+      c.onOrigin = !e.error
+      log(t, env, null, 'tring', e.error ? `could not push ${c.branch}: ${e.error}` : `pushed ${c.branch}, which the ${e.repo} PRs target`)
+      if (e.error) for (const p of unitsIn(t, e.repo)) if (p.pushAllowed && p.work === 'idle') p.pushAllowed = false
+      return null
+    }
+
+    case 'combinedOpened': {
+      const c = t.combined[e.repo]
+      if (!c || c.status !== 'local') return `no final PR to open for ${e.repo}`
+      c.status = 'pushed'
+      c.prUrl = e.url
+      log(t, env, null, 'tring', e.byHand ? `tring could not open the final PR, so open it by hand: ${e.url}` : `opened the final PR: ${e.url}`)
+      return null
+    }
 
     case 'merged': {
       const pr = prOf(t, e.pr)
@@ -276,10 +305,7 @@ function apply(t: Ticket, e: EngineEvent, env: EngineEnv, out: Command[]): strin
         if (c.status === 'merged' || !c.worktree) continue
         c.restack = { from: pr.headSha ?? c.baseSha ?? '', approved: env.settings.autoRestack === 'auto', deferred: false }
       }
-      if (t.prs.every((p) => p.status === 'merged')) {
-        t.phase = 'done'
-        out.push({ do: 'closeAll' })
-      }
+      landed(t, out)
       return null
     }
 
@@ -488,9 +514,26 @@ function act(t: Ticket, e: Extract<EngineEvent, { type: 'action' }>, env: Engine
   const argPr = arg !== undefined ? prOf(t, Number(arg)) : undefined
 
   switch (verb) {
-    case 'approve':
+    case 'approve': {
       if (card.kind === 'amendment') return amend(t, card.amendment!, true, env, out)
+      const [picked, option] = String(e.value ?? t.strategy ?? t.plan?.advice?.recommended ?? 'stacked').split(':') as [string, string | undefined]
+      if (!STRATEGIES.includes(picked as Strategy)) return `${picked} is not a strategy: independent, stacked or single`
+      const strategy = picked as Strategy
+      if (strategy === 'single') return 'a single PR is not available yet'
+      t.strategy = strategy
+      t.combinedPr = strategy === 'independent' && option === 'combined'
+      const misfit = fits(t.plan!, strategy)
+      if (misfit.length) {
+        // The user's pick stands; the plan is reshaped for it.
+        t.phase = 'planning'
+        const why = `The user chose ${strategyPhrase(strategy)}, which this plan does not fit: ${misfit.join(' ')} ` +
+          'Re-plan for it (keep the advice\'s recommendation to one the new plan fits) and submit again.'
+        log(t, env, null, 'user', `chose ${strategyPhrase(strategy)}: re-planning for it`)
+        out.push({ do: 'notePlanner', note: { kind: 'revise', text: why } })
+        return null
+      }
       return approvePlan(t, env, out)
+    }
     case 'reject':
       return amend(t, card.amendment!, false, env, out)
     case 'revise':
@@ -578,6 +621,30 @@ function act(t: Ticket, e: Extract<EngineEvent, { type: 'action' }>, env: Engine
       log(t, env, argPr!.index, 'user', `fix the ${card.repo} integration failure`)
       return null
     }
+    case 'stack-on': {
+      // Two independent units meet in the same files: the later one is rebased onto the earlier and stacks on it.
+      const [upper, lower] = e.action.split(':').slice(1).map(Number) as [number, number]
+      const up = prOf(t, upper)!
+      t.plan!.prs.find((p) => p.index === upper)!.below = lower
+      t.plan!.version++
+      if (up.worktree && up.baseSha) up.restack = { from: up.baseSha, approved: true, deferred: false }
+      t.integration[card.repo!]!.status = 'waiting'
+      t.integration[card.repo!]!.conflict = null
+      log(t, env, upper, 'user', `stack ${t.localKey}-${upper} on ${t.localKey}-${lower}`)
+      return null
+    }
+    case 'open-final':
+      t.combined[card.repo!]!.status = 'local'
+      out.push({ do: 'openFinal', repo: card.repo! })
+      log(t, env, null, 'user', `open the final PR for ${card.repo}`)
+      return null
+    case 'merged-final': {
+      const c = t.combined[arg!]!
+      c.status = 'merged'
+      log(t, env, null, 'user', `the final PR for ${arg} is merged`)
+      landed(t, out)
+      return null
+    }
     case 'retry':
       t.integration[card.repo!]!.status = 'waiting'
       t.integration[card.repo!]!.conflict = null
@@ -592,8 +659,11 @@ function act(t: Ticket, e: Extract<EngineEvent, { type: 'action' }>, env: Engine
     }
     case 'update': {
       const repo = arg!
+      // Independent units each sit on the base alone: only those that would conflict are rebased.
+      const only = t.strategy === 'independent' ? t.baseMoved[repo]?.units : undefined
       for (const root of t.prs.filter((p) => plannedOf(t, p)?.repo === repo && parentOf(t, p) === null)) {
         if (root.status === 'merged' || !root.worktree || !root.baseSha) continue
+        if (only?.length && !only.includes(root.index)) continue
         root.restack = { from: root.baseSha, approved: true, deferred: false }
       }
       t.baseMoved[repo] = { commits: 0, conflict: false }
@@ -607,9 +677,20 @@ function act(t: Ticket, e: Extract<EngineEvent, { type: 'action' }>, env: Engine
 function approvePlan(t: Ticket, env: EngineEnv, out: Command[]): string | null {
   const plan = t.plan!
   t.phase = 'building'
-  t.strategy = 'stacked'
+  t.strategy ??= 'stacked'
   t.integrationCheck = env.settings.integrationCheck
   t.integration = {}
+  t.combined = {}
+  if (t.combinedPr) {
+    for (const repo of t.repos) {
+      const units = plan.prs.filter((p) => p.repo === repo.id).map((p) => p.index)
+      if (!units.length) continue
+      t.combined[repo.id] = {
+        branch: env.combinedBranchFor?.(t, repo.id) ?? `feature/${t.localKey}-${slug(t.title)}`, base: repo.baseBranch, units,
+        commits: [], status: 'local', prUrl: null, onOrigin: false,
+      }
+    }
+  }
   t.prs = plan.prs.map((p) => ({
     index: p.index,
     branch: env.branchFor?.(t, p) ?? defaultBranch(t, p),
@@ -751,17 +832,26 @@ function schedule(t: Ticket, env: EngineEnv, out: Command[]): void {
       t.integration[repo.id] = { status: 'running', base: null, tips, sha: null, conflict: null, evidence: null, worktree: i?.worktree ?? null }
       out.push({
         do: 'integrate', repo: repo.id,
+        // A final PR's feature branch holds the units merged into it so far: the rest are tested on it.
+        base: t.combined[repo.id]?.onOrigin === true ? t.combined[repo.id]!.branch : repo.baseBranch,
         tips: Object.entries(tips).map(([u, sha]) => ({ unit: Number(u), branch: prOf(t, Number(u))!.branch, sha })),
       })
     }
   }
 
-  // Pushes the user allowed, bottom up.
+  // Pushes the user allowed, bottom up. A final PR's feature branch goes to origin first.
   for (const p of order) {
     if (!ready(p) || !p.pushAllowed || p.work !== 'idle' || !pushable(t, p)) continue
+    const combined = t.combined[repoOf(t, p)!.id]
+    if (combined && combined.onOrigin !== true) {
+      if (combined.onOrigin === false) {
+        combined.onOrigin = 'pushing'
+        out.push({ do: 'prepareCombined', repo: repoOf(t, p)!.id, from: combined.base })
+      }
+      continue
+    }
     if (!take(!p.coder)) continue
-    const parent = parentOf(t, p)
-    work(p, 'pushing', { kind: 'push', base: parent ? parent.branch : repoOf(t, p)!.baseBranch })
+    work(p, 'pushing', { kind: 'push', base: pushBase(t, p) })
   }
 
   // New coders, once what they wait on has its interface.
@@ -883,6 +973,16 @@ export function cardsFor(t: Ticket): CardSpec[] {
         })
     }
   }
+  for (const [repo, c] of Object.entries(t.combined)) {
+    const all = t.prs.filter((p) => c.units.includes(p.index))
+    if (t.strategy === 'independent' && c.status === 'local' && c.onOrigin === true && all.length && all.every((p) => p.status === 'merged')) {
+      cards.push({
+        id: `${t.id}:final:${repo}`, kind: 'push', repo, title: `Open the final PR for ${repo}`,
+        body: `Every unit is merged into ${c.branch}. Opening the final PR takes it into ${c.base}.`,
+        actions: [{ id: 'open-final', label: 'Open final PR', primary: true }],
+      })
+    }
+  }
   for (const [repo, i] of Object.entries(t.integration)) {
     const units = unitsIn(t, repo)
     if (i.status === 'failing') {
@@ -905,7 +1005,12 @@ export function cardsFor(t: Ticket): CardSpec[] {
         title: `${repo}: ${who} conflict`,
         body: `Merged together, ${who} conflict in ${i.conflict.files.join(', ')}. One unit should own those files: ` +
           'tell the other one (or its owner) what to change, then run the check again.',
-        actions: [{ id: 'retry', label: 'Run it again', primary: true }],
+        actions: [
+          ...(t.strategy === 'independent' && i.conflict.units.length === 2
+            ? [{ id: `stack-on:${i.conflict.units[1]}:${i.conflict.units[0]}`, label: `Stack ${t.localKey}-${i.conflict.units[1]} on ${t.localKey}-${i.conflict.units[0]}`, primary: true }]
+            : []),
+          { id: 'retry', label: 'Run it again', ...(t.strategy === 'independent' && i.conflict.units.length === 2 ? {} : { primary: true }) },
+        ],
       })
     }
   }
@@ -926,6 +1031,11 @@ function featureCard(t: Ticket): CardSpec {
     }
     for (const p of t.prs) {
       if (p.status === 'pushed') actions.push({ id: `merged:${p.index}`, label: `Mark ${t.localKey}-${p.index} merged` })
+    }
+    for (const [repo, c] of Object.entries(t.combined)) {
+      if (c.status === 'pushed') actions.push({ id: `merged-final:${repo}`, label: `Mark the ${repo} final PR merged` })
+    }
+    for (const p of t.prs) {
       if (p.paused) actions.push({ id: `resume:${p.index}`, label: `Resume ${t.localKey}-${p.index}` })
     }
     for (const [repo, m] of Object.entries(t.baseMoved)) {
@@ -1098,6 +1208,24 @@ function pushable(t: Ticket, p: StackPr): boolean {
   if (parent && !atLeast(parent, 'pushed')) return false
   return !t.baseMoved[repo]?.conflict
 }
+
+/** Where a unit's PR goes: the unit below it, else the final PR's feature branch, else the base. */
+export function pushBase(t: Ticket, p: StackPr): string {
+  const parent = parentOf(t, p)
+  if (parent) return parent.branch
+  const repo = repoOf(t, p)!
+  return t.combined[repo.id]?.branch ?? repo.baseBranch
+}
+
+/** Every unit merged, and every final PR: the ticket is done. */
+function landed(t: Ticket, out: Command[]): void {
+  if (!t.prs.every((p) => p.status === 'merged')) return
+  if (Object.values(t.combined).some((c) => c.status !== 'merged')) return
+  t.phase = 'done'
+  out.push({ do: 'closeAll' })
+}
+
+const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'ticket'
 
 /** A repo's units still to land. */
 const unitsIn = (t: Ticket, repo: string): StackPr[] =>

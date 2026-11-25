@@ -10,7 +10,7 @@ import { secretEquals } from '../security.ts'
 import { ToolError, type ToolDef, type WorkflowTools } from '../orchestrator-tools.ts'
 import { cleanPrompt, typePrompt } from '../type-prompt.ts'
 import { coderBrief, integratorBrief, jobText, noteText, plannerBrief, repoTests, reviewerBrief } from './briefs.ts'
-import { cardsFor, checklist, prOf, step, type Command, type EngineEnv, type EngineEvent, type IntegrationResult, type ReviewFinding } from './engine.ts'
+import { cardsFor, checklist, prOf, pushBase, step, type Command, type EngineEnv, type EngineEvent, type IntegrationResult, type ReviewFinding } from './engine.ts'
 import { HeadWatcher, type StackGit } from './git.ts'
 import { matches } from './plan.ts'
 import { toolsFor, type Role } from './stack-tools.ts'
@@ -177,6 +177,10 @@ export class WorkflowRunner implements WorkflowTools {
         const slug = p.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'pr'
         return `${this.prefixes.get(p.repo) ?? 'feature/'}${t.localKey}-${p.index}-${slug}`
       },
+      combinedBranchFor: (t, repo) => {
+        const slug = t.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'ticket'
+        return `${this.prefixes.get(repo) ?? 'feature/'}${t.localKey}-${slug}`
+      },
     }
   }
 
@@ -258,7 +262,27 @@ export class WorkflowRunner implements WorkflowTools {
           `Status: ${pr.status}. Read \`git log\` and \`git status\` in your worktree, then carry on.`)
         return
       }
-      case 'integrate': return this.integrate(t, c.repo, c.tips)
+      case 'integrate': return this.integrate(t, c.repo, c.base, c.tips)
+      case 'prepareCombined': {
+        const repo = t.repos.find((x) => x.id === c.repo)!
+        const err = await this.d.git.pushBranch(repo.root, `origin/${c.from}`, t.combined[c.repo]!.branch)
+        await this.apply(t.id, { type: 'combinedReady', repo: c.repo, ...(err ? { error: err } : {}) })
+        return
+      }
+      case 'openFinal': {
+        const repo = t.repos.find((x) => x.id === c.repo)!
+        const combined = t.combined[c.repo]!
+        const origin = await this.d.git.originUrl(repo.root)
+        const units = t.prs.filter((p) => combined.units.includes(p.index))
+        const body = [t.plan?.summary ?? '', '', `The ${units.length} PR(s) of ${t.localKey} in ${repo.id}, merged into ${combined.branch}:`,
+          ...units.map((p) => `- ${localKeyOf(t, p.index)} ${t.plan?.prs.find((x) => x.index === p.index)?.title ?? ''}${p.prUrl ? ` (${p.prUrl})` : ''}`)].join('\n')
+        const opened = origin
+          ? await this.forge.open({ origin, head: combined.branch, base: combined.base, title: `${t.localKey} ${t.title}`, body })
+          : { error: `${repo.id} has no origin remote` }
+        const url = 'url' in opened ? opened.url : opened.link ?? (origin ?? repo.root)
+        await this.apply(t.id, { type: 'combinedOpened', repo: c.repo, url, ...('url' in opened ? {} : { byHand: true }) })
+        return
+      }
       case 'closeAll':
         for (const r of this.tiles.filter((x) => x.ticketId === t.id)) await this.close(t.id, r.role, r.pr, r.repo)
         return
@@ -269,12 +293,12 @@ export class WorkflowRunner implements WorkflowTools {
    * A repo's integration check: tring merges the tips onto the base (no
    * branch moves), then a fresh read-only integrator tile tests the merge.
    */
-  private async integrate(t: Ticket, repoId: string, tips: Array<{ unit: number; branch: string; sha: string }>): Promise<void> {
+  private async integrate(t: Ticket, repoId: string, base: string, tips: Array<{ unit: number; branch: string; sha: string }>): Promise<void> {
     const repo = t.repos.find((x) => x.id === repoId)!
     const report = (result: IntegrationResult): Promise<string | null> => this.apply(t.id, { type: 'integration', repo: repoId, result })
     try {
       const made = await this.d.git.integrate(repo.root, {
-        base: repo.baseBranch,
+        base,
         // The heads the engine recorded, not wherever the branches are by now.
         tips: tips.map((x) => ({ unit: x.unit, branch: x.sha })),
         name: `tring-${safeName(t.localKey)}-${safeName(repoId)}-integration`,
@@ -442,7 +466,9 @@ export class WorkflowRunner implements WorkflowTools {
       const st = p.prUrl && isPrUrl(p.prUrl) ? await this.forge.pr(p.prUrl) : null
       if (!st) {
         const repo = this.repoOf(t, p)
-        if (repo && await this.d.git.isMerged(repo.root, p.branch, repo.baseBranch)) await this.run(t.id, { type: 'merged', pr: p.index })
+        // Merged into what its PR targets: a final PR's feature branch, or the base.
+        const into = repo ? t.combined[repo.id]?.branch ?? repo.baseBranch : ''
+        if (repo && await this.d.git.isMerged(repo.root, p.branch, into)) await this.run(t.id, { type: 'merged', pr: p.index })
         continue
       }
       if (st.ci && this.d.store.get(t.id)?.ci?.[p.index] !== st.ci) {
@@ -451,6 +477,15 @@ export class WorkflowRunner implements WorkflowTools {
         this.d.onChange?.()
       }
       if (st.state === 'merged') await this.run(t.id, { type: 'merged', pr: p.index })
+    }
+    for (const [repoId, c] of Object.entries(this.d.store.get(t.id)?.combined ?? {})) {
+      if (c.status !== 'pushed') continue
+      const repo = t.repos.find((x) => x.id === repoId)
+      const st = c.prUrl && isPrUrl(c.prUrl) ? await this.forge.pr(c.prUrl) : null
+      const merged = st ? st.state === 'merged' : !!repo && await this.d.git.isMerged(repo.root, c.branch, c.base)
+      if (!merged) continue
+      const feature = cardsFor(this.d.store.get(t.id)!).find((x) => x.kind === 'feature')!
+      await this.run(t.id, { type: 'action', cardId: feature.id, action: `merged-final:${repoId}` })
     }
   }
 
@@ -565,13 +600,16 @@ export class WorkflowRunner implements WorkflowTools {
     for (const repo of t.repos) {
       const roots = t.prs.filter((p) => t.plan?.prs.find((x) => x.index === p.index && x.repo === repo.id && x.below === null) && p.baseSha)
       if (!roots.length) continue
+      // A final PR's feature branch moves as units merge into it: keep origin's copy current.
+      const combined = t.combined[repo.id]
+      if (combined?.onOrigin === true) await this.d.git.fetchBase(repo.root, combined.branch, roots[0]!.baseSha!)
       const r = await this.d.git.fetchBase(repo.root, repo.baseBranch, roots[0]!.baseSha!)
       if (r.error || r.commits === 0) continue
       const tops = t.prs.filter((p) => t.plan?.prs.find((x) => x.index === p.index && x.repo === repo.id) &&
         !t.plan.prs.some((x) => x.below === p.index))
-      let conflict = false
-      for (const top of tops) if (await this.d.git.conflicts(repo.root, top.branch, `origin/${repo.baseBranch}`)) conflict = true
-      await this.run(t.id, { type: 'baseMoved', repo: repo.id, commits: r.commits, conflict })
+      const units: number[] = []
+      for (const top of tops) if (await this.d.git.conflicts(repo.root, top.branch, `origin/${repo.baseBranch}`)) units.push(top.index)
+      await this.run(t.id, { type: 'baseMoved', repo: repo.id, commits: r.commits, conflict: units.length > 0, units })
     }
   }
 
@@ -788,9 +826,7 @@ export class WorkflowRunner implements WorkflowTools {
     if (!pr) throw new ToolError('your PR is not in the stack')
     if (pr.work !== 'pushing') throw new ToolError('tring has not asked you to push; carry on, it tells you when')
     const repo = this.repoOf(t, pr)!
-    const below = t.plan?.prs.find((x) => x.index === pr.index)?.below
-    const parent = below != null ? prOf(t, below) : undefined
-    const base = parent && parent.status !== 'merged' ? parent.branch : repo.baseBranch
+    const base = pushBase(t, pr)
     const key = localKeyOf(t, pr.index)
     let url: string
     let byHand = false
@@ -922,7 +958,10 @@ export class WorkflowRunner implements WorkflowTools {
     const action = String(args['action'] ?? '')
     const pr = typeof args['pr'] === 'number' ? args['pr'] : undefined
     const text = typeof args['text'] === 'string' ? args['text'] : undefined
-    const value = typeof args['value'] === 'number' ? args['value'] : undefined
+    // approve: the strategy the user chose (and a final PR, for independent), as the plan card's picker sends it.
+    const value = typeof args['value'] === 'number' ? args['value']
+      : action === 'approve' && typeof args['strategy'] === 'string' ? `${args['strategy']}${args['combined'] === true ? ':combined' : ''}`
+      : undefined
     if (action === 'tell') {
       if (pr === undefined || !text) throw new ToolError('tell needs pr and text')
       const notice = await this.run(t.id, { type: 'tell', pr, text })
@@ -943,6 +982,8 @@ export class WorkflowRunner implements WorkflowTools {
       'fix-all': () => [byKind('review'), 'fix-all'],
       push: () => [byKind('push'), 'push'],
       'push-stack': () => [cards[0], `push-stack:${pr}`],
+      'open-final': () => [cards.find((c) => c.id.includes(':final:') && c.repo === args['repo']), 'open-final'],
+      'merged-final': () => [cards[0], `merged-final:${args['repo']}`],
       merged: () => [cards[0], `merged:${pr}`],
       resume: () => [cards[0], `resume:${pr}`],
       nudge: () => [byKind('blocked'), 'nudge'],

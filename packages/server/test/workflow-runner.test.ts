@@ -501,3 +501,57 @@ describe('WorkflowRunner: the integration check', () => {
     expect(broken.ticket().integration['api']).toMatchObject({ status: 'failing', evidence: expect.stringMatching(/could not run it: develop does not exist/) })
   })
 })
+
+describe('WorkflowRunner: independent PRs and a final combined PR', () => {
+  const BB_FINAL = 'https://bitbucket.org/matogen/api/pull-requests/50'
+  async function approvedAs(strategy: string, combined: boolean, git = fakeGit(), forge?: Partial<Pick<Forge, 'pr' | 'open' | 'retarget'>>) {
+    const r = await rig(git, forge)
+    await r.runner.startTicket({ key: 'CHV-9', title: 'Orders', text: 'x', source: 'goby', repos: [{ path: ROOT }] })
+    await new Promise((res) => setTimeout(res, 50))
+    await r.as('CHV-9 planner')('submit_plan', { plan: { ...plan, prs: [plan.prs[0]], interfaces: [], advice: advice('independent') } })
+    await r.runner.ticketAction({ ticket: 'CHV-9', action: 'approve', strategy, combined })
+    await new Promise((res) => setTimeout(res, 50))
+    return r
+  }
+
+  it('approves as the strategy the orchestrator was told, with a final PR named like the repo\'s branches', async () => {
+    const r = await approvedAs('independent', true)
+    expect(r.ticket()).toMatchObject({ strategy: 'independent', combinedPr: true })
+    expect(r.ticket().combined['api']).toMatchObject({ branch: 'feat/CHV-9-orders', base: 'develop', status: 'local', onOrigin: false })
+  })
+
+  it('pushes the feature branch first, then lets the unit push against it', async () => {
+    const pushed: unknown[] = []
+    const r = await approvedAs('independent', true, fakeGit({ pushBranch: async (...a: unknown[]) => { pushed.push(a); return null } }))
+    await r.store.update(r.ticket().id, (t) => {
+      Object.assign(t.prs[0]!, { status: 'review-clean', work: 'idle', headSha: 'a1' })
+      t.integration['api'] = { status: 'passing', base: 'b0', tips: { 1: 'a1' }, sha: 'm1', conflict: null, evidence: 'ok' }
+    })
+    await r.runner.ticketAction({ ticket: 'CHV-9', action: 'push', pr: 1 })
+    expect(pushed).toEqual([[ROOT, 'origin/develop', 'feat/CHV-9-orders']])
+    expect(r.ticket().combined['api']!.onOrigin).toBe(true)
+    await r.flush()
+    expect(r.tile('CHV-9-1')!.typed.join('\n')).toContain('`feat/CHV-9-orders`')
+  })
+
+  it('opens the final PR once every unit is merged into the feature branch, and follows it to done', async () => {
+    const opened: unknown[] = []
+    let state: 'open' | 'merged' = 'open'
+    const r = await approvedAs('independent', true, fakeGit(), {
+      open: async (o) => { opened.push(o); return { url: BB_FINAL } },
+      pr: async (url) => (url === BB_FINAL ? { state, ci: 'green' } : { state: 'merged', ci: 'green' }),
+    })
+    await r.store.update(r.ticket().id, (t) => {
+      Object.assign(t.prs[0]!, { status: 'merged', work: 'idle', headSha: 'a1' })
+      t.combined['api']!.onOrigin = true
+    })
+    expect(await r.runner.ticketAction({ ticket: 'CHV-9', action: 'open-final', repo: 'api' })).toMatch(/Done/)
+    expect(opened).toEqual([expect.objectContaining({ head: 'feat/CHV-9-orders', base: 'develop', title: 'CHV-9 Orders' })])
+    expect(r.ticket().combined['api']).toMatchObject({ status: 'pushed', prUrl: BB_FINAL })
+    await r.runner.readForge(r.ticket())
+    expect(r.ticket().phase).not.toBe('done')
+    state = 'merged'
+    await r.runner.readForge(r.ticket())
+    expect(r.ticket()).toMatchObject({ phase: 'done', combined: { api: { status: 'merged' } } })
+  })
+})
