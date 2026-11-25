@@ -63,3 +63,157 @@ export function mergeWorkflow(base: WorkflowSettings, patch: unknown): WorkflowS
     integrationCheck: bool('integrationCheck'),
   }
 }
+
+/* ---------- tickets, plans and stacks ---------- */
+
+/** A repository a ticket works in: a local clone, never a remote. */
+export interface TicketRepo {
+  /** Short and unique within the ticket: the repository's name, e.g. "cypherview.telemetry.store". */
+  id: string
+  /** The clone's main checkout. */
+  root: string
+  /** What a PR with `below: null` branches from, e.g. develop. */
+  baseBranch: string
+}
+
+export interface PlannedPr {
+  /** Unique across the ticket; also the n in its local ticket's key, `<KEY>-n`. */
+  index: number
+  /** A TicketRepo id. */
+  repo: string
+  /** The PR it branches from (same repo only), or null for the repo's base branch. */
+  below: number | null
+  title: string
+  scope: string
+  /** Globs in its repo, relative to the repo root; no other PR of that repo may cover the same file. */
+  owns: string[]
+  /** Interface names it codes against, possibly owned in another repo. */
+  uses: string[]
+  tests: { add: string[]; run: string[] }
+  acceptance: string[]
+}
+
+export interface PlanInterface {
+  name: string
+  /** The PR that provides it. */
+  owner: number
+  /** What users of it code against, in words or signatures. */
+  contract: string
+}
+
+/** A file more than one PR needs: only `owner` edits it; the others ask it to (request_change). */
+export interface SharedFile {
+  repo: string
+  path: string
+  owner: number
+  why: string
+}
+
+export interface Plan {
+  /** Bumps on every revision and amendment. */
+  version: number
+  summary: string
+  prs: PlannedPr[]
+  shared: SharedFile[]
+  interfaces: PlanInterface[]
+  /** Repo ids, when the change must ship in an order; null when it need not. */
+  deployOrder: string[] | null
+  /** Repositories the planner needs beyond the ones the ticket started with. */
+  addRepos: Array<{ path: string; base: string | null; why: string }>
+  /** The docs the ticket should change, or why it changes none. */
+  docs: { files: Array<{ repo: string; path: string }> } | { none: string }
+}
+
+export const MIN_PRS = 1
+export const MAX_PRS = 16
+
+export type PrStatus = 'planned' | 'coding' | 'tests-passing' | 'in-review' | 'review-clean' | 'pushed' | 'merged'
+
+export type FindingSeverity = 'high' | 'medium' | 'low' | 'nit'
+
+export type FindingResolution =
+  | 'open' | 'fix-requested' | 'fixed' | 'verified'
+  /** The user's call, with a reason. */
+  | { skipped: string }
+  /** The coder's call after looking: not really an issue, with a reason. */
+  | { declined: string }
+
+export interface Finding {
+  id: string
+  severity: FindingSeverity
+  file: string | null
+  line: number | null
+  summary: string
+  /** High and medium findings hold the PR; low and nit are advisory. */
+  holds: boolean
+  resolution: FindingResolution
+}
+
+/** Where a tile is, in terms that survive a restart (as card-store.ts keeps them). */
+export interface TileAt {
+  projectId: string
+  slot: number
+  claudeId: string | null
+}
+
+export interface Review {
+  round: number
+  reviewer: TileAt | null
+  range: { base: string; head: string }
+  findings: Finding[]
+}
+
+export interface StackPr {
+  index: number
+  branch: string
+  worktree: string | null
+  status: PrStatus
+  coder: TileAt | null
+  /** Kept after the coder's tile closes, for `claude --resume`. */
+  coderConversation: string | null
+  flags: {
+    needsRestack: boolean
+    baseFailing: boolean
+    blocked: string | null
+    interfaceReady: boolean
+  }
+  /** The head of `below` (or of the base branch) this PR sits on. */
+  baseSha: string | null
+  headSha: string | null
+  review: Review | null
+  prUrl: string | null
+}
+
+export type TicketPhase = 'planning' | 'awaiting-approval' | 'building' | 'integrating' | 'done' | 'abandoned'
+
+/** One line of a local ticket's work log: an agent's report or a person's card action. */
+export interface WorkLogEntry {
+  at: number
+  /** The PR it is about; null for the ticket as a whole. */
+  pr: number | null
+  who: 'planner' | 'coder' | 'reviewer' | 'user' | 'tring'
+  text: string
+}
+
+export interface Ticket {
+  id: string
+  /** The tracker's key, e.g. "CHV-3193"; null for a ticket started from an idea. */
+  key: string | null
+  /** What its local tickets are keyed from: `key`, or a minted TRING-<n>. */
+  localKey: string
+  title: string
+  text: string
+  /** Where the text came from: "goby", "pasted"… Informational; tring knows no tracker. */
+  source: string
+  repos: TicketRepo[]
+  /** The ticket tab. */
+  projectId: string | null
+  phase: TicketPhase
+  plan: Plan | null
+  /** One per planned PR once the plan is approved; empty before. */
+  prs: StackPr[]
+  /** This ticket's agents slider. */
+  maxAgents: number
+  log: WorkLogEntry[]
+  createdAt: number
+}
