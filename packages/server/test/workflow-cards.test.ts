@@ -129,10 +129,16 @@ describe('a workflow card\'s button over the socket', () => {
     ws.send(JSON.stringify({ type: 'hello' }))
     ws.send(JSON.stringify({ type: 'action', itemId: 't1:plan:v1', actionId: 'approve' }))
     ws.send(JSON.stringify({ type: 'action', itemId: 't1:plan:v1', actionId: 'revise', text: 'smaller' }))
+    ws.send(JSON.stringify({ type: 'action', itemId: 't1:plan:v1', actionId: 'approve', value: 'independent:combined' }))
+    ws.send(JSON.stringify({ type: 'action', itemId: 't1:plan:v1', actionId: 'approve', value: 'rm -rf; x' }))
     ws.send(JSON.stringify({ type: 'action', itemId: 'nope', actionId: 'approve' }))
     const end = Date.now() + 3000
     while (Date.now() < end && !got.some((m) => m.type === 'error')) await new Promise((r) => setTimeout(r, 20))
-    expect(acts).toEqual([['t1', 't1:plan:v1', 'approve', undefined, undefined], ['t1', 't1:plan:v1', 'revise', 'smaller', undefined]])
+    // A choice's value goes through; anything that is not one does not.
+    expect(acts).toEqual([
+      ['t1', 't1:plan:v1', 'approve', undefined, undefined], ['t1', 't1:plan:v1', 'revise', 'smaller', undefined],
+      ['t1', 't1:plan:v1', 'approve', undefined, 'independent:combined'], ['t1', 't1:plan:v1', 'approve', undefined, undefined],
+    ])
     expect(got.filter((m) => m.type === 'error')).toEqual([{ type: 'error', message: 'that card or button is no longer current' }])
     // Dismissing is not how a ticket's card goes away.
     ws.send(JSON.stringify({ type: 'answer', itemId: 't1:plan:v1', decision: 'terminal' }))

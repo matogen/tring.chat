@@ -170,7 +170,10 @@ export class WorkflowRunner implements WorkflowTools {
     const s = this.d.settings.get()
     return {
       now: this.now,
-      settings: { requireFreshReview: s.requireFreshReview, autoRestack: s.autoRestack, integrationCheck: s.integrationCheck },
+      settings: {
+        requireFreshReview: s.requireFreshReview, autoRestack: s.autoRestack, integrationCheck: s.integrationCheck,
+        defaultStrategy: s.defaultStrategy, combinedPr: s.combinedPr,
+      },
       quotaHigh: this.d.quotaHigh(),
       repoIdForPath: (p) => path.basename(p),
       branchFor: (t, p) => {
@@ -1050,7 +1053,7 @@ export class WorkflowRunner implements WorkflowTools {
   }
 
   /** A card button pressed in the inbox. */
-  act(ticketId: string, cardId: string, action: string, text?: string, value?: number): Promise<string | null> {
+  act(ticketId: string, cardId: string, action: string, text?: string, value?: number | string): Promise<string | null> {
     return this.run(ticketId, { type: 'action', cardId, action, ...(text ? { text } : {}), ...(value !== undefined ? { value } : {}) })
   }
 }

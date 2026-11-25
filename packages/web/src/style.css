@@ -1409,3 +1409,12 @@ body.card-full-open .term-voice { display: none; }
 
 .workflow-model { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 .workflow-model select { min-width: 0; }
+
+/* ---- the plan card's strategy picker ---- */
+.card-picker { border: 1px solid var(--line); border-radius: 8px; margin: 10px 0 0; padding: 6px 10px 8px; display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: center; }
+.card-picker legend { color: var(--muted); font-size: 12px; padding: 0 4px; }
+.card-picker-choice { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.card-picker-note { flex-basis: 100%; margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+.card-picker-option { flex-basis: 100%; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.card-picker-option[hidden] { display: none; }
+@media (max-width: 600px) { .card-picker-choice { flex-basis: 100%; } }

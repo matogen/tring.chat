@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { DEFAULT_WORKFLOW } from '@tring/shared/workflow'
-import { workflowControls } from '../src/workflow-view.ts'
+import { pickerLabel, pickerValue, workflowControls } from '../src/workflow-view.ts'
 
 const on = { ...DEFAULT_WORKFLOW, multiPr: true }
 
@@ -18,7 +18,7 @@ describe('Settings → Workflow', () => {
       'models', 'models', 'models', 'models', 'maxPrLines', 'testFirst',
     ])
     const later = controls.filter((c) => c.later).map((c) => c.key)
-    expect(later).toEqual(['defaultStrategy', 'combinedPr', 'integrationCheck', 'maxPrLines', 'testFirst'])
+    expect(later).toEqual(['maxPrLines', 'testFirst'])
     for (const c of controls) expect(c.disabled).toBe(c.later)
   })
 
@@ -50,6 +50,44 @@ import { cardSignature, orderCards, workflowCard } from '../src/workflow-view.ts
 
 const item = (over: Partial<InboxItem>): InboxItem => ({ id: 'x', sessionId: '', kind: 'workflow', createdAt: 0, ...over })
 
+describe('the plan card\'s strategy picker', () => {
+  const plan = {
+    id: 't1:plan:v1', sessionId: '', kind: 'workflow' as const, createdAt: 0, ticketId: 't1', title: 'Plan', message: 'x',
+    actions: [
+      {
+        id: 'approve', label: 'Approve plan', primary: true, selected: 'stacked',
+        choices: [
+          { value: 'independent', label: 'Independent PRs', note: 'needs a re-plan', misfit: 'PR 2 sits on PR 1.' },
+          { value: 'stacked', label: 'Stacked PRs', recommended: true, note: 'two PRs', misfit: null },
+          { value: 'single', label: 'Single PR', note: 'one PR', misfit: null },
+        ],
+        option: { id: 'combined', label: 'Final combined PR', for: 'independent', checked: false },
+      },
+      { id: 'revise', label: 'Change…', needsText: true },
+    ],
+  }
+
+  it('shows the picker above the buttons, the recommendation marked, the pre-selected one picked', () => {
+    const v = workflowCard(plan)
+    expect(v.picker).toMatchObject({ action: 'approve', selected: 'stacked' })
+    expect(v.picker!.choices.map((c) => c.label)).toEqual(['Independent PRs (re-plans)', 'Stacked PRs ★ recommended', 'Single PR'])
+    expect(v.buttons.map((b) => b.id)).toEqual(['approve', 'revise'])
+  })
+
+  it('says Approve plan, or Re-plan as … for a pick the plan does not fit', () => {
+    const p = workflowCard(plan).picker!
+    expect(pickerLabel(p, 'stacked')).toBe('Approve plan')
+    expect(pickerLabel(p, 'independent')).toBe('Re-plan as independent PRs')
+  })
+
+  it('sends the pick, with the final PR only for independent PRs', () => {
+    const p = workflowCard(plan).picker!
+    expect(pickerValue(p, 'stacked', true)).toBe('stacked')
+    expect(pickerValue(p, 'independent', false)).toBe('independent')
+    expect(pickerValue(p, 'independent', true)).toBe('independent:combined')
+  })
+})
+
 describe('workflow cards', () => {
   it('puts each ticket\'s feature card first, and leaves every other card where it was', () => {
     const order = orderCards([
@@ -71,7 +109,7 @@ describe('workflow cards', () => {
       ],
     }))
     expect(v).toEqual({
-      pinned: false, heading: 'Plan for CHV-9: 3 PR(s)', body: '**CHV-9-1** table',
+      pinned: false, heading: 'Plan for CHV-9: 3 PR(s)', body: '**CHV-9-1** table', picker: null,
       buttons: [
         { id: 'approve', label: 'Approve', primary: true, input: 'none' },
         { id: 'revise', label: 'Change…', primary: false, input: 'text' },

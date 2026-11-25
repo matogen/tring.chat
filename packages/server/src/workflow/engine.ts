@@ -84,7 +84,7 @@ export type IntegrationResult =
 
 export interface EngineEnv {
   now: number
-  settings: Pick<WorkflowSettings, 'requireFreshReview' | 'autoRestack' | 'integrationCheck'>
+  settings: Pick<WorkflowSettings, 'requireFreshReview' | 'autoRestack' | 'integrationCheck' | 'defaultStrategy' | 'combinedPr'>
   /** Claude usage is past 90 %: no new agent starts. */
   quotaHigh: boolean
   repoIdForPath: (path: string) => string
@@ -197,6 +197,12 @@ function apply(t: Ticket, e: EngineEvent, env: EngineEnv, out: Command[]): strin
       t.plan = { ...r.plan, version: (t.plan?.version ?? 0) + 1 }
       t.planErrors = []
       t.phase = 'awaiting-approval'
+      // What the plan card pre-selects: the user's pick if they made one (and asked for a re-plan for it),
+      // else the Settings default, or the planner's recommendation under Auto.
+      if (!t.strategy) {
+        t.strategy = env.settings.defaultStrategy === 'auto' ? t.plan.advice?.recommended ?? 'stacked' : env.settings.defaultStrategy
+        t.combinedPr = env.settings.combinedPr
+      }
       log(t, env, null, 'planner', `submitted plan v${t.plan.version}: ${t.plan.prs.length} PR(s)`)
       return null
     }
@@ -935,6 +941,10 @@ export interface CardAction {
   primary?: boolean
   needsText?: boolean
   needsValue?: { min: number; max: number; value: number }
+  /** The plan card's strategy picker: the choice goes with Approve as its value. */
+  choices?: Array<{ value: Strategy; label: string; recommended?: boolean; note: string; misfit: string | null }>
+  selected?: Strategy
+  option?: { id: string; label: string; for: Strategy; checked: boolean }
 }
 
 export interface CardSpec {
@@ -961,7 +971,15 @@ export function cardsFor(t: Ticket): CardSpec[] {
       id: `${t.id}:plan:v${t.plan.version}`, kind: 'plan', title: `Plan for ${t.localKey}: ${t.plan.prs.length} PR(s)`,
       body: planBody(t),
       actions: [
-        { id: 'approve', label: 'Approve', primary: true },
+        {
+          id: 'approve', label: 'Approve plan', primary: true,
+          choices: STRATEGIES.map((s) => ({
+            value: s, label: STRATEGY_NAMES[s], ...(s === t.plan!.advice?.recommended ? { recommended: true } : {}),
+            note: t.plan!.advice?.means[s] ?? '', misfit: fits(t.plan!, s).join(' ') || null,
+          })),
+          selected: t.strategy ?? t.plan.advice?.recommended ?? 'stacked',
+          option: { id: 'combined', label: 'Final combined PR', for: 'independent', checked: t.combinedPr },
+        },
         { id: 'revise', label: 'Change…', needsText: true },
         { id: 'cancel', label: 'Cancel ticket' },
         agents(),

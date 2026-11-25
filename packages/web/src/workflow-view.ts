@@ -35,7 +35,7 @@ export function workflowControls(s: WorkflowSettings): WorkflowControl[] {
   })]
   if (!s.multiPr) return out
   out.push(
-    later({
+    now({
       key: 'defaultStrategy', kind: 'choice', value: s.defaultStrategy, label: 'Default strategy',
       hint: 'Which strategy the plan card pre-selects. You still choose on every plan.',
       options: [
@@ -43,7 +43,7 @@ export function workflowControls(s: WorkflowSettings): WorkflowControl[] {
         { value: 'stacked', label: 'Stacked' }, { value: 'single', label: 'Single PR' },
       ],
     }),
-    later({
+    now({
       key: 'combinedPr', kind: 'toggle', value: s.combinedPr, label: 'Final combined PR for independent PRs',
       hint: 'Independent PRs merge into a feature branch, and one final PR takes it into the base.',
     }),
@@ -61,7 +61,7 @@ export function workflowControls(s: WorkflowSettings): WorkflowControl[] {
       label: 'Agents per ticket',
       hint: 'How many agents a new ticket may run at once. Each ticket can change its own on its cards.',
     }),
-    later({
+    now({
       key: 'integrationCheck', kind: 'toggle', value: s.integrationCheck, label: 'Integration check',
       hint: 'Each repo\'s units merged onto its base and tested together before anything is pushed.',
     }),
@@ -111,14 +111,47 @@ export interface WorkflowCardView {
   heading: string
   /** Markdown. */
   body: string
+  /** A choice made above the buttons and sent with one of them: the plan card's strategy picker. */
+  picker: PickerView | null
   buttons: WorkflowButton[]
 }
 
+export interface PickerView {
+  /** The button the pick goes with. */
+  action: string
+  choices: Array<{ value: string; label: string; note: string; misfit: string | null; name: string }>
+  selected: string
+  option: { id: string; label: string; for: string; checked: boolean } | null
+}
+
+/** What the picker's button says: Approve plan, or Re-plan as … for a pick the plan does not fit. */
+export function pickerLabel(p: PickerView, selected: string): string {
+  const c = p.choices.find((x) => x.value === selected)
+  return c?.misfit ? `Re-plan as ${c.name}` : 'Approve plan'
+}
+
+/** What is sent with the button: the pick, and `:<option>` when its checkbox is ticked and goes with that pick. */
+export function pickerValue(p: PickerView, selected: string, optionChecked: boolean): string {
+  return p.option && optionChecked && p.option.for === selected ? `${selected}:${p.option.id}` : selected
+}
+
+const phrase = (label: string): string => label === 'Single PR' ? 'a single PR' : label.replace(/^\w/, (c) => c.toLowerCase())
+
 export function workflowCard(item: InboxItem): WorkflowCardView {
+  const pick = (item.actions ?? []).find((a) => a.choices?.length)
   return {
     pinned: item.kind === 'feature',
     heading: item.title ?? 'Ticket',
     body: item.message ?? '',
+    picker: pick ? {
+      action: pick.id,
+      choices: pick.choices!.map((c) => ({
+        value: c.value, note: c.note ?? '', misfit: c.misfit ?? null, name: phrase(c.label),
+        label: `${c.label}${c.recommended ? ' ★ recommended' : ''}${c.misfit ? ' (re-plans)' : ''}`,
+      })),
+      selected: pick.selected ?? pick.choices![0]!.value,
+      option: pick.option ?? null,
+    } : null,
     buttons: (item.actions ?? []).map((a): WorkflowButton => a.needsValue
       ? { id: a.id, label: a.label, primary: !!a.primary, input: 'value', min: a.needsValue.min, max: a.needsValue.max, value: a.needsValue.value }
       : { id: a.id, label: a.label, primary: !!a.primary, input: a.needsText ? 'text' : 'none' }),

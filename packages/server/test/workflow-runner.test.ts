@@ -108,11 +108,17 @@ async function rig(git = fakeGit(), forge?: Partial<Pick<Forge, 'pr' | 'open' | 
     tile: (name: string) => pm.projects.flatMap((p) => p.sessions).find((s) => s.name === name),
     /** Two pumps 2 s apart: an idle agent gets what is queued for it. */
     async flush() { await runner.pump(); now += 2000; await runner.pump() },
+    /** A tile's tools, called with its own token (read from the file its MCP config names, once it is there). */
     as(name: string) {
-      const s = r.tile(name)!
-      const who = runner.authorize(tokenOf(s))
-      if (!who) throw new Error(`no token for ${name}`)
-      return (tool: string, args: Record<string, unknown> = {}) => runner.call(who, tool, args)
+      return async (tool: string, args: Record<string, unknown> = {}) => {
+        const s = r.tile(name)
+        if (!s) throw new Error(`no tile ${name}`)
+        const end = Date.now() + 5000
+        while (!tokens.has(s.id) && Date.now() < end) await new Promise((res) => setTimeout(res, 10))
+        const who = runner.authorize(tokenOf(s))
+        if (!who) throw new Error(`no token for ${name}`)
+        return runner.call(who, tool, args)
+      }
     },
     ticket: () => store.list()[0]!,
   }

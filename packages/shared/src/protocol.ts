@@ -84,7 +84,8 @@ export type ClientMessage =
       message?: string
     }
   /** A button on a multi-PR workflow card, with the words or number it asked for. */
-  | { type: 'action'; itemId: string; actionId: string; text?: string; value?: number }
+  /** value: a number (the agents slider) or a choice (the strategy picker). */
+  | { type: 'action'; itemId: string; actionId: string; text?: string; value?: number | string }
   /** Types a follow-up prompt into a session that finished and is waiting. */
   | { type: 'reply'; itemId: string; text: string }
   /** Turns the supervisor that approves routine permission prompts on or off. */
@@ -194,6 +195,16 @@ export interface InboxAction {
   needsText?: boolean
   /** Asks for a number first: the agents slider. */
   needsValue?: { min: number; max: number; value: number }
+  /**
+   * A choice shown above the buttons and sent with this one as its value:
+   * the plan card's strategy picker. `misfit`: why the plan does not fit it as
+   * it is (picking it re-plans); `note`: what it would mean.
+   */
+  choices?: Array<{ value: string; label: string; recommended?: boolean; note?: string; misfit?: string | null }>
+  /** The choice pre-selected. */
+  selected?: string
+  /** A checkbox shown with one choice, sent as `<value>:<id>` when ticked: the final combined PR, with independent PRs. */
+  option?: { id: string; label: string; for: string; checked: boolean }
 }
 
 /** `terminal` hands the prompt back to the session's own TUI unanswered. */

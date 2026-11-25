@@ -38,7 +38,10 @@ function ticket(maxAgents: number): Ticket {
   }
 }
 
-interface RigOptions { review?: boolean; restack?: 'offer' | 'auto'; maxAgents?: number; plan?: Plan; integration?: boolean }
+interface RigOptions {
+  review?: boolean; restack?: 'offer' | 'auto'; maxAgents?: number; plan?: Plan; integration?: boolean
+  defaultStrategy?: 'auto' | 'independent' | 'stacked' | 'single'; combinedPr?: boolean
+}
 
 function rig(o: RigOptions = {}) {
   let now = 1_000
@@ -46,7 +49,10 @@ function rig(o: RigOptions = {}) {
   let quotaHigh = false
   const env = (): EngineEnv => ({
     now, quotaHigh,
-    settings: { requireFreshReview: o.review ?? true, autoRestack: o.restack ?? 'offer', integrationCheck: o.integration ?? true },
+    settings: {
+      requireFreshReview: o.review ?? true, autoRestack: o.restack ?? 'offer', integrationCheck: o.integration ?? true,
+      defaultStrategy: o.defaultStrategy ?? 'auto', combinedPr: o.combinedPr ?? false,
+    },
     repoIdForPath: (p) => p.split('/').pop()!,
   })
   const branchHead = (branch: string): string => {
@@ -148,6 +154,44 @@ describe('stack engine: planning', () => {
     expect(body).toMatch(/Recommended: stacked PRs/)
     expect(body).toContain('coupling: the API reads the table')
     expect(body).toContain('Single PR: One PR with two commits, table then API.')
+  })
+
+  it('offers all three strategies with one Approve, marking the planner\'s pick and what would need a re-plan', () => {
+    const r = rig()
+    r.send({ type: 'start' })
+    r.send({ type: 'planSubmitted', plan: ordersPlan() })
+    const approve = r.card('plan')!.actions.find((a) => a.id === 'approve')!
+    expect(approve.label).toBe('Approve plan')
+    expect(approve.choices!.map((c) => [c.value, c.label, !!c.recommended, c.misfit])).toEqual([
+      ['independent', 'Independent PRs', false, expect.stringMatching(/PR 2 sits on PR 1/)],
+      ['stacked', 'Stacked PRs', true, null],
+      ['single', 'Single PR', false, null],
+    ])
+    expect(approve.choices![2]!.note).toBe('One PR with two commits, table then API.')
+    expect(approve.selected).toBe('stacked')
+    expect(approve.option).toEqual({ id: 'combined', label: 'Final combined PR', for: 'independent', checked: false })
+  })
+
+  it('pre-selects the default from Settings, or the planner\'s pick under Auto, and keeps the user\'s pick across a re-plan', () => {
+    const pick = (o: RigOptions) => {
+      const r = rig(o)
+      r.send({ type: 'start' })
+      r.send({ type: 'planSubmitted', plan: ordersPlan() })
+      return r
+    }
+    expect(pick({}).card('plan')!.actions[0]!.selected).toBe('stacked')
+    const single = pick({ defaultStrategy: 'single', combinedPr: true })
+    expect(single.card('plan')!.actions[0]).toMatchObject({ selected: 'single', option: expect.objectContaining({ checked: true }) })
+    // The user picks independent, which needs a re-plan: the next plan comes back with it still picked.
+    single.click('plan', 'approve', { value: 'independent:combined' })
+    single.send({ type: 'planSubmitted', plan: { ...ordersPlan(), prs: ordersPlan().prs.map((p) => ({ ...p, below: null, uses: [] })), interfaces: [] } })
+    expect(single.card('plan')!.actions[0]).toMatchObject({ selected: 'independent', choices: expect.arrayContaining([expect.objectContaining({ value: 'independent', misfit: null })]) })
+  })
+
+  it('approves with the pre-selected strategy when none is sent', () => {
+    const r = rig({ defaultStrategy: 'single' })
+    r.approve()
+    expect(r.t.strategy).toBe('single')
   })
 
   it('asks the planner for changes in the user\'s words, which a change needs', () => {
