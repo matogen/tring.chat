@@ -14,16 +14,28 @@ describe('Settings → Workflow', () => {
   it('shows its options once it is on, the later ones greyed', () => {
     const controls = workflowControls(on)
     expect(controls.map((c) => c.key)).toEqual([
-      'multiPr', 'requireFreshReview', 'autoRestack', 'maxAgents', 'maxPrLines', 'testFirst', 'integrationCheck',
+      'multiPr', 'defaultStrategy', 'combinedPr', 'requireFreshReview', 'autoRestack', 'maxAgents', 'integrationCheck',
+      'models', 'models', 'models', 'models', 'maxPrLines', 'testFirst',
     ])
     const later = controls.filter((c) => c.later).map((c) => c.key)
-    expect(later).toEqual(['maxPrLines', 'testFirst', 'integrationCheck'])
+    expect(later).toEqual(['defaultStrategy', 'combinedPr', 'integrationCheck', 'maxPrLines', 'testFirst'])
     for (const c of controls) expect(c.disabled).toBe(c.later)
   })
 
   it('offers the agents slider from 4 to 16 at its current value', () => {
     const slider = workflowControls({ ...on, maxAgents: 9 }).find((c) => c.key === 'maxAgents')!
     expect(slider).toMatchObject({ kind: 'slider', min: 4, max: 16, value: 9 })
+  })
+
+  it('offers a model and an effort for each agent role, the Claude Code default first', () => {
+    const models = workflowControls({ ...on, models: { ...on.models, reviewer: { model: 'opus', effort: 'xhigh' } } })
+      .filter((c) => c.key === 'models')
+    expect(models.map((c) => [c.role, c.label])).toEqual([
+      ['planner', 'Planner'], ['coder', 'Coders'], ['reviewer', 'Reviewers'], ['integrator', 'Integration checks'],
+    ])
+    expect(models[2]).toMatchObject({ kind: 'model', value: { model: 'opus', effort: 'xhigh' } })
+    expect(models[0]!.options!.map((o) => o.value)).toEqual(['', 'fable', 'opus', 'sonnet', 'haiku'])
+    expect(models[0]!.efforts!.map((o) => o.value)).toEqual(['', 'low', 'medium', 'high', 'xhigh', 'max'])
   })
 
   it('offers restacking as a choice between offering and doing it', () => {

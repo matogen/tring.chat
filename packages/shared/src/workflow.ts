@@ -1,7 +1,31 @@
 /**
- * The multi-PR workflow: one ticket, one tab, a stack of small reviewed PRs
- * (docs/superpowers/specs/2026-11-25-multi-pr-workflow-design.md).
+ * The multi-PR workflow: one ticket, one tab, small reviewed units of work
+ * landed as independent PRs, a stack, or one PR of ordered commits
+ * (docs/superpowers/specs/2026-11-25-multi-pr-workflow-design.md,
+ * 2026-11-25-adaptive-strategies-design.md).
  */
+
+/** How a ticket's units land: a PR each off the base, a PR each on the one below, or one PR of a commit each. */
+export type Strategy = 'independent' | 'stacked' | 'single'
+export const STRATEGIES: readonly Strategy[] = ['independent', 'stacked', 'single']
+
+/** Claude Code's --effort levels. */
+export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+export const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
+
+/** The agents a ticket runs, each started on its own model and effort. */
+export type AgentRole = 'planner' | 'coder' | 'reviewer' | 'integrator'
+export const AGENT_ROLES: readonly AgentRole[] = ['planner', 'coder', 'reviewer', 'integrator']
+
+/** A role's model and effort; null for either is Claude Code's own default. */
+export interface RoleModel { model: string | null; effort: Effort | null }
+
+/**
+ * A model name as `claude --model` takes it: an alias (opus, sonnet…) or a
+ * full name (claude-opus-5-5, opus[1m]). It is typed into a shell, so nothing
+ * else gets through: no spaces, quotes or shell characters.
+ */
+export const MODEL_NAME = /^[A-Za-z0-9][A-Za-z0-9._\-[\]]{0,79}$/
 
 /** Settings → Workflow. Daemon-side, since the orchestrator and the stack engine read it. */
 export interface WorkflowSettings {
@@ -17,12 +41,21 @@ export interface WorkflowSettings {
   maxPrLines: number | null
   /** Later: coders write failing tests before code. */
   testFirst: boolean
-  /** Later: cross-repo end-to-end checks before pushing. */
+  /** Each repo's units merged onto its base and tested together before anything is pushed. */
   integrationCheck: boolean
+  /** Which strategy the plan card pre-selects; 'auto' is the planner's pick. The user still chooses every time. */
+  defaultStrategy: 'auto' | Strategy
+  /** Independent PRs land through a feature branch and one final PR into the base. */
+  combinedPr: boolean
+  /** Each agent role's model and effort. */
+  models: Record<AgentRole, RoleModel>
 }
 
 export const MIN_AGENTS = 4
 export const MAX_AGENTS = 16
+
+const DEFAULT_MODELS = (): Record<AgentRole, RoleModel> =>
+  Object.fromEntries(AGENT_ROLES.map((r) => [r, { model: null, effort: null }])) as Record<AgentRole, RoleModel>
 
 export const DEFAULT_WORKFLOW: Readonly<WorkflowSettings> = Object.freeze({
   multiPr: false,
@@ -31,7 +64,10 @@ export const DEFAULT_WORKFLOW: Readonly<WorkflowSettings> = Object.freeze({
   maxAgents: MIN_AGENTS,
   maxPrLines: null,
   testFirst: false,
-  integrationCheck: false,
+  integrationCheck: true,
+  defaultStrategy: 'auto',
+  combinedPr: false,
+  models: DEFAULT_MODELS(),
 })
 
 /** Whole agents, within the slider's range. */
@@ -46,7 +82,7 @@ export function clampAgents(n: number): number {
  */
 export function mergeWorkflow(base: WorkflowSettings, patch: unknown): WorkflowSettings {
   const p = patch && typeof patch === 'object' && !Array.isArray(patch) ? patch as Record<string, unknown> : {}
-  const bool = (k: 'multiPr' | 'requireFreshReview' | 'testFirst' | 'integrationCheck'): boolean =>
+  const bool = (k: 'multiPr' | 'requireFreshReview' | 'testFirst' | 'integrationCheck' | 'combinedPr'): boolean =>
     typeof p[k] === 'boolean' ? p[k] as boolean : base[k]
   const lines = p['maxPrLines']
   return {
@@ -61,7 +97,28 @@ export function mergeWorkflow(base: WorkflowSettings, patch: unknown): WorkflowS
       : base.maxPrLines,
     testFirst: bool('testFirst'),
     integrationCheck: bool('integrationCheck'),
+    defaultStrategy: p['defaultStrategy'] === 'auto' || STRATEGIES.includes(p['defaultStrategy'] as Strategy)
+      ? p['defaultStrategy'] as WorkflowSettings['defaultStrategy']
+      : base.defaultStrategy,
+    combinedPr: bool('combinedPr'),
+    models: mergeModels(base.models ?? DEFAULT_MODELS(), p['models']),
   }
+}
+
+/** Role by role, field by field: a model that is not a model name, or an unknown effort, counts as unset. */
+function mergeModels(base: Record<AgentRole, RoleModel>, patch: unknown): Record<AgentRole, RoleModel> {
+  const p = patch && typeof patch === 'object' && !Array.isArray(patch) ? patch as Record<string, unknown> : {}
+  const out = {} as Record<AgentRole, RoleModel>
+  for (const role of AGENT_ROLES) {
+    const was = base[role] ?? { model: null, effort: null }
+    const r = p[role] && typeof p[role] === 'object' ? p[role] as Record<string, unknown> : {}
+    const model = !('model' in r) ? was.model
+      : typeof r['model'] === 'string' && MODEL_NAME.test(r['model']) ? r['model'] : null
+    const effort = !('effort' in r) ? was.effort
+      : EFFORTS.includes(r['effort'] as Effort) ? r['effort'] as Effort : null
+    out[role] = { model, effort }
+  }
+  return out
 }
 
 /* ---------- tickets, plans and stacks ---------- */
@@ -285,4 +342,38 @@ export interface Ticket {
   archived?: boolean
   /** Each pushed PR's CI, where the forge says (GitHub through gh). */
   ci?: Record<number, 'green' | 'red' | 'pending'>
+  /** How its units land, chosen by the user on the plan card; null until the plan is approved. */
+  strategy: Strategy | null
+  /** Independent PRs through a feature branch and one final PR. */
+  combinedPr: boolean
+  /** Each repo's integration check, by repo id. */
+  integration: Record<string, Integration>
+  /** One PR per repo made of the units' commits (single), or independent's final PR, by repo id. */
+  combined: Record<string, CombinedPr>
+  /** Problems a review found that were already on the base: listed, never holding a PR. */
+  followUps: Array<{ pr: number; summary: string }>
+}
+
+/** A repo's units merged onto its base and tested together. */
+export interface Integration {
+  status: 'waiting' | 'conflict' | 'running' | 'passing' | 'failing'
+  /** The base commit it used. */
+  base: string | null
+  /** Unit -> the head it used. */
+  tips: Record<number, string>
+  /** The merge (or assembled head) that was tested. */
+  sha: string | null
+  conflict: { units: number[]; files: string[] } | null
+  evidence: string | null
+}
+
+/** The one PR several units land in. */
+export interface CombinedPr {
+  branch: string
+  base: string
+  units: number[]
+  /** In order: each unit's commit, verified when its tree is the one its unit was reviewed and tested on. */
+  commits: Array<{ unit: number; sha: string; verified: boolean }>
+  status: 'local' | 'pushed' | 'merged'
+  prUrl: string | null
 }

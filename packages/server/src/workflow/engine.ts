@@ -536,6 +536,7 @@ function act(t: Ticket, e: Extract<EngineEvent, { type: 'action' }>, env: Engine
 function approvePlan(t: Ticket, env: EngineEnv, out: Command[]): string | null {
   const plan = t.plan!
   t.phase = 'building'
+  t.strategy = 'stacked'
   t.prs = plan.prs.map((p) => ({
     index: p.index,
     branch: env.branchFor?.(t, p) ?? defaultBranch(t, p),

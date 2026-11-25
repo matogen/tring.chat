@@ -80,6 +80,28 @@ function control(c: WorkflowControl, set: (patch: Partial<WorkflowSettings>) => 
       group.append(b)
     }
     wrap.append(group)
+  } else if (c.kind === 'model') {
+    // A model and an effort for one role; '' sends null, Claude Code's default.
+    const m = c.value as { model: string | null; effort: string | null }
+    wrap.append(el('span', 'workflow-label', c.label))
+    const row = el('div', 'workflow-model')
+    const pick = (opts: Array<{ value: string; label: string }>, now: string | null, field: 'model' | 'effort'): HTMLSelectElement => {
+      const sel = el('select')
+      sel.id = `workflow-${c.role}-${field}`
+      sel.setAttribute('aria-label', `${c.label} ${field}`)
+      const known = opts.some((o) => o.value === (now ?? ''))
+      for (const o of known ? opts : [...opts, { value: now ?? '', label: now ?? '' }]) {
+        const opt = el('option', undefined, o.label)
+        opt.value = o.value
+        opt.selected = o.value === (now ?? '')
+        sel.append(opt)
+      }
+      sel.disabled = c.disabled
+      sel.onchange = () => set({ models: { [c.role!]: { [field]: sel.value || null } } } as unknown as Partial<WorkflowSettings>)
+      return sel
+    }
+    row.append(pick(c.options ?? [], m.model, 'model'), pick(c.efforts ?? [], m.effort, 'effort'))
+    wrap.append(row)
   } else {
     const label = el('label', 'workflow-slider')
     const shown = el('b', undefined, c.value === null ? '—' : String(c.value))

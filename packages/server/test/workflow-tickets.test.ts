@@ -105,4 +105,22 @@ describe('TicketStore', () => {
     expect(read.list().map((x) => x.id)).toEqual([t.id])
     expect((await read.create({ ...spec, key: null })).localKey).toBe('TRING-5')
   })
+
+  it('starts a ticket with no strategy, and reads one saved before strategies as stacked once approved', async () => {
+    const { store, dir } = await open()
+    const fresh = await store.create(spec)
+    expect(fresh).toMatchObject({ strategy: null, combinedPr: false, integration: {}, combined: {}, followUps: [] })
+    const old = (over: Record<string, unknown>) => {
+      const t: Record<string, unknown> = { ...fresh, ...over }
+      for (const k of ['strategy', 'combinedPr', 'integration', 'combined', 'followUps']) delete t[k]
+      return t
+    }
+    await writeFile(path.join(dir, 'tickets.json'), JSON.stringify({
+      version: 1, nextLocal: 2,
+      tickets: [old({ id: 'a', phase: 'building', prs: [stackPr] }), old({ id: 'b', phase: 'awaiting-approval', plan })],
+    }), 'utf8')
+    const read = (await open(dir)).store
+    expect(read.get('a')).toMatchObject({ strategy: 'stacked', combinedPr: false, integration: {}, combined: {}, followUps: [] })
+    expect(read.get('b')!.strategy).toBeNull()
+  })
 })

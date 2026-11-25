@@ -1,5 +1,7 @@
 import type { InboxItem } from '@tring/shared/protocol'
-import { MAX_AGENTS, MIN_AGENTS, type PrStatus, type TicketView, type WorkflowSettings } from '@tring/shared/workflow'
+import {
+  AGENT_ROLES, EFFORTS, MAX_AGENTS, MIN_AGENTS, type AgentRole, type PrStatus, type RoleModel, type TicketView, type WorkflowSettings,
+} from '@tring/shared/workflow'
 
 /** What Settings → Workflow shows: pure, so it is tested without a page (workflow-settings.ts draws it). */
 
@@ -7,11 +9,14 @@ type Key = keyof WorkflowSettings
 
 export interface WorkflowControl {
   key: Key
-  kind: 'toggle' | 'choice' | 'slider'
+  kind: 'toggle' | 'choice' | 'slider' | 'model'
   label: string
   hint: string
-  value: boolean | string | number | null
+  value: boolean | string | number | RoleModel | null
   options?: Array<{ value: string; label: string }>
+  /** kind 'model': the role, and the efforts offered beside the models. */
+  role?: AgentRole
+  efforts?: Array<{ value: string; label: string }>
   min?: number
   max?: number
   /** Designed for, not built yet: shown greyed so the shape of the feature is visible. */
@@ -30,6 +35,18 @@ export function workflowControls(s: WorkflowSettings): WorkflowControl[] {
   })]
   if (!s.multiPr) return out
   out.push(
+    later({
+      key: 'defaultStrategy', kind: 'choice', value: s.defaultStrategy, label: 'Default strategy',
+      hint: 'Which strategy the plan card pre-selects. You still choose on every plan.',
+      options: [
+        { value: 'auto', label: 'Auto (planner decides)' }, { value: 'independent', label: 'Independent' },
+        { value: 'stacked', label: 'Stacked' }, { value: 'single', label: 'Single PR' },
+      ],
+    }),
+    later({
+      key: 'combinedPr', kind: 'toggle', value: s.combinedPr, label: 'Final combined PR for independent PRs',
+      hint: 'Independent PRs merge into a feature branch, and one final PR takes it into the base.',
+    }),
     now({
       key: 'requireFreshReview', kind: 'toggle', value: s.requireFreshReview, label: 'Require a fresh review',
       hint: 'A new reviewer tile with a clean context reviews every PR before it may push.',
@@ -44,12 +61,35 @@ export function workflowControls(s: WorkflowSettings): WorkflowControl[] {
       label: 'Agents per ticket',
       hint: 'How many agents a new ticket may run at once. Each ticket can change its own on its cards.',
     }),
+    later({
+      key: 'integrationCheck', kind: 'toggle', value: s.integrationCheck, label: 'Integration check',
+      hint: 'Each repo\'s units merged onto its base and tested together before anything is pushed.',
+    }),
+    ...AGENT_ROLES.map((role) => now({
+      key: 'models', kind: 'model', role, value: s.models[role], label: ROLE_LABEL[role],
+      hint: ROLE_HINT[role], options: MODEL_OPTIONS, efforts: EFFORT_OPTIONS,
+    })),
     later({ key: 'maxPrLines', kind: 'slider', value: s.maxPrLines, label: 'Max PR size', hint: 'Coming later.' }),
     later({ key: 'testFirst', kind: 'toggle', value: s.testFirst, label: 'Test-first', hint: 'Coming later.' }),
-    later({ key: 'integrationCheck', kind: 'toggle', value: s.integrationCheck, label: 'Integration check', hint: 'Coming later.' }),
   )
   return out
 }
+
+const ROLE_LABEL: Record<AgentRole, string> = {
+  planner: 'Planner', coder: 'Coders', reviewer: 'Reviewers', integrator: 'Integration checks',
+}
+const ROLE_HINT: Record<AgentRole, string> = {
+  planner: 'Splits the ticket and recommends a strategy. Worth the strongest model.',
+  coder: 'Writes each unit and its tests.',
+  reviewer: 'Reviews each unit fresh. A different model from the coders catches different things.',
+  integrator: 'Runs the tests of a repo\'s units together. A lighter model does.',
+}
+/** '' is Claude Code's own default; the rest are `claude --model` aliases. */
+const MODEL_OPTIONS = [
+  { value: '', label: 'Default' }, { value: 'fable', label: 'Fable' }, { value: 'opus', label: 'Opus' },
+  { value: 'sonnet', label: 'Sonnet' }, { value: 'haiku', label: 'Haiku' },
+]
+const EFFORT_OPTIONS = [{ value: '', label: 'Default effort' }, ...EFFORTS.map((e) => ({ value: e, label: e }))]
 
 
 /* ---------- the multi-PR workflow's cards ---------- */

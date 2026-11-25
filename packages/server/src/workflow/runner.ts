@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { InboxItem, ProjectInfo, SessionStatus } from '@tring/shared/protocol'
-import type { StackPr, Ticket, TicketRepo, TicketView, WorkflowSettings } from '@tring/shared/workflow'
+import { EFFORTS, MODEL_NAME, type RoleModel, type StackPr, type Ticket, type TicketRepo, type TicketView, type WorkflowSettings } from '@tring/shared/workflow'
 import { Forge, isPrUrl } from './forge.ts'
 import { writeAtomic } from '../card-store.ts'
 import type { GateDecision } from '../hook-route.ts'
@@ -302,7 +302,7 @@ export class WorkflowRunner implements WorkflowTools {
       },
     }, null, 2) + '\n')
     await writeAtomic(path.join(dir, 'settings.json'), JSON.stringify(tileSettings(t, role, pr, this.d.hookCommand ?? 'tring-hook'), null, 2) + '\n')
-    const claudeArgs = `--permission-mode auto --settings ${quoted(path.join(dir, 'settings.json'))} --mcp-config ${quoted(path.join(dir, 'mcp.json'))}`
+    const claudeArgs = `--permission-mode auto${modelFlags(this.d.settings.get().models?.[role])} --settings ${quoted(path.join(dir, 'settings.json'))} --mcp-config ${quoted(path.join(dir, 'mcp.json'))}`
     const name = role === 'planner' ? `${t.localKey} planner` : role === 'coder' ? localKeyOf(t, pr!) : `${localKeyOf(t, pr!)} review`
     const s = this.d.pm.create(t.projectId, {
       cwd, name, claudeArgs, command: `claude ${claudeArgs}${resume ? ` --resume ${resume}` : ''}`,
@@ -918,6 +918,18 @@ function quoted(p: string): string {
  * ownership and push gates), the plan's approved test commands allowed, and
  * for a planner or reviewer no editing at all.
  */
+/**
+ * --model and --effort for a role, as Settings give them. The model was
+ * checked against MODEL_NAME when it was saved and is checked again here,
+ * since it is typed into a shell.
+ */
+export function modelFlags(m: RoleModel | undefined): string {
+  if (!m) return ''
+  const model = m.model && MODEL_NAME.test(m.model) ? ` --model ${m.model}` : ''
+  const effort = m.effort && EFFORTS.includes(m.effort) ? ` --effort ${m.effort}` : ''
+  return model + effort
+}
+
 export function tileSettings(t: Ticket, role: Role, pr: number | null, hook: string): Record<string, unknown> {
   const planned = pr !== null ? t.plan?.prs.find((x) => x.index === pr) : undefined
   const allow = role === 'planner' ? [] : (planned?.tests.run ?? []).map((c) => `Bash(${c})`)

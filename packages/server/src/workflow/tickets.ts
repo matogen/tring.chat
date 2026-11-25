@@ -54,7 +54,7 @@ export class TicketStore {
       return // first run, or a file that is not ours: no tickets
     }
     if (parsed?.version !== 1 || !Array.isArray(parsed.tickets)) return
-    for (const t of parsed.tickets) if (validTicket(t)) this.tickets.set(t.id, t)
+    for (const t of parsed.tickets) if (validTicket(t)) this.tickets.set(t.id, upgrade(t))
     if (typeof parsed.nextLocal === 'number' && Number.isInteger(parsed.nextLocal) && parsed.nextLocal > 0) {
       this.nextLocal = parsed.nextLocal
     }
@@ -90,6 +90,11 @@ export class TicketStore {
       amendments: [],
       baseMoved: {},
       planErrors: [],
+      strategy: null,
+      combinedPr: false,
+      integration: {},
+      combined: {},
+      followUps: [],
     }
     this.tickets.set(t.id, t)
     await this.save(t)
@@ -233,6 +238,20 @@ function findingLine(f: Finding): string {
 
 function logLine(e: Ticket['log'][number]): string {
   return `- ${new Date(e.at).toISOString().slice(0, 16).replace('T', ' ')} ${e.who}: ${e.text}`
+}
+
+/**
+ * A ticket saved before strategies existed: built as a stack, so once its plan
+ * was approved it is a stacked one.
+ */
+function upgrade(t: Ticket): Ticket {
+  const approved = t.prs.length > 0 || ['building', 'integrating', 'done'].includes(t.phase)
+  t.strategy ??= approved ? 'stacked' : null
+  t.combinedPr ??= false
+  t.integration ??= {}
+  t.combined ??= {}
+  t.followUps ??= []
+  return t
 }
 
 function validTicket(v: unknown): v is Ticket {

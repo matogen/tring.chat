@@ -1406,3 +1406,6 @@ body.card-full-open .term-voice { display: none; }
 .stack-chip.held { border-style: dashed; }
 .ticket-badge { margin-left: 6px; font-size: 11px; color: var(--muted); }
 .cleanup-row small { display: block; margin-left: 22px; }
+
+.workflow-model { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.workflow-model select { min-width: 0; }

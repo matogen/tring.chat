@@ -161,6 +161,18 @@ describe('WorkflowRunner: start_ticket', () => {
     expect(planner.typed[0]).toContain('show orders')
   })
 
+  it('starts each role on the model and effort Settings give it, and on the Claude Code default otherwise', async () => {
+    const r = await rig()
+    r.settings.models = { ...r.settings.models, planner: { model: 'opus', effort: 'xhigh' }, coder: { model: 'sonnet', effort: null } }
+    await r.runner.startTicket({ key: 'CHV-9', title: 'Orders', text: 'x', source: 'goby', repos: [{ path: ROOT }] })
+    await new Promise((res) => setTimeout(res, 50))
+    expect(r.tile('CHV-9 planner')!.command).toMatch(/^claude --permission-mode auto --model opus --effort xhigh --settings /)
+    await r.as('CHV-9 planner')('submit_plan', { plan })
+    await r.runner.ticketAction({ ticket: 'CHV-9', action: 'approve' })
+    expect(r.tile('CHV-9-1')!.command).toMatch(/^claude --permission-mode auto --model sonnet --settings /)
+    expect(r.tile('CHV-9-1')!.command).not.toContain('--effort')
+  })
+
   it('refuses a path that is not a repository, and a ticket that already has a tab', async () => {
     const r = await rig(fakeGit({ isRepo: async () => false }))
     await expect(r.runner.startTicket({ title: 'x', text: 'y', source: 'pasted', repos: [{ path: '/nope' }] })).rejects.toThrow(/not a git repository/)

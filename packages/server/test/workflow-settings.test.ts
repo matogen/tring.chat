@@ -23,7 +23,15 @@ describe('workflow settings', () => {
       maxAgents: 4,
       maxPrLines: null,
       testFirst: false,
-      integrationCheck: false,
+      integrationCheck: true,
+      defaultStrategy: 'auto',
+      combinedPr: false,
+      models: {
+        planner: { model: null, effort: null },
+        coder: { model: null, effort: null },
+        reviewer: { model: null, effort: null },
+        integrator: { model: null, effort: null },
+      },
     })
   })
 
@@ -65,5 +73,35 @@ describe('workflow settings', () => {
     expect((await store('[1,2]')).s.get().maxAgents).toBe(4)
     const partial = (await store(JSON.stringify({ multiPr: true, maxAgents: 99, autoRestack: 7 }))).s.get()
     expect(partial).toMatchObject({ multiPr: true, maxAgents: 16, autoRestack: 'offer' })
+  })
+})
+
+describe('workflow settings: strategy and models', () => {
+  it('takes a default strategy, which only pre-selects one on the plan card', async () => {
+    const { s } = await store()
+    expect((await s.update({ defaultStrategy: 'single' })).defaultStrategy).toBe('single')
+    expect((await s.update({ defaultStrategy: 'sideways' })).defaultStrategy).toBe('single')
+    expect((await s.update({ defaultStrategy: 'auto', combinedPr: true })).combinedPr).toBe(true)
+  })
+
+  it('sets a model and effort per role, one role at a time, and null puts the Claude Code default back', async () => {
+    const { s } = await store()
+    await s.update({ models: { coder: { model: 'sonnet', effort: 'high' } } })
+    const next = await s.update({ models: { reviewer: { model: 'claude-opus-5-5' }, coder: { effort: null } } })
+    expect(next.models).toEqual({
+      planner: { model: null, effort: null },
+      coder: { model: 'sonnet', effort: null },
+      reviewer: { model: 'claude-opus-5-5', effort: null },
+      integrator: { model: null, effort: null },
+    })
+  })
+
+  it('refuses a model name that is not one, since it ends up on a command line', async () => {
+    const { s } = await store()
+    for (const bad of ['sonnet; rm -rf ~', 'opus && x', '"opus"', '', ' ', 'a b', '$(id)', 'x'.repeat(81)]) {
+      expect((await s.update({ models: { coder: { model: bad } } })).models.coder.model).toBeNull()
+    }
+    expect((await s.update({ models: { coder: { effort: 'maximum' } } })).models.coder.effort).toBeNull()
+    expect((await s.update({ models: { coder: { model: 'opus[1m]', effort: 'max' } } })).models.coder).toEqual({ model: 'opus[1m]', effort: 'max' })
   })
 })

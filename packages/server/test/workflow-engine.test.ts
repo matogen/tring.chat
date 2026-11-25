@@ -33,6 +33,7 @@ function ticket(maxAgents: number): Ticket {
     id: 't1', key: 'CHV-1', localKey: 'CHV-1', title: 'Orders', text: 'show orders', source: 'pasted', repos,
     projectId: 'p1', phase: 'planning', plan: null, prs: [], maxAgents, log: [], createdAt: 0,
     laneChecks: {}, amendments: [], baseMoved: {}, planErrors: [],
+    strategy: null, combinedPr: false, integration: {}, combined: {}, followUps: [],
   }
 }
 
