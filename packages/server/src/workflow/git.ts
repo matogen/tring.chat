@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { defaultWorktreePath, realGit, type GitOps } from '../git-worktrees.ts'
@@ -105,14 +105,29 @@ export class StackGit {
   }
 
   /**
-   * Whether a rebase changed the PR's own change, by `git range-diff` of its
-   * commits before and after: a review survives a restack that did not.
+   * Whether a rebase changed the unit's own change. A verdict covers a patch:
+   * the review survives when the whole change has the same `git patch-id`
+   * before and after, however its commits were rebased or squashed.
    */
   async diffChanged(worktree: string, before: { base: string; head: string }, after: { base: string; head: string }): Promise<boolean> {
-    const r = await git(worktree, ['range-diff', '--no-color', `${before.base}..${before.head}`, `${after.base}..${after.head}`])
-    if (!r.ok) return true // cannot tell: the review does not hold
-    const marks = r.out.split(/\r?\n/).map((l) => /^\s*(?:\d+|-):\s+\S+\s+([=!<>])\s/.exec(l)?.[1]).filter(Boolean)
-    return marks.some((m) => m !== '=')
+    const [a, b] = await Promise.all([this.patchId(worktree, before.base, before.head), this.patchId(worktree, after.base, after.head)])
+    return a === null || b === null || a !== b // cannot tell: the review does not hold
+  }
+
+  /** `git diff base head | git patch-id --stable`: the id of a change, whatever commits carry it. Null for no change. */
+  async patchId(worktree: string, base: string, head: string): Promise<string | null> {
+    if (base.startsWith('-') || head.startsWith('-')) return null
+    const diff = await git(worktree, ['diff', '--no-color', '--no-ext-diff', '--full-index', base, head], { timeout: 60_000 })
+    if (!diff.ok || !diff.out.trim()) return null
+    const id = await new Promise<string | null>((resolve) => {
+      const p = spawn('git', ['patch-id', '--stable'], { cwd: worktree, stdio: ['pipe', 'pipe', 'ignore'] })
+      let out = ''
+      p.stdout.on('data', (d: Buffer) => { out += d.toString() })
+      p.on('error', () => resolve(null))
+      p.on('close', (code) => resolve(code === 0 ? out.trim().split(/\s+/)[0] ?? null : null))
+      p.stdin.end(diff.out)
+    })
+    return id && /^[0-9a-f]{40,64}$/.test(id) ? id : null
   }
 
   /**

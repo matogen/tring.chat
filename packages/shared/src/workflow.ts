@@ -258,6 +258,10 @@ export interface Finding {
   resolution: FindingResolution
   /** The file belongs to another PR: that PR fixes it, and both are held until it does. */
   routedTo: number | null
+  /** How the reviewer showed it: a failing command and its output, or the changed line. A high or medium finding holds only with one. */
+  proof?: string | null
+  /** Already on the base before this unit: never holds; listed as a follow-up. */
+  preExisting?: boolean
 }
 
 /** Where a tile is, in terms that survive a restart (as card-store.ts keeps them). */

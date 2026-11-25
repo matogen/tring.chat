@@ -126,6 +126,8 @@ const REVIEWER: ToolDef[] = [{
             file: { type: 'string' },
             line: { type: 'integer' },
             summary: { type: 'string' },
+            proof: { type: 'string', description: 'How you showed it: the failing command and its output, or the changed line. High and medium findings hold the PR only with proof.' },
+            pre_existing: { type: 'boolean', description: 'The problem was already on the base before this PR: it never holds the PR, and is listed as a follow-up.' },
           },
           required: ['severity', 'summary'],
           additionalProperties: false,

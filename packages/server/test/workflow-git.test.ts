@@ -113,6 +113,21 @@ describe('StackGit', () => {
     expect(await sg.diffChanged(wt.path, { base: oldBase, head: oldHead }, { base: newBase, head: changed })).toBe(true)
   })
 
+  it('keeps a review when the same change is only squashed or rebased: a verdict covers a patch, by git patch-id', async () => {
+    const wt = await sg.createWorktree(repo, { branch: 'feat/pid', from: 'origin/develop' })
+    const base = git(wt.path, 'rev-parse', 'HEAD')
+    commit(wt.path, 'p1.ts', 'export const p = 1\n')
+    const twoCommits = commit(wt.path, 'p2.ts', 'export const q = 2\n')
+    const id = await sg.patchId(wt.path, base, twoCommits)
+    expect(id).toMatch(/^[0-9a-f]{40}$/)
+    git(wt.path, 'reset', '-q', '--soft', base)
+    git(wt.path, 'commit', '-qm', 'one commit')
+    const squashed = git(wt.path, 'rev-parse', 'HEAD')
+    expect(await sg.patchId(wt.path, base, squashed)).toBe(id)
+    expect(await sg.diffChanged(wt.path, { base, head: twoCommits }, { base, head: squashed })).toBe(false)
+    expect(await sg.patchId(wt.path, base, base)).toBeNull()
+  })
+
   it('fetches the base, counts what is new on it, and finds a conflict before pushing', async () => {
     const wt = await sg.createWorktree(repo, { branch: 'feat/lane', from: 'origin/develop' })
     const base = git(wt.path, 'rev-parse', 'HEAD')

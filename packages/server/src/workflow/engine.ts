@@ -28,7 +28,7 @@ import { matches, validatePlan } from './plan.ts'
 export interface GitCheck {
   head: string
   clean: boolean
-  /** restacked only: whether the PR's own diff changed (git range-diff). */
+  /** restacked only: whether the unit's own change differs (git patch-id). */
   diffChanged?: boolean
 }
 
@@ -37,6 +37,10 @@ export interface ReviewFinding {
   file: string | null
   line: number | null
   summary: string
+  /** A failing command and its output, or the changed line: what makes a high or medium finding hold. */
+  proof?: string | null
+  /** The problem was on the base already. */
+  preExisting?: boolean
 }
 
 export type EngineEvent =
@@ -395,20 +399,27 @@ function review(t: Ticket, e: Extract<EngineEvent, { type: 'review' }>, env: Eng
     const r = f.resolution
     return r === 'fixed' || (typeof r === 'object' && 'declined' in r) ? { ...f, resolution: 'verified' as const } : f
   })
+  // A finding holds only when it is serious, shown, and new with this unit.
   const fresh: Finding[] = e.findings.map((f, n) => ({
     id: `${pr.index}.${round}.${n + 1}`,
     severity: f.severity,
     file: f.file,
     line: f.line,
     summary: f.summary,
-    holds: f.severity === 'high' || f.severity === 'medium',
+    holds: (f.severity === 'high' || f.severity === 'medium') && !!f.proof?.trim() && !f.preExisting,
     resolution: 'open',
     routedTo: ownerOf(t, pr, f.file),
+    proof: f.proof?.trim() || null,
+    ...(f.preExisting ? { preExisting: true } : {}),
   }))
+  for (const f of fresh.filter((x) => x.preExisting)) {
+    t.followUps.push({ pr: pr.index, summary: `${f.file ? `${f.file}: ` : ''}${f.summary}` })
+  }
   if (!e.testsPassed) {
     fresh.push({
       id: `${pr.index}.${round}.tests`, severity: 'high', file: null, line: null,
       summary: `The PR's tests fail when the reviewer runs them: ${e.evidence}`, holds: true, resolution: 'open', routedTo: null,
+      proof: e.evidence,
     })
   }
   pr.review = { round, reviewer: null, range: e.range, findings: [...kept, ...fresh] }
@@ -557,7 +568,7 @@ function act(t: Ticket, e: Extract<EngineEvent, { type: 'action' }>, env: Engine
       const f: Finding = {
         id: `${argPr!.index}.i${n}`, severity: 'high', file: null, line: null,
         summary: `The ${card.repo} units fail when tested together: ${i.evidence ?? ''}`, holds: true,
-        resolution: 'fix-requested', routedTo: null,
+        resolution: 'fix-requested', routedTo: null, proof: i.evidence,
       }
       argPr!.review = argPr!.review
         ? { ...argPr!.review, findings: [...argPr!.review.findings, f] }
@@ -852,7 +863,8 @@ export function cardsFor(t: Ticket): CardSpec[] {
         cards.push({
           id: `${t.id}:finding:${f.id}`, kind: 'finding', prIndex: pr.index, findingId: f.id,
           title: `${key} [${f.severity}] ${f.file ? `${f.file}${f.line ? `:${f.line}` : ''}` : ''}`.trim(),
-          body: f.summary + (f.routedTo !== null ? `\n\n(${t.localKey}-${f.routedTo} owns that file: it will fix it.)` : ''),
+          body: f.summary + (f.proof && !f.summary.includes(f.proof) ? `\n\nProof: ${f.proof}` : '') +
+            (f.routedTo !== null ? `\n\n(${t.localKey}-${f.routedTo} owns that file: it will fix it.)` : ''),
           actions: [{ id: 'fix', label: 'Fix', primary: true }, { id: 'skip', label: 'Skip with reason…', needsText: true }],
         })
       }
@@ -927,6 +939,9 @@ function featureCard(t: Ticket): CardSpec {
     ...Object.entries(c).map(([k, v]) => `${v === true ? '✅' : v === false ? '⬜' : '❔'} ${k}`),
     ...t.prs.map((p) => `- ${t.localKey}-${p.index} ${plannedOf(t, p)?.title ?? ''}: ${p.status}${p.flags.needsRestack ? ' ⟳' : ''}` +
       `${p.flags.blocked ? ' ⚠' : ''}${p.paused ? ' ⏸' : ''}`),
+    ...(t.followUps.length
+      ? ['', 'Follow-ups (already on the base; nothing holds for them):', ...t.followUps.map((f) => `- ${t.localKey}-${f.pr}: ${f.summary}`)]
+      : []),
   ].join('\n')
   return { id: `${t.id}:feature`, kind: 'feature', title: `${t.localKey} ${t.title}`, body, actions }
 }

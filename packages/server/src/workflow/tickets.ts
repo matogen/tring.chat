@@ -180,6 +180,10 @@ function renderParent(t: Ticket): string {
       lines.push(`- ${localKeyOf(t, pr.index)} ${p?.title ?? ''} — ${pr.status} (${p?.repo ?? '?'}, ${pr.branch})`)
     }
   }
+  if (t.followUps.length) {
+    lines.push('', '## Follow-ups', '', 'Found in review, already on the base; nothing held for them.', '',
+      ...t.followUps.map((f) => `- ${localKeyOf(t, f.pr)}: ${f.summary}`))
+  }
   const log = t.log.filter((e) => e.pr === null)
   if (log.length) lines.push('', '## Work log', '', ...log.map(logLine))
   return lines.join('\n') + '\n'

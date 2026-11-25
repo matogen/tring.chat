@@ -726,6 +726,8 @@ export class WorkflowRunner implements WorkflowTools {
           file: typeof f['file'] === 'string' ? f['file'] : null,
           line: typeof f['line'] === 'number' ? f['line'] : null,
           summary: String(f['summary'] ?? ''),
+          proof: typeof f['proof'] === 'string' && f['proof'].trim() ? f['proof'].trim() : null,
+          preExisting: f['pre_existing'] === true,
         }))
         const pr = prOf(t, r.pr!)!
         const notice = await this.run(t.id, {

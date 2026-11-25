@@ -142,8 +142,11 @@ This is a re-check. The coder says it fixed or declined these; check each, and r
 ${recheck.map((f) => `- [${f.id}, ${f.severity}] ${f.summary} — ${typeof f.resolution === 'string' ? f.resolution : 'declined' in f.resolution ? `declined: ${f.resolution.declined}` : 'skipped'}`).join('\n')}
 ` : ''}
 Severity: high and medium hold the PR (bugs, missing tests, broken acceptance criteria, risky changes); low and nit
-do not. Submit with \`submit_review\`: every finding with severity, file, line and a summary the coder can act on,
-whether the tests passed, and their summary lines as evidence. Then you are done; this tile closes.`
+do not. A high or medium finding holds only with proof you can show: a command that fails and its output, or the
+line this PR changed that is wrong. Without proof, say it as low. A problem that was already on the base before
+this PR does not hold it: mark it pre_existing and it becomes a follow-up.
+Submit with \`submit_review\`: every finding with severity, file, line, a summary the coder can act on and its
+proof, whether the tests passed, and their summary lines as evidence. Then you are done; this tile closes.`
 }
 
 /** A piece of work for a coder whose tile is already open (or the second half of a new tile's brief). */

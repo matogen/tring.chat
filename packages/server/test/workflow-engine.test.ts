@@ -85,12 +85,16 @@ function rig(o: RigOptions = {}) {
     pass(i: number, sha: string): StepResult {
       return r.send({ type: 'report', pr: i, kind: 'tests_passing', sha, evidence: '12 passed', git: { head: sha, clean: true } })
     },
-    review(i: number, findings: Array<{ severity: 'high' | 'medium' | 'low' | 'nit'; file?: string; summary: string }> = [], testsPassed = true): StepResult {
+    /** A finding without a `proof` key gets one: the reviewer showed it. */
+    review(i: number, findings: Array<{ severity: 'high' | 'medium' | 'low' | 'nit'; file?: string; summary: string; proof?: string | null; preExisting?: boolean }> = [], testsPassed = true): StepResult {
       const p = r.pr(i)
       return r.send({
         type: 'review', pr: i, testsPassed, evidence: testsPassed ? 'ok' : '1 failed',
         range: { base: p.baseSha ?? '', head: p.headSha ?? '' },
-        findings: findings.map((f) => ({ severity: f.severity, file: f.file ?? null, line: null, summary: f.summary })),
+        findings: findings.map((f) => ({
+          severity: f.severity, file: f.file ?? null, line: null, summary: f.summary,
+          proof: 'proof' in f ? f.proof ?? null : 'npm test: 1 failed', preExisting: f.preExisting ?? false,
+        })),
       })
     },
     /** The runner's side of a running integration check: merged as m-<repo>, then the integrator's verdict. */
@@ -269,10 +273,24 @@ describe('stack engine: tests and the fresh review gate', () => {
     r.review(1, [{ severity: 'high', file: 'db/x.sql', summary: 'no index' }, { severity: 'nit', summary: 'naming' }])
     expect(r.pr(1).status).toBe('in-review')
     const findings = cardsFor(r.t).filter((c) => c.kind === 'finding')
-    expect(findings.map((c) => c.body)).toEqual(['no index'])
+    expect(findings.map((c) => c.body)).toEqual(['no index\n\nProof: npm test: 1 failed'])
     expect(findings[0]!.actions.map((a) => a.id)).toEqual(['fix', 'skip'])
     expect(r.card('review', 1)!.actions.map((a) => a.id)).toEqual(['fix-all'])
     expect(r.card('push', 1)).toBeUndefined()
+  })
+
+  it('holds the PR only on a finding the reviewer showed, and never on one already on the base', () => {
+    const r = rig()
+    r.approve()
+    r.pass(1, 'a1')
+    r.review(1, [
+      { severity: 'high', summary: 'might race', proof: null },
+      { severity: 'medium', file: 'db/legacy.sql', summary: 'the old index is missing', preExisting: true },
+    ])
+    expect(r.pr(1).status).toBe('review-clean')
+    expect(r.pr(1).review!.findings.map((f) => [f.summary, f.holds])).toEqual([['might race', false], ['the old index is missing', false]])
+    expect(r.t.followUps).toEqual([{ pr: 1, summary: 'db/legacy.sql: the old index is missing' }])
+    expect(r.card('feature')!.body).toMatch(/Follow-ups[\s\S]*CHV-1-1: db\/legacy.sql: the old index is missing/)
   })
 
   it('needs a reason to skip, and is clean once every held finding is skipped', () => {
