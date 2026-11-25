@@ -1,4 +1,4 @@
-import type { Finding, StackPr, Ticket } from '@tring/shared/workflow'
+import { STRATEGY_NAMES, type Finding, type StackPr, type Ticket, type WorkflowSettings } from '@tring/shared/workflow'
 import type { Job, Note } from './engine.ts'
 import { localKeyOf } from './tickets.ts'
 
@@ -19,19 +19,36 @@ const RULES = `Rules of this ticket (tring enforces them; a refused tool call sa
 
 const list = (xs: string[]): string => (xs.length ? xs.map((x) => `- ${x}`).join('\n') : '- (none)')
 
-export function plannerBrief(t: Ticket): string {
+export function plannerBrief(t: Ticket, defaultStrategy: WorkflowSettings['defaultStrategy'] = 'auto'): string {
   return `You are the planner for ticket ${t.localKey}: "${t.title}" (source: ${t.source}).
 
-Split it into a stack of small PRs that build on each other: typically schema -> API -> UI -> end-to-end tests,
-1 to 16 PRs in all, 2 to 6 per lane, each small enough to review in one sitting. Read the code first; do not edit
-anything (your tile is read-only).
+Split it into small units of work, 1 to 16 in all, each owned by one agent and small enough to review in one
+sitting (aim for 100 to 400 changed lines; 1000 is too many). Read the code first; do not edit anything (your tile
+is read-only).
+
+Then recommend how the units should land. The user picks one of the three on the plan card every time; your
+recommendation is marked there, with your reasons:
+- Independent PRs: each unit branches off the base and is its own PR, mergeable in any order. For units that do
+  not depend on each other (parallel full-stack slices, unrelated fixes, separate repos). No unit may sit on
+  another (below) or use an interface of another unit in its own repo.
+- Stacked PRs: a unit that builds on another sits on it (below) and its PR targets that unit's branch; they merge
+  bottom up. For layers that depend on each other: schema -> API -> UI, a refactor then the feature on it. Units
+  that depend on nothing still sit side by side on the base: stack only on a real dependency.
+- Single PR: every unit becomes one commit, in order, on one branch and one PR per repo. For tightly coupled
+  changes (most units need the same files or must land together), a small change overall, or a team that wants
+  one PR per ticket.
+${defaultStrategy === 'auto' ? 'The user\'s default is Auto: recommend what fits best.'
+    : `The user's default is ${STRATEGY_NAMES[defaultStrategy]}: recommend it unless the ticket clearly calls for another, and then say why.`}
+Give advice: { recommended, factors, means }: one line each on coupling, overlap (shared files), size, repos, review
+(what reviewing it would take) and shipping (whether parts can ship alone), each with the strategy it favours or
+null; and in means, one line per strategy on what it would mean for this ticket.
 
 Repositories (local clones; plan only for these, or add one under addRepos with a reason):
 ${t.repos.map((r) => `- ${r.id}: ${r.root} (builds on ${r.baseBranch})`).join('\n')}
 
-For each PR give: index, repo, below (the PR it builds on, same repo only, or null for the base branch), title,
-scope, owns (globs of the files only it may edit; no two PRs of a repo may own the same file — list a file several
-need under shared, owned by one), uses (interfaces from other PRs it codes against), tests.add and tests.run (the
+Each unit is an entry in prs. For each give: index, repo, below (the unit it builds on, same repo only, or null for
+the base branch), title, scope, owns (globs of the files only it may edit; no two units of a repo may own the same
+file, lockfiles and generated files included — list a file several need under shared, owned by one), uses (interfaces from other PRs it codes against), tests.add and tests.run (the
 exact commands that must pass; include the integration and end-to-end suites the repo has), and acceptance
 criteria. Declare every interface a PR provides with a contract precise enough to code against (types, schema,
 endpoint signatures): upper PRs are built against it before the lower PR is finished. Say which docs change

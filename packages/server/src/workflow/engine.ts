@@ -1,5 +1,5 @@
 import {
-  clampAgents, type Finding, type FindingSeverity, type PlannedPr, type PrStatus, type StackPr, type Ticket,
+  clampAgents, STRATEGIES, STRATEGY_NAMES, strategyPhrase, type StrategyAdvice, type Finding, type FindingSeverity, type PlannedPr, type PrStatus, type StackPr, type Ticket,
   type TicketRepo, type WorkflowSettings,
 } from '@tring/shared/workflow'
 import { matches, validatePlan } from './plan.ts'
@@ -844,7 +844,20 @@ function planBody(t: Ticket): string {
     ...p.prs.map((x) => `**${t.localKey}-${x.index} ${x.title}** (${x.repo}${x.below !== null ? `, on ${t.localKey}-${x.below}` : ''})\n` +
       `${x.scope}\nOwns: ${x.owns.join(', ')}\nTests: ${x.tests.run.join('; ')}${x.uses.length ? `\nUses: ${x.uses.join(', ')}` : ''}`),
     ...(p.interfaces.length ? ['', 'Interfaces:', ...p.interfaces.map((i) => `- ${i.name} (${t.localKey}-${i.owner}): ${i.contract}`)] : []),
+    ...adviceLines(p.advice),
   ].join('\n')
+}
+
+/** The planner's recommendation and its reasons, for the plan card and the ticket file. */
+export function adviceLines(a: StrategyAdvice | undefined): string[] {
+  if (!a) return []
+  return [
+    '',
+    `**Recommended: ${strategyPhrase(a.recommended)}**`,
+    ...a.factors.map((f) => `- ${f.factor}: ${f.note}${f.favours ? ` (→ ${strategyPhrase(f.favours)})` : ''}`),
+    '',
+    ...STRATEGIES.map((s) => `${STRATEGY_NAMES[s]}: ${a.means[s]}`),
+  ]
 }
 
 /** The feature card's done checklist: true, false, or null when tring cannot know yet. */

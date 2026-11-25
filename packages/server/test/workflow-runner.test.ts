@@ -10,6 +10,7 @@ import type { StackGit } from '../src/workflow/git.ts'
 import { WorkflowRunner, type RunnerSession } from '../src/workflow/runner.ts'
 import { TicketStore } from '../src/workflow/tickets.ts'
 import { cardsFor } from '../src/workflow/engine.ts'
+import { advice } from './workflow-advice.ts'
 
 const ROOT = path.resolve('/src/api')
 
@@ -78,7 +79,7 @@ const planned = (over: Partial<PlannedPr> & Pick<PlannedPr, 'index'>): PlannedPr
 })
 
 const plan: Plan = {
-  version: 1, summary: 'two PRs', shared: [], deployOrder: null, addRepos: [], docs: { none: 'internal' },
+  version: 1, summary: 'two PRs', shared: [], deployOrder: null, addRepos: [], docs: { none: 'internal' }, advice: advice(),
   interfaces: [{ name: 'Table', owner: 1, contract: 'orders(id)' }],
   prs: [
     planned({ index: 1, title: 'Table', owns: ['db/**'] }),
@@ -159,6 +160,8 @@ describe('WorkflowRunner: start_ticket', () => {
     await r.flush()
     expect(planner.typed[0]).toMatch(/You are the planner for ticket CHV-9/)
     expect(planner.typed[0]).toContain('show orders')
+    expect(planner.typed[0]).toMatch(/Independent PRs.*Stacked PRs.*Single PR/s)
+    expect(planner.typed[0]).toMatch(/The user's default is Auto: recommend what fits best/)
   })
 
   it('starts each role on the model and effort Settings give it, and on the Claude Code default otherwise', async () => {

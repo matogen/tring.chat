@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { Plan, PlannedPr, Ticket } from '@tring/shared/workflow'
+import { advice } from './workflow-advice.ts'
 import {
   cardsFor, checklist, prOf, step, STUCK_MS, type Command, type EngineEnv, type EngineEvent, type StepResult,
 } from '../src/workflow/engine.ts'
@@ -16,7 +17,7 @@ const planned = (over: Partial<PlannedPr> & Pick<PlannedPr, 'index'>): PlannedPr
 
 /** Schema -> API in `api`; a page in `web` that codes against the API. */
 const ordersPlan = (): Plan => ({
-  version: 1, summary: 'orders', shared: [], deployOrder: null, addRepos: [], docs: { none: 'internal' },
+  version: 1, summary: 'orders', shared: [], deployOrder: null, addRepos: [], docs: { none: 'internal' }, advice: advice(),
   prs: [
     planned({ index: 1, title: 'Orders table', owns: ['db/**'] }),
     planned({ index: 2, below: 1, title: 'Orders API', owns: ['src/routes/**'], uses: ['OrdersTable'] }),
@@ -127,6 +128,16 @@ describe('stack engine: planning', () => {
     expect(r.t.phase).toBe('awaiting-approval')
     expect(r.card('plan')!.actions.map((a) => a.id)).toEqual(['approve', 'revise', 'cancel', 'agents'])
     expect(r.card('plan')!.body).toContain('CHV-1-2 Orders API')
+  })
+
+  it('shows the planner\'s recommended strategy and its reasons on the plan card', () => {
+    const r = rig()
+    r.send({ type: 'start' })
+    r.send({ type: 'planSubmitted', plan: ordersPlan() })
+    const body = r.card('plan')!.body
+    expect(body).toMatch(/Recommended: stacked PRs/)
+    expect(body).toContain('coupling: the API reads the table')
+    expect(body).toContain('Single PR: One PR with two commits, table then API.')
   })
 
   it('asks the planner for changes in the user\'s words, which a change needs', () => {

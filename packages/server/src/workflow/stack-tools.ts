@@ -29,7 +29,7 @@ const PLANNER: ToolDef[] = [{
     properties: {
       plan: {
         type: 'object',
-        description: '{ summary, prs: [{ index, repo, below, title, scope, owns, uses, tests: { add, run }, acceptance }], interfaces: [{ name, owner, contract }], shared: [{ repo, path, owner, why }], deployOrder: [repo…] | null, addRepos: [{ path, base, why }], docs: { files: [{ repo, path }] } | { none: "why" } }',
+        description: '{ summary, prs: [{ index, repo, below, title, scope, owns, uses, tests: { add, run }, acceptance }], interfaces: [{ name, owner, contract }], shared: [{ repo, path, owner, why }], deployOrder: [repo…] | null, addRepos: [{ path, base, why }], docs: { files: [{ repo, path }] } | { none: "why" }, advice: { recommended: "independent" | "stacked" | "single", factors: [{ factor: "coupling" | "overlap" | "size" | "repos" | "review" | "shipping", note, favours: strategy | null }], means: { independent, stacked, single } } }',
       },
     },
     required: ['plan'],

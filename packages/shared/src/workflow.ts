@@ -8,6 +8,9 @@
 /** How a ticket's units land: a PR each off the base, a PR each on the one below, or one PR of a commit each. */
 export type Strategy = 'independent' | 'stacked' | 'single'
 export const STRATEGIES: readonly Strategy[] = ['independent', 'stacked', 'single']
+export const STRATEGY_NAMES: Readonly<Record<Strategy, string>> = { independent: 'Independent PRs', stacked: 'Stacked PRs', single: 'Single PR' }
+/** The name mid-sentence: independent PRs, stacked PRs, a single PR. */
+export const strategyPhrase = (s: Strategy): string => s === 'single' ? 'a single PR' : STRATEGY_NAMES[s].replace(/^\w/, (c) => c.toLowerCase())
 
 /** Claude Code's --effort levels. */
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
@@ -179,6 +182,20 @@ export interface Plan {
   addRepos: Array<{ path: string; base: string | null; why: string }>
   /** The docs the ticket should change, or why it changes none. */
   docs: { files: Array<{ repo: string; path: string }> } | { none: string }
+  /** The planner's recommended strategy and why. Absent only on plans made before strategies. */
+  advice?: StrategyAdvice
+}
+
+/** What the planner weighs to recommend a strategy. */
+export type StrategyFactor = 'coupling' | 'overlap' | 'size' | 'repos' | 'review' | 'shipping'
+export const STRATEGY_FACTORS: readonly StrategyFactor[] = ['coupling', 'overlap', 'size', 'repos', 'review', 'shipping']
+
+export interface StrategyAdvice {
+  recommended: Strategy
+  /** One line per factor, and the strategy it points to, if any. */
+  factors: Array<{ factor: StrategyFactor; note: string; favours: Strategy | null }>
+  /** What each strategy would mean for this ticket, for the plan card's picker. */
+  means: Record<Strategy, string>
 }
 
 /** What a screen needs of a ticket for its tab badge and stack rail (state message). */

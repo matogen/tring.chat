@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import type { Plan, PlannedPr, TicketRepo } from '@tring/shared/workflow'
-import { validatePlan } from '../src/workflow/plan.ts'
+import { fits, validatePlan } from '../src/workflow/plan.ts'
+import { advice } from './workflow-advice.ts'
 
 const repos: TicketRepo[] = [
   { id: 'api', root: '/src/api', baseBranch: 'develop' },
@@ -32,6 +33,7 @@ function plan(over: Partial<Plan> = {}): Plan {
     deployOrder: ['api', 'web'],
     addRepos: [],
     docs: { none: 'internal feature, no user docs' },
+    advice: advice('stacked'),
     ...over,
   }
 }
@@ -175,5 +177,56 @@ describe('validatePlan', () => {
     expect(errorsOf(null)).toEqual([expect.stringMatching(/not a plan/)])
     expect(errorsOf({ prs: 'lots' })).toContainEqual(expect.stringMatching(/1 to 16 PRs/))
     expect(errorsOf({ ...plan(), prs: [{ index: 'one' }] })).toContainEqual(expect.stringMatching(/index/))
+  })
+})
+
+describe('the planner’s strategy advice', () => {
+  it('needs a recommendation, all six factors with a note, and what each strategy would mean', () => {
+    expect(errorsOf(plan({ advice: undefined }))).toEqual([expect.stringMatching(/advice/)])
+    const a = advice('stacked')
+    const missing = { ...a, factors: a.factors.filter((f) => f.factor !== 'review'), means: { ...a.means, single: ' ' } }
+    const errors = errorsOf(plan({ advice: missing }))
+    expect(errors).toContainEqual(expect.stringMatching(/review/))
+    expect(errors).toContainEqual(expect.stringMatching(/single/))
+    expect(errorsOf(plan({ advice: { ...a, recommended: 'sideways' as never } }))).toContainEqual(expect.stringMatching(/independent, stacked or single/))
+  })
+
+  it('keeps the advice with the plan', () => {
+    const r = validatePlan(plan(), ctx)
+    expect(r.ok && r.plan.advice).toEqual(advice('stacked'))
+  })
+
+  it('refuses a recommendation the plan does not fit, saying why', () => {
+    expect(errorsOf(plan({ advice: advice('independent') }))).toEqual([
+      expect.stringMatching(/recommends independent PRs.*PR 2 sits on PR 1/s),
+    ])
+  })
+})
+
+describe('fits', () => {
+  const independent = plan({
+    prs: [
+      pr({ index: 1, title: 'Orders table', owns: ['db/**'] }),
+      pr({ index: 2, title: 'Audit log', owns: ['src/audit/**'] }),
+      pr({ index: 3, repo: 'web', title: 'Orders page', owns: ['src/orders/**'], uses: ['OrdersTable'] }),
+    ],
+    interfaces: [{ name: 'OrdersTable', owner: 1, contract: 'orders(id uuid)' }],
+  })
+
+  it('fits any plan as stacked or as a single PR', () => {
+    for (const p of [plan(), independent]) {
+      expect(fits(p, 'stacked')).toEqual([])
+      expect(fits(p, 'single')).toEqual([])
+    }
+  })
+
+  it('fits independent PRs only when no unit builds on another in its repo', () => {
+    expect(fits(independent, 'independent')).toEqual([])
+    expect(fits(plan(), 'independent')).toEqual([expect.stringMatching(/PR 2 sits on PR 1/)])
+    const sameRepoUse = plan({
+      prs: [pr({ index: 1, owns: ['db/**'] }), pr({ index: 2, owns: ['src/**'], uses: ['OrdersTable'] })],
+      interfaces: [{ name: 'OrdersTable', owner: 1, contract: 'x' }], deployOrder: null,
+    })
+    expect(fits(sameRepoUse, 'independent')).toEqual([expect.stringMatching(/PR 2 uses OrdersTable from PR 1 in the same repo/)])
   })
 })

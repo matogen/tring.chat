@@ -209,7 +209,7 @@ export class WorkflowRunner implements WorkflowTools {
       case 'startPlanner': {
         const root = t.repos[0]!.root
         await this.spawn(t, 'planner', null, root, null)
-        this.queue(t.id, 'planner', null, plannerBrief(t))
+        this.queue(t.id, 'planner', null, plannerBrief(t, this.d.settings.get().defaultStrategy))
         return
       }
       case 'closePlanner': return this.close(t.id, 'planner', null)
@@ -614,7 +614,7 @@ export class WorkflowRunner implements WorkflowTools {
     switch (name) {
       case 'stack_brief': {
         const pr = r.pr !== null ? prOf(t, r.pr) : undefined
-        const brief = r.role === 'planner' ? plannerBrief(t) : pr && r.role === 'coder' ? coderBrief(t, pr)
+        const brief = r.role === 'planner' ? plannerBrief(t, this.d.settings.get().defaultStrategy) : pr && r.role === 'coder' ? coderBrief(t, pr)
           : pr ? reviewerBrief(t, pr, (pr.review?.round ?? 0) + 1, r.range ?? { base: pr.baseSha ?? '', head: pr.headSha ?? '' }, []) : ''
         const docs = renderTicket(t)
         const local = r.pr !== null ? [...docs.entries()].find(([n]) => n.endsWith(`-${r.pr}.md`))?.[1] : [...docs.values()][0]

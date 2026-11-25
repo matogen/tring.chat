@@ -1,5 +1,6 @@
 import {
-  MAX_PRS, MIN_PRS, type Plan, type PlanInterface, type PlannedPr, type SharedFile, type TicketRepo,
+  MAX_PRS, MIN_PRS, STRATEGIES, STRATEGY_FACTORS, type Plan, type PlanInterface, type PlannedPr, type SharedFile,
+  type Strategy, type StrategyAdvice, type StrategyFactor, type TicketRepo,
 } from '@tring/shared/workflow'
 
 /**
@@ -188,20 +189,91 @@ export function validatePlan(raw: unknown, ctx: PlanContext): PlanResult {
     docs = { none: why }
   }
 
-  if (errors.length) return { ok: false, errors }
-  return {
-    ok: true,
-    plan: {
-      version: whole(raw['version']) ?? 1,
-      summary: text(raw['summary']),
-      prs: [...prs].sort((a, b) => a.index - b.index),
-      shared,
-      interfaces,
-      deployOrder,
-      addRepos,
-      docs,
-    },
+  /* ---- the strategy it recommends ---- */
+
+  const advice = readAdvice(raw['advice'], errors)
+
+  if (errors.length || !advice) return { ok: false, errors }
+  const plan: Plan = {
+    version: whole(raw['version']) ?? 1,
+    summary: text(raw['summary']),
+    prs: [...prs].sort((a, b) => a.index - b.index),
+    shared,
+    interfaces,
+    deployOrder,
+    addRepos,
+    docs,
+    advice,
   }
+  const misfit = fits(plan, advice.recommended)
+  if (misfit.length) {
+    return {
+      ok: false,
+      errors: [`The advice recommends ${NAMES[advice.recommended]}, which this plan does not fit: ${misfit.join(' ')} Change the plan or the recommendation.`],
+    }
+  }
+  return { ok: true, plan }
+}
+
+const NAMES: Record<Strategy, string> = { independent: 'independent PRs', stacked: 'stacked PRs', single: 'a single PR' }
+
+const FACTOR_HINT: Record<StrategyFactor, string> = {
+  coupling: 'how much the units depend on each other.',
+  overlap: 'whether they need the same files.',
+  size: 'how big the change is, in all and per unit.',
+  repos: 'how many repos it spans.',
+  review: 'what reviewing it would take.',
+  shipping: 'whether parts could ship on their own.',
+}
+
+function readAdvice(raw: unknown, errors: string[]): StrategyAdvice | null {
+  if (!isObj(raw)) {
+    errors.push('Recommend a strategy: advice: { recommended, factors: [{ factor, note, favours }], means: { independent, stacked, single } }.')
+    return null
+  }
+  const recommended = text(raw['recommended']) as Strategy
+  if (!STRATEGIES.includes(recommended)) errors.push(`advice.recommended is independent, stacked or single, not "${text(raw['recommended'])}".`)
+  const factors = (Array.isArray(raw['factors']) ? raw['factors'] : []).filter(isObj).map((f) => ({
+    factor: text(f['factor']) as StrategyFactor,
+    note: text(f['note']),
+    favours: STRATEGIES.includes(text(f['favours']) as Strategy) ? text(f['favours']) as Strategy : null,
+  })).filter((f) => STRATEGY_FACTORS.includes(f.factor))
+  for (const name of STRATEGY_FACTORS) {
+    const f = factors.filter((x) => x.factor === name)
+    if (!f.length || !f[0]!.note) errors.push(`advice.factors needs one line on ${name}: ${FACTOR_HINT[name]}`)
+    else if (f.length > 1) errors.push(`advice.factors has ${name} more than once.`)
+  }
+  const m = isObj(raw['means']) ? raw['means'] : {}
+  const means = {} as Record<Strategy, string>
+  for (const s of STRATEGIES) {
+    means[s] = text(m[s])
+    if (!means[s]) errors.push(`advice.means.${s}: say in a line what ${NAMES[s]} would mean for this ticket.`)
+  }
+  const ordered = STRATEGY_FACTORS.map((n) => factors.find((f) => f.factor === n)).filter((f) => f !== undefined)
+  return { recommended, factors: ordered, means }
+}
+
+/**
+ * Why `plan` cannot be landed as `strategy` as it stands; empty when it can.
+ * Stacked and single PRs take any valid plan. Independent PRs each branch off
+ * the base, so no unit may sit on another or use an interface from another
+ * in its own repo (across repos an interface is fine: each ships alone).
+ */
+export function fits(plan: Plan, strategy: Strategy): string[] {
+  if (strategy !== 'independent') return []
+  const out: string[] = []
+  for (const p of plan.prs) {
+    if (p.below !== null) {
+      out.push(`PR ${p.index} sits on PR ${p.below}.`)
+      continue
+    }
+    for (const u of p.uses) {
+      const owner = plan.interfaces.find((i) => i.name === u)?.owner
+      const o = owner !== undefined ? plan.prs.find((x) => x.index === owner) : undefined
+      if (o && o.index !== p.index && o.repo === p.repo) out.push(`PR ${p.index} uses ${u} from PR ${o.index} in the same repo.`)
+    }
+  }
+  return out
 }
 
 /** Each circle in a "waits on" graph once, as the PRs in it, lowest first. */

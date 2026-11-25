@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
-import type { Finding, StackPr, Ticket, TicketPhase, TicketRepo } from '@tring/shared/workflow'
+import { strategyPhrase, type Finding, type StackPr, type Ticket, type TicketPhase, type TicketRepo } from '@tring/shared/workflow'
 import { writeAtomic } from '../card-store.ts'
+import { adviceLines } from './engine.ts'
 
 /**
  * The multi-PR workflow's tickets: `~/.config/tring/tickets.json`, and each
@@ -167,7 +168,11 @@ function renderParent(t: Ticket): string {
     '',
     t.text,
   ]
-  if (t.plan) lines.push('', `## Plan (version ${t.plan.version})`, '', t.plan.summary)
+  if (t.plan) {
+    lines.push('', `## Plan (version ${t.plan.version})`, '', t.plan.summary)
+    if (t.strategy) lines.push('', `Landing as: ${strategyPhrase(t.strategy)} (the user's choice)`)
+    lines.push(...adviceLines(t.plan.advice))
+  }
   if (t.prs.length) {
     lines.push('', '## Local tickets', '')
     for (const pr of t.prs) {
