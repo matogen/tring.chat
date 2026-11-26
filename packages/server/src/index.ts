@@ -281,7 +281,11 @@ async function main(): Promise<void> {
     const s = pm.findSession(id)
     return s?.claude ? { projectId: s.projectId, slot: s.slot, claudeId: s.claude.id } : null
   })
-  inbox.restore(restoreCards(await cards.load(), (projectId, claudeId) => pm.tilesWith(projectId, claudeId)))
+  const savedCards = await cards.load()
+  const restored = restoreCards(savedCards, (projectId, claudeId) => pm.tilesWith(projectId, claudeId))
+  inbox.restore(restored)
+  // Said out loud, so "my cards are gone" can be told apart from "this build never kept them".
+  if (savedCards.length) console.log(`inbox: ${restored.length} of ${savedCards.length} saved cards came back`)
   // Phone notifications for orchestrator cards: off until a device turns
   // them on in settings. The VAPID key is made on first run and kept.
   const pushStore = new PushStore(path.join(configDir, 'push.json'))
