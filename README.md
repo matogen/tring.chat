@@ -114,7 +114,7 @@ npm i -g ./packages/server          # install this checkout as `tring`
 
 Flags: `--port` (7331), `--host` (127.0.0.1), `--token`, `--tls-cert`, `--tls-key`,
 `--scrollback` (5000), `--idle-ms` (3000), `--shell`, `--fs-root`, `--allow-origin`,
-`--insecure-no-token`, `--no-open`, `--no-update-check`, `--version`.
+`--insecure-no-token`, `--no-open`, `--no-update-check`, `--allow-sleep`, `--version`.
 
 ## On a phone
 
@@ -325,6 +325,19 @@ npm i -g tring-chat
 Running sessions are unaffected until you restart the daemon. The check never
 blocks startup and fails silently when offline. Opt out with
 `--no-update-check` or `TRING_NO_UPDATE_CHECK=1`.
+
+## Staying awake for phones
+
+A phone reaches tring through this machine, so when the machine sleeps the phone
+gets nothing until someone wakes it at the keyboard. Windows' idle sleep counts
+only local input: a PC left locked while you work from your phone sleeps after
+45 minutes on mains, however busy the phone keeps it.
+
+So while phones can reach tring (an `--allow-origin`, or bound off localhost) the
+daemon holds a request that blocks idle sleep only, the way a video player does;
+the lid, the power button and Start → Sleep still sleep the machine. On Windows
+it shows in `powercfg /requests` (as admin) as a `powershell.exe` under SYSTEM.
+Opt out with `--allow-sleep` or `TRING_ALLOW_SLEEP=1`.
 
 ## Ring size
 

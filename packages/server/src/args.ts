@@ -12,6 +12,8 @@ export interface Args {
   open: boolean
   shell: string | null
   updateCheck: boolean
+  /** Let the machine sleep on its own even while phones reach tring (see keep-awake.ts). */
+  allowSleep: boolean
   allowOrigin: string[]
   fsRoot: string[]
   insecureNoToken: boolean
@@ -60,6 +62,10 @@ const HELP = `tring — focus-centred terminal deck
                     localhost, and to any site that can rebind a name to it
   --no-open         do not launch a browser window
   --no-update-check do not ask npm whether a newer tring exists
+  --allow-sleep     let this machine go to sleep when idle. By default, while
+                    phones can reach tring (--allow-origin, or bound off
+                    localhost), it is kept from idle sleep, since a sleeping
+                    machine drops them; lid and power button still sleep it
   --version         print the version and exit`
 
 /**
@@ -82,6 +88,7 @@ export function parseArgs(argv: string[]): Args {
     open: !process.env['TRING_NO_OPEN'],
     shell: process.env['TRING_SHELL'] ?? null,
     updateCheck: !process.env['TRING_NO_UPDATE_CHECK'],
+    allowSleep: !!process.env['TRING_ALLOW_SLEEP'],
     allowOrigin: listOf(process.env['TRING_ALLOW_ORIGIN']),
     fsRoot: listOf(process.env['TRING_FS_ROOT']),
     insecureNoToken: !!process.env['TRING_INSECURE_NO_TOKEN'],
@@ -167,6 +174,7 @@ export function parseArgs(argv: string[]): Args {
       case '--insecure-no-token': noValue(); args.insecureNoToken = true; break
       case '--no-open': noValue(); args.open = false; break
       case '--no-update-check': noValue(); args.updateCheck = false; break
+      case '--allow-sleep': noValue(); args.allowSleep = true; break
       case '--version': console.log(currentVersion()); process.exit(0); break
       case '--help': console.log(HELP); process.exit(0); break
       // A flag we silently ignored used to mean a `--tokn` typo ran an

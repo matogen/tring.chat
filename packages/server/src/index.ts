@@ -19,6 +19,7 @@ import { UploadStore } from './uploads.ts'
 import { checkForUpdate, currentVersion } from './update-check.ts'
 import { Inbox } from './inbox.ts'
 import { CardStore, restoreCards } from './card-store.ts'
+import { KeepAwake, wantsKeepAwake } from './keep-awake.ts'
 import { AutoAnswerer } from './auto-answer.ts'
 import { hooksStatus, installHooks, uninstallHooks } from './hooks-install.ts'
 import { prependPath, writeHookShim } from './hook-shim.ts'
@@ -428,9 +429,17 @@ async function main(): Promise<void> {
     }
   })
 
+  // A sleeping machine drops every phone until someone wakes it at the
+  // keyboard, so while phones can reach tring it is kept from idle sleep.
+  const awake = new KeepAwake()
+  if (wantsKeepAwake({ allowSleep: args.allowSleep, allowOrigin: args.allowOrigin, loopbackOnly: isLoopbackBind(args.host) }) && awake.start()) {
+    console.log('keeping this machine from idle sleep so phones can reach it (--allow-sleep to let it sleep)')
+  }
+
   const shutdown = async (): Promise<void> => {
     // First: ending the tiles below drops their cards, which must not be saved.
     await cards.close()
+    awake.stop()
     hub.dispose()
     agent.dispose()
     runner.stop()
