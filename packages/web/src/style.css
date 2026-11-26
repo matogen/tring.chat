@@ -974,6 +974,44 @@ pre.card-body {
 }
 .card-reason:focus, .card-other:focus, .card-reply:focus { outline: none; border-color: var(--emerald); }
 .card-reason[hidden] { display: none; }
+/* Images and files going with a reply (attachments.ts): a chip each, a
+   thumbnail for an image, × to take it off. */
+.card-files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.card-files[hidden], .card-error[hidden] { display: none; }
+.card-files.sending { opacity: 0.6; }
+.card-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 3px 4px 3px 8px;
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  background: var(--bg-2);
+  color: var(--text);
+  font: 12px var(--sans);
+}
+.card-file.image { padding-left: 3px; }
+.card-file img { width: 40px; height: 40px; object-fit: cover; border-radius: 3px; flex: none; }
+.card-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-file-remove {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.card-file-remove:hover { color: var(--text); background: var(--line); }
+.card-attach { display: inline-flex; align-items: center; justify-content: center; padding: 0 10px; color: var(--muted); }
+.card-error { margin: 6px 0 0; color: var(--red); font: 12px var(--sans); }
+.card.dropping { box-shadow: inset 0 0 0 2px var(--mint); }
+.card.full .card-foot > .card-files, .card.full .card-foot > .card-error { flex: none; }
+@media (max-width: 720px) { .card-file-remove { width: 32px; height: 32px; } }
 .card-question + .card-question { margin-top: 12px; }
 .card-chip {
   display: inline-block;

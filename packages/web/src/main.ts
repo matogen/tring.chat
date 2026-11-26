@@ -102,6 +102,7 @@ const inboxPanel = new InboxPanel(focusCell, {
   },
   onAnswer: (itemId, decision, extra) => ws.send({ type: 'answer', itemId, decision, ...extra }),
   onReply: (itemId, text) => ws.send({ type: 'reply', itemId, text }),
+  upload: uploadFile,
   onAction: (itemId, actionId, text, value) => actionId === 'cleanup'
     ? void openCleanup(inboxItems.find((i) => i.id === itemId)?.ticketId ?? '')
     : ws.send({

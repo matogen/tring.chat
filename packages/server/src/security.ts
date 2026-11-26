@@ -136,7 +136,9 @@ export const SECURITY_HEADERS: Readonly<Record<string, string>> = Object.freeze(
     "script-src 'self'",
     // xterm writes a <style> element of its own for terminal metrics.
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data:", // the favicon is an inline SVG
+    // The favicon is an inline SVG; blob: is a reply's attached image shown
+    // as a thumbnail before it is sent, a URL only this page's script can make.
+    "img-src 'self' data: blob:",
     "font-src 'self'",
     "connect-src 'self'", // ws:// to this same host is 'self' under CSP 3
     "worker-src 'self'", // the PWA service worker

@@ -7,6 +7,8 @@ import { cardSignature, orderCards, pickerLabel, pickerValue, workflowCard } fro
 import {
   clampSplit, MIN_CARDS_HEIGHT, MIN_CARDS_WIDTH, MIN_TERMINAL_HEIGHT, MIN_TERMINAL_WIDTH,
 } from './split.ts'
+import { PendingFiles, pastedFiles, replyText, sizeLabel, uploadAll } from './attachments.ts'
+import { filePicker } from './drop.ts'
 
 const WIDTH_KEY = 'tring.inboxWidth'
 const HEIGHT_KEY = 'tring.inboxHeight'
@@ -49,6 +51,24 @@ export interface InboxCallbacks {
   onVoice?: (box: HTMLTextAreaElement, button: HTMLButtonElement) => void
   /** A button on a multi-PR workflow card, with the words or number it asked for. */
   onAction?: (itemId: string, actionId: string, text?: string, value?: number | string) => void
+  /**
+   * Sends a file to the daemon and resolves with its path there (ws-client.ts),
+   * for images and files attached to a reply. No attaching without it.
+   */
+  upload?: (file: Blob) => Promise<string>
+}
+
+const CLIP_ICON = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 7.5 8 13a3.5 3.5 0 0 1-5-5l5.8-5.8a2.3 2.3 0 0 1 3.3 3.3L6.3 11.3a1.2 1.2 0 0 1-1.6-1.6L10 4.4"/></svg>'
+
+/** The reply box's attachments: the chips, and what sending them needs. */
+interface ReplyFiles {
+  pending: PendingFiles
+  /** The chips row and the line that says what went wrong, for the card's foot. */
+  els: HTMLElement[]
+  /** The paperclip, for the card's buttons. */
+  button: HTMLButtonElement
+  busy: (on: boolean) => void
+  fail: (message: string) => void
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -127,6 +147,9 @@ export class InboxPanel {
   private readonly historyList = el('ol', 'inbox-history-list')
   private readonly historySummary = el('summary')
   private readonly cards = new Map<string, Card>()
+  /** One file picker for every card (an input each would outlive its card); it fills whichever card opened it. */
+  private pickFiles: (() => void) | null = null
+  private pickInto: ((files: File[]) => void) | null = null
   private items: InboxItem[] = []
   private shown = false
   private armedAt = 0
@@ -811,23 +834,47 @@ export class InboxPanel {
       main.append(...expandable(renderMarkdown(text.body, 'card-message md')))
       const box = el('textarea', 'card-reply')
       box.rows = 2
-      box.placeholder = 'Reply… (Enter sends, Shift+Enter for a new line)'
-      const send = (): void => {
-        const v = box.value.trim()
-        if (v) this.reply(item.id, v)
+      box.placeholder = this.cb.upload
+        ? 'Reply… (Enter sends, Shift+Enter for a new line, paste or drop images and files)'
+        : 'Reply… (Enter sends, Shift+Enter for a new line)'
+      const upload = this.cb.upload
+      const files = upload ? this.replyFiles(root, box) : null
+      const sendButton = button('Send', 'primary', () => send(box.value))
+      let sending = false
+      // Whatever sends the reply — Enter, the button, an option — takes the
+      // attached files along: up first, then their paths ahead of the words.
+      const send = (text: string): void => {
+        const words = text.trim()
+        const attached = files?.pending.list ?? []
+        if (sending || (!words && attached.length === 0)) return
+        if (!files || !upload || attached.length === 0) { this.reply(item.id, words); return }
+        sending = true
+        sendButton.disabled = true
+        files.busy(true)
+        void uploadAll(attached, upload).then((paths) => {
+          files.pending.clear()
+          this.reply(item.id, replyText(words, paths))
+        }, (err: unknown) => {
+          files.fail((err as Error).message)
+        }).finally(() => {
+          sending = false
+          sendButton.disabled = false
+          files.busy(false)
+        })
       }
       // A plain-text multiple choice at the end of its turn (the grilling
       // skill's rounds): one button per option, outside the folded message so
       // they show whether it is folded or not. See choices.ts.
-      const choiceKeys = this.choiceButtons(item, foot, box)
+      const choiceKeys = this.choiceButtons(item, foot, box, send)
       box.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); send() }
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); send(box.value) }
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); root.focus() }
       })
       actions.append(
-        button('Send', 'primary', send),
+        sendButton,
         button('Dismiss', '', () => answer('terminal'), 'x'),
         button('Open', '', open, 'o'),
+        ...(files ? [files.button] : []),
       )
       // Talk instead of typing (desktop; a phone has its keyboard's dictation).
       if (this.cb.onVoice) {
@@ -840,7 +887,7 @@ export class InboxPanel {
         mic.onclick = (e) => { e.stopPropagation(); onVoice(box, mic) }
         actions.append(mic)
       }
-      foot.append(box, actions)
+      foot.append(...(files?.els ?? []), box, actions)
       key = (e) => {
         if (e.target !== root) return false
         if (choiceKeys(e)) return true
@@ -852,6 +899,115 @@ export class InboxPanel {
     }
 
     return { item, root, paintHeader, key }
+  }
+
+  /**
+   * Images and files for a reply: pasted into its box (a screenshot off the
+   * clipboard), dropped anywhere on the card, or picked with the paperclip,
+   * which on a phone opens the camera, the photo library or the files app.
+   * Each shows as a chip, a thumbnail for an image, with × to take it off.
+   *
+   * The card sits inside the terminal's cell, whose own drop types into the
+   * focused terminal (drop.ts), so a drop here goes no further than the card.
+   */
+  private replyFiles(root: HTMLElement, box: HTMLTextAreaElement): ReplyFiles {
+    const chips = el('div', 'card-files')
+    chips.hidden = true
+    const error = el('p', 'card-error')
+    error.hidden = true
+    const thumbs = new Map<number, string>()
+    const paint = (): void => {
+      const list = pending.list
+      for (const [id, url] of thumbs) {
+        if (!list.some((a) => a.id === id)) { URL.revokeObjectURL(url); thumbs.delete(id) }
+      }
+      chips.replaceChildren(...list.map((a) => {
+        const chip = el('span', `card-file${a.image ? ' image' : ''}`)
+        chip.title = `${a.name} · ${sizeLabel(a.file.size)}`
+        if (a.image) {
+          const img = el('img')
+          img.alt = ''
+          img.src = thumbs.get(a.id) ?? URL.createObjectURL(a.file)
+          thumbs.set(a.id, img.src)
+          chip.append(img)
+        }
+        chip.append(el('span', 'card-file-name', a.name))
+        const x = el('button', 'card-file-remove', '×')
+        x.type = 'button'
+        x.title = `Remove ${a.name}`
+        x.setAttribute('aria-label', `Remove ${a.name}`)
+        x.onclick = (e) => { e.stopPropagation(); pending.remove(a.id); box.focus() }
+        chip.append(x)
+        return chip
+      }))
+      chips.hidden = list.length === 0
+      error.hidden = true
+    }
+    const pending = new PendingFiles(paint)
+
+    box.addEventListener('paste', (e) => {
+      const files = pastedFiles(e.clipboardData)
+      if (files.length === 0) return
+      e.preventDefault()
+      pending.add(files)
+    })
+
+    const carriesFiles = (e: DragEvent): boolean => Array.from(e.dataTransfer?.types ?? []).includes('Files')
+    let depth = 0
+    root.addEventListener('dragenter', (e) => {
+      if (!carriesFiles(e)) return
+      e.preventDefault()
+      e.stopPropagation()
+      depth++
+      root.classList.add('dropping')
+    })
+    root.addEventListener('dragover', (e) => {
+      if (!carriesFiles(e)) return
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+    })
+    root.addEventListener('dragleave', (e) => {
+      e.stopPropagation()
+      depth = Math.max(0, depth - 1)
+      if (depth === 0) root.classList.remove('dropping')
+    })
+    root.addEventListener('drop', (e) => {
+      if (!carriesFiles(e)) return
+      e.preventDefault()
+      e.stopPropagation()
+      depth = 0
+      root.classList.remove('dropping')
+      pending.add(Array.from(e.dataTransfer?.files ?? []))
+      box.focus()
+    })
+
+    const clip = el('button', 'btn card-attach')
+    clip.type = 'button'
+    clip.title = 'Attach images or files (or paste or drop them on the card)'
+    clip.setAttribute('aria-label', 'Attach images or files')
+    clip.innerHTML = CLIP_ICON
+    clip.onclick = (e) => {
+      e.stopPropagation()
+      this.pickInto = (files) => { pending.add(files); box.focus() }
+      this.pickFiles ??= filePicker((files) => this.pickInto?.(files))
+      this.pickFiles()
+    }
+
+    return {
+      pending,
+      els: [chips, error],
+      button: clip,
+      busy: (on) => {
+        box.readOnly = on
+        clip.disabled = on
+        chips.classList.toggle('sending', on)
+      },
+      fail: (message) => {
+        error.textContent = `Not sent: ${message}`
+        error.hidden = false
+      },
+    }
   }
 
   /**
@@ -868,7 +1024,7 @@ export class InboxPanel {
    * Returns the card's extra keys: 1–9 for an option and y for yes, when there
    * is a single question.
    */
-  private choiceButtons(item: InboxItem, into: HTMLElement, box: HTMLTextAreaElement): (e: KeyboardEvent) => boolean {
+  private choiceButtons(item: InboxItem, into: HTMLElement, box: HTMLTextAreaElement, send: (text: string) => void): (e: KeyboardEvent) => boolean {
     const questions = parseChoices(item.message ?? '')
     if (!questions.length) return () => false
     const single = questions.length === 1
@@ -888,7 +1044,7 @@ export class InboxPanel {
       if (!single) block.append(el('p', 'card-choice-q', `${q.id} · ${q.title}`))
       const opts = el('div', 'card-options')
       const choose = (b: HTMLButtonElement, answerFor: string): void => {
-        if (single) { this.reply(item.id, answerFor); return }
+        if (single) { send(answerFor); return }
         picks.set(q.id!, answerFor)
         compose()
         for (const sib of Array.from(opts.querySelectorAll('.option'))) sib.classList.toggle('picked', sib === b)
