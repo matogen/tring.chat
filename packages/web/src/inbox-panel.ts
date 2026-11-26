@@ -3,7 +3,7 @@ import { age, answersFor, describe } from './inbox-view.ts'
 import { renderMarkdown } from './markdown.ts'
 import { answerText, parseChoices } from './choices.ts'
 import { MOBILE_QUERY as PHONE } from './switcher.ts'
-import { cardSignature, orderCards, workflowCard } from './workflow-view.ts'
+import { cardSignature, orderCards, pickerLabel, pickerValue, workflowCard } from './workflow-view.ts'
 import {
   clampSplit, MIN_CARDS_HEIGHT, MIN_CARDS_WIDTH, MIN_TERMINAL_HEIGHT, MIN_TERMINAL_WIDTH,
 } from './split.ts'
@@ -48,7 +48,7 @@ export interface InboxCallbacks {
   /** The reply box's microphone (voice.ts): start or stop talking into `box`. */
   onVoice?: (box: HTMLTextAreaElement, button: HTMLButtonElement) => void
   /** A button on a multi-PR workflow card, with the words or number it asked for. */
-  onAction?: (itemId: string, actionId: string, text?: string, value?: number) => void
+  onAction?: (itemId: string, actionId: string, text?: string, value?: number | string) => void
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -511,10 +511,49 @@ export class InboxPanel {
     const actions = el('div', 'card-actions')
     const ask = el('div', 'card-ask')
     ask.hidden = true
-    const send = (id: string, text?: string, value?: number): void => this.cb.onAction?.(item.id, id, text, value)
+    const send = (id: string, text?: string, value?: number | string): void => this.cb.onAction?.(item.id, id, text, value)
     const plain: HTMLButtonElement[] = []
+    // The strategy picker: radio buttons above the buttons; its pick goes with its button, whose label follows it.
+    const picker = v.picker
+    let picked = picker?.selected ?? ''
+    let ticked = picker?.option?.checked ?? false
+    let pickerButton: HTMLButtonElement | null = null
+    if (picker) {
+      const group = el('fieldset', 'card-picker')
+      group.append(el('legend', undefined, 'Strategy'))
+      const note = el('p', 'card-picker-note')
+      const option = el('label', 'card-picker-option')
+      const box = el('input')
+      box.type = 'checkbox'
+      box.id = `${item.id}-option`
+      box.checked = ticked
+      box.onchange = () => { ticked = box.checked }
+      if (picker.option) option.append(box, el('span', undefined, picker.option.label))
+      const paint = (): void => {
+        const c = picker.choices.find((x) => x.value === picked)
+        note.textContent = c ? [c.note, c.misfit ? `Needs a re-plan: ${c.misfit}` : ''].filter(Boolean).join(' ') : ''
+        option.hidden = !picker.option || picker.option.for !== picked
+        if (pickerButton) pickerButton.textContent = pickerLabel(picker, picked)
+      }
+      for (const c of picker.choices) {
+        const row = el('label', 'card-picker-choice')
+        const radio = el('input')
+        radio.type = 'radio'
+        radio.name = `${item.id}-strategy`
+        radio.id = `${item.id}-strategy-${c.value}`
+        radio.value = c.value
+        radio.checked = c.value === picked
+        radio.onchange = () => { picked = c.value; paint() }
+        row.append(radio, el('span', undefined, c.label))
+        group.append(row)
+      }
+      group.append(note, option)
+      main.append(group)
+      queueMicrotask(paint)
+    }
     for (const b of v.buttons) {
-      const btn = button(b.label, b.primary ? 'primary' : '', () => {
+      const btn = button(picker && b.id === picker.action ? pickerLabel(picker, picked) : b.label, b.primary ? 'primary' : '', () => {
+        if (picker && b.id === picker.action) return send(b.id, undefined, pickerValue(picker, picked, ticked))
         if (b.input === 'none') return send(b.id)
         ask.hidden = false
         if (b.input === 'text') {
@@ -538,6 +577,7 @@ export class InboxPanel {
           range.focus()
         }
       })
+      if (picker && b.id === picker.action) pickerButton = btn
       if (b.input === 'none') plain.push(btn)
       actions.append(btn)
     }

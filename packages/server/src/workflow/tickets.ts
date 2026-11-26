@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
-import type { Finding, StackPr, Ticket, TicketPhase, TicketRepo } from '@tring/shared/workflow'
+import { strategyPhrase, type Finding, type StackPr, type Ticket, type TicketPhase, type TicketRepo } from '@tring/shared/workflow'
 import { writeAtomic } from '../card-store.ts'
+import { adviceLines } from './engine.ts'
 
 /**
  * The multi-PR workflow's tickets: `~/.config/tring/tickets.json`, and each
@@ -54,7 +55,7 @@ export class TicketStore {
       return // first run, or a file that is not ours: no tickets
     }
     if (parsed?.version !== 1 || !Array.isArray(parsed.tickets)) return
-    for (const t of parsed.tickets) if (validTicket(t)) this.tickets.set(t.id, t)
+    for (const t of parsed.tickets) if (validTicket(t)) this.tickets.set(t.id, upgrade(t))
     if (typeof parsed.nextLocal === 'number' && Number.isInteger(parsed.nextLocal) && parsed.nextLocal > 0) {
       this.nextLocal = parsed.nextLocal
     }
@@ -86,10 +87,15 @@ export class TicketStore {
       maxAgents: spec.maxAgents,
       log: [],
       createdAt: this.now(),
-      laneChecks: {},
       amendments: [],
       baseMoved: {},
       planErrors: [],
+      strategy: null,
+      combinedPr: false,
+      integrationCheck: true,
+      integration: {},
+      combined: {},
+      followUps: [],
     }
     this.tickets.set(t.id, t)
     await this.save(t)
@@ -162,13 +168,21 @@ function renderParent(t: Ticket): string {
     '',
     t.text,
   ]
-  if (t.plan) lines.push('', `## Plan (version ${t.plan.version})`, '', t.plan.summary)
+  if (t.plan) {
+    lines.push('', `## Plan (version ${t.plan.version})`, '', t.plan.summary)
+    if (t.strategy) lines.push('', `Landing as: ${strategyPhrase(t.strategy)} (the user's choice)`)
+    lines.push(...adviceLines(t.plan.advice))
+  }
   if (t.prs.length) {
     lines.push('', '## Local tickets', '')
     for (const pr of t.prs) {
       const p = t.plan?.prs.find((x) => x.index === pr.index)
       lines.push(`- ${localKeyOf(t, pr.index)} ${p?.title ?? ''} — ${pr.status} (${p?.repo ?? '?'}, ${pr.branch})`)
     }
+  }
+  if (t.followUps.length) {
+    lines.push('', '## Follow-ups', '', 'Found in review, already on the base; nothing held for them.', '',
+      ...t.followUps.map((f) => `- ${localKeyOf(t, f.pr)}: ${f.summary}`))
   }
   const log = t.log.filter((e) => e.pr === null)
   if (log.length) lines.push('', '## Work log', '', ...log.map(logLine))
@@ -233,6 +247,24 @@ function findingLine(f: Finding): string {
 
 function logLine(e: Ticket['log'][number]): string {
   return `- ${new Date(e.at).toISOString().slice(0, 16).replace('T', ' ')} ${e.who}: ${e.text}`
+}
+
+/**
+ * A ticket saved before strategies existed: built as a stack, so once its plan
+ * was approved it is a stacked one.
+ */
+function upgrade(t: Ticket): Ticket {
+  const approved = t.prs.length > 0 || ['building', 'integrating', 'done'].includes(t.phase)
+  t.strategy ??= approved ? 'stacked' : null
+  t.combinedPr ??= false
+  // Before the integration check, lanes were checked whole; the check stands in for that.
+  t.integrationCheck ??= true
+  delete (t as { laneChecks?: unknown }).laneChecks
+  for (const p of t.prs) if ((p.work as string) === 'checking-lane') p.work = 'idle'
+  t.integration ??= {}
+  t.combined ??= {}
+  t.followUps ??= []
+  return t
 }
 
 function validTicket(v: unknown): v is Ticket {

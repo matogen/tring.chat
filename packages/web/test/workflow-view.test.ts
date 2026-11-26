@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { DEFAULT_WORKFLOW } from '@tring/shared/workflow'
-import { workflowControls } from '../src/workflow-view.ts'
+import { pickerLabel, pickerValue, workflowControls } from '../src/workflow-view.ts'
 
 const on = { ...DEFAULT_WORKFLOW, multiPr: true }
 
@@ -14,16 +14,28 @@ describe('Settings → Workflow', () => {
   it('shows its options once it is on, the later ones greyed', () => {
     const controls = workflowControls(on)
     expect(controls.map((c) => c.key)).toEqual([
-      'multiPr', 'requireFreshReview', 'autoRestack', 'maxAgents', 'maxPrLines', 'testFirst', 'integrationCheck',
+      'multiPr', 'defaultStrategy', 'combinedPr', 'requireFreshReview', 'autoRestack', 'maxAgents', 'integrationCheck',
+      'models', 'models', 'models', 'models', 'maxPrLines', 'testFirst',
     ])
     const later = controls.filter((c) => c.later).map((c) => c.key)
-    expect(later).toEqual(['maxPrLines', 'testFirst', 'integrationCheck'])
+    expect(later).toEqual(['maxPrLines', 'testFirst'])
     for (const c of controls) expect(c.disabled).toBe(c.later)
   })
 
   it('offers the agents slider from 4 to 16 at its current value', () => {
     const slider = workflowControls({ ...on, maxAgents: 9 }).find((c) => c.key === 'maxAgents')!
     expect(slider).toMatchObject({ kind: 'slider', min: 4, max: 16, value: 9 })
+  })
+
+  it('offers a model and an effort for each agent role, the Claude Code default first', () => {
+    const models = workflowControls({ ...on, models: { ...on.models, reviewer: { model: 'opus', effort: 'xhigh' } } })
+      .filter((c) => c.key === 'models')
+    expect(models.map((c) => [c.role, c.label])).toEqual([
+      ['planner', 'Planner'], ['coder', 'Coders'], ['reviewer', 'Reviewers'], ['integrator', 'Integration checks'],
+    ])
+    expect(models[2]).toMatchObject({ kind: 'model', value: { model: 'opus', effort: 'xhigh' } })
+    expect(models[0]!.options!.map((o) => o.value)).toEqual(['', 'fable', 'opus', 'sonnet', 'haiku'])
+    expect(models[0]!.efforts!.map((o) => o.value)).toEqual(['', 'low', 'medium', 'high', 'xhigh', 'max'])
   })
 
   it('offers restacking as a choice between offering and doing it', () => {
@@ -37,6 +49,44 @@ import type { InboxItem } from '@tring/shared/protocol'
 import { cardSignature, orderCards, workflowCard } from '../src/workflow-view.ts'
 
 const item = (over: Partial<InboxItem>): InboxItem => ({ id: 'x', sessionId: '', kind: 'workflow', createdAt: 0, ...over })
+
+describe('the plan card\'s strategy picker', () => {
+  const plan = {
+    id: 't1:plan:v1', sessionId: '', kind: 'workflow' as const, createdAt: 0, ticketId: 't1', title: 'Plan', message: 'x',
+    actions: [
+      {
+        id: 'approve', label: 'Approve plan', primary: true, selected: 'stacked',
+        choices: [
+          { value: 'independent', label: 'Independent PRs', note: 'needs a re-plan', misfit: 'PR 2 sits on PR 1.' },
+          { value: 'stacked', label: 'Stacked PRs', recommended: true, note: 'two PRs', misfit: null },
+          { value: 'single', label: 'Single PR', note: 'one PR', misfit: null },
+        ],
+        option: { id: 'combined', label: 'Final combined PR', for: 'independent', checked: false },
+      },
+      { id: 'revise', label: 'Change…', needsText: true },
+    ],
+  }
+
+  it('shows the picker above the buttons, the recommendation marked, the pre-selected one picked', () => {
+    const v = workflowCard(plan)
+    expect(v.picker).toMatchObject({ action: 'approve', selected: 'stacked' })
+    expect(v.picker!.choices.map((c) => c.label)).toEqual(['Independent PRs (re-plans)', 'Stacked PRs ★ recommended', 'Single PR'])
+    expect(v.buttons.map((b) => b.id)).toEqual(['approve', 'revise'])
+  })
+
+  it('says Approve plan, or Re-plan as … for a pick the plan does not fit', () => {
+    const p = workflowCard(plan).picker!
+    expect(pickerLabel(p, 'stacked')).toBe('Approve plan')
+    expect(pickerLabel(p, 'independent')).toBe('Re-plan as independent PRs')
+  })
+
+  it('sends the pick, with the final PR only for independent PRs', () => {
+    const p = workflowCard(plan).picker!
+    expect(pickerValue(p, 'stacked', true)).toBe('stacked')
+    expect(pickerValue(p, 'independent', false)).toBe('independent')
+    expect(pickerValue(p, 'independent', true)).toBe('independent:combined')
+  })
+})
 
 describe('workflow cards', () => {
   it('puts each ticket\'s feature card first, and leaves every other card where it was', () => {
@@ -59,7 +109,7 @@ describe('workflow cards', () => {
       ],
     }))
     expect(v).toEqual({
-      pinned: false, heading: 'Plan for CHV-9: 3 PR(s)', body: '**CHV-9-1** table',
+      pinned: false, heading: 'Plan for CHV-9: 3 PR(s)', body: '**CHV-9-1** table', picker: null,
       buttons: [
         { id: 'approve', label: 'Approve', primary: true, input: 'none' },
         { id: 'revise', label: 'Change…', primary: false, input: 'text' },
@@ -78,15 +128,19 @@ describe('workflow cards', () => {
 })
 
 import type { TicketView } from '@tring/shared/workflow'
-import { railRows, tabBadges } from '../src/workflow-view.ts'
+import { tabBadges, workRows, workTitle } from '../src/workflow-view.ts'
 
 const pr = (over: Partial<TicketView['repos'][number]['prs'][number]> & { index: number }): TicketView['repos'][number]['prs'][number] => ({
   key: `CHV-9-${over.index}`, title: `PR ${over.index}`, status: 'planned', on: 'develop', branch: 'b', prUrl: null, work: 'idle',
   reviewing: false, queued: false, needsRestack: false, blocked: null, paused: false, slot: null, ...over,
 })
-const view = (prs: TicketView['repos'][number]['prs']): TicketView => ({
-  id: 't1', localKey: 'CHV-9', title: 'Orders', projectId: 'p1', phase: 'building', done: 1, total: 3,
-  repos: [{ id: 'api', baseBranch: 'develop', prs }, { id: 'web', baseBranch: 'develop', prs: [] }],
+const view = (prs: TicketView['repos'][number]['prs'], over: Partial<TicketView> = {}, repo: Partial<TicketView['repos'][number]> = {}): TicketView => ({
+  id: 't1', localKey: 'CHV-9', title: 'Orders', projectId: 'p1', phase: 'building', done: 1, total: 3, strategy: 'stacked',
+  repos: [
+    { id: 'api', baseBranch: 'develop', prs, integration: null, combined: null, ...repo },
+    { id: 'web', baseBranch: 'develop', prs: [], integration: null, combined: null },
+  ],
+  ...over,
 })
 
 describe('the stack rail and tab badge', () => {
@@ -96,7 +150,7 @@ describe('the stack rail and tab badge', () => {
   })
 
   it('draws a row per repo with PRs, bottom up, each with its status and what holds it', () => {
-    const rows = railRows(view([
+    const rows = workRows(view([
       pr({ index: 1, status: 'review-clean', slot: 2 }),
       pr({ index: 2, status: 'coding', on: 'CHV-9-1', work: 'coding', needsRestack: true, slot: 3 }),
       pr({ index: 3, status: 'planned', on: 'CHV-9-2', queued: true }),
@@ -111,5 +165,38 @@ describe('the stack rail and tab badge', () => {
       ['CHV-9-4', 'being reviewed', ['stuck: conflict in a.ts'], null],
     ])
     expect(rows[0]!.chips[1]!.on).toBe('CHV-9-1')
+  })
+
+  it('joins a stack\'s units bottom up, and leaves independent ones side by side on the base', () => {
+    const stacked = workRows(view([pr({ index: 1 }), pr({ index: 2, on: 'CHV-9-1' }), pr({ index: 3 })]))[0]!
+    expect(stacked.shape).toBe('stack')
+    expect(stacked.chips.map((c) => c.joined)).toEqual([false, true, false])
+    const side = workRows(view([pr({ index: 1 }), pr({ index: 2 })], { strategy: 'independent' }))[0]!
+    expect(side.shape).toBe('side')
+    expect(side.chips.map((c) => c.joined)).toEqual([false, false])
+  })
+
+  it('draws a single PR as one chip of commits, each a unit, with its branch', () => {
+    const row = workRows(view([pr({ index: 1, status: 'review-clean' }), pr({ index: 2, on: 'CHV-9-1', status: 'coding' })], { strategy: 'single' }, {
+      combined: { branch: 'feature/CHV-9-orders', status: 'local', prUrl: null, commits: [{ unit: 1, verified: true }, { unit: 2, verified: false }] },
+    }))[0]!
+    expect(row.shape).toBe('single')
+    expect(row.combined).toEqual({ branch: 'feature/CHV-9-orders', label: 'not pushed yet', prUrl: null })
+    expect(row.chips.map((c) => [c.key, c.verified])).toEqual([['CHV-9-1', true], ['CHV-9-2', false]])
+  })
+
+  it('ends each row with its integration check, and a final PR when there is one', () => {
+    const row = workRows(view([pr({ index: 1 })], { strategy: 'independent' }, {
+      integration: { status: 'failing', sha: 'abc' },
+      combined: { branch: 'feature/CHV-9-orders', status: 'pushed', prUrl: 'https://x/pr/9', commits: [] },
+    }))[0]!
+    expect(row.integration).toEqual({ state: 'failing', label: 'fails together' })
+    expect(row.combined).toEqual({ branch: 'feature/CHV-9-orders', label: 'final PR open', prUrl: 'https://x/pr/9' })
+    expect(workRows(view([pr({ index: 1 })]))[0]!.integration).toBeNull()
+  })
+
+  it('titles the work view with the ticket, its strategy and its phase', () => {
+    expect(workTitle(view([], { strategy: 'single', phase: 'awaiting-approval' }))).toBe('CHV-9 · single PR · awaiting approval')
+    expect(workTitle(view([], { strategy: null, phase: 'planning' }))).toBe('CHV-9 · planning')
   })
 })

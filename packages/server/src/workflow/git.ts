@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { defaultWorktreePath, realGit, type GitOps } from '../git-worktrees.ts'
@@ -30,6 +30,9 @@ async function git(cwd: string, args: string[], opts: { timeout?: number; plain?
 }
 
 const lastLines = (s: string): string => s.trim().split(/\r?\n/).slice(-3).join(' ')
+
+/** Who tring's own commits are by: integration merges, which no one pushes. */
+const TRING_IDENTITY = { GIT_AUTHOR_NAME: 'tring', GIT_AUTHOR_EMAIL: 'tring@localhost', GIT_COMMITTER_NAME: 'tring', GIT_COMMITTER_EMAIL: 'tring@localhost' }
 
 export interface WorktreeMade {
   path: string
@@ -105,14 +108,29 @@ export class StackGit {
   }
 
   /**
-   * Whether a rebase changed the PR's own change, by `git range-diff` of its
-   * commits before and after: a review survives a restack that did not.
+   * Whether a rebase changed the unit's own change. A verdict covers a patch:
+   * the review survives when the whole change has the same `git patch-id`
+   * before and after, however its commits were rebased or squashed.
    */
   async diffChanged(worktree: string, before: { base: string; head: string }, after: { base: string; head: string }): Promise<boolean> {
-    const r = await git(worktree, ['range-diff', '--no-color', `${before.base}..${before.head}`, `${after.base}..${after.head}`])
-    if (!r.ok) return true // cannot tell: the review does not hold
-    const marks = r.out.split(/\r?\n/).map((l) => /^\s*(?:\d+|-):\s+\S+\s+([=!<>])\s/.exec(l)?.[1]).filter(Boolean)
-    return marks.some((m) => m !== '=')
+    const [a, b] = await Promise.all([this.patchId(worktree, before.base, before.head), this.patchId(worktree, after.base, after.head)])
+    return a === null || b === null || a !== b // cannot tell: the review does not hold
+  }
+
+  /** `git diff base head | git patch-id --stable`: the id of a change, whatever commits carry it. Null for no change. */
+  async patchId(worktree: string, base: string, head: string): Promise<string | null> {
+    if (base.startsWith('-') || head.startsWith('-')) return null
+    const diff = await git(worktree, ['diff', '--no-color', '--no-ext-diff', '--full-index', base, head], { timeout: 60_000 })
+    if (!diff.ok || !diff.out.trim()) return null
+    const id = await new Promise<string | null>((resolve) => {
+      const p = spawn('git', ['patch-id', '--stable'], { cwd: worktree, stdio: ['pipe', 'pipe', 'ignore'] })
+      let out = ''
+      p.stdout.on('data', (d: Buffer) => { out += d.toString() })
+      p.on('error', () => resolve(null))
+      p.on('close', (code) => resolve(code === 0 ? out.trim().split(/\s+/)[0] ?? null : null))
+      p.stdin.end(diff.out)
+    })
+    return id && /^[0-9a-f]{40,64}$/.test(id) ? id : null
   }
 
   /**
@@ -138,6 +156,24 @@ export class StackGit {
     return false
   }
 
+  /**
+   * Creates `branch` on origin at what `from` is here (a final PR's feature
+   * branch, made from origin's base): the one push tring makes itself, on the
+   * user's Push. Never prompts. Git's words, or null.
+   */
+  async pushBranch(repo: string, from: string, branch: string, expect?: string | null): Promise<string | null> {
+    const ok = await git(repo, ['check-ref-format', '--branch', branch])
+    if (!ok.ok || branch.startsWith('-')) return `${branch} is not a valid branch name`
+    const sha = await git(repo, ['rev-parse', '--verify', '--quiet', `${from}^{commit}`])
+    if (!sha.ok || from.startsWith('-')) return `${from} does not exist in ${repo}`
+    // Replacing what tring pushed before (a single PR, assembled again): only if it is still that.
+    const lease = expect ? [`--force-with-lease=refs/heads/${branch}:${expect}`] : []
+    const r = await git(repo, ['push', '--quiet', ...lease, 'origin', `${sha.out.trim()}:refs/heads/${branch}`], {
+      plain: true, timeout: 60_000, env: { GIT_TERMINAL_PROMPT: '0' },
+    })
+    return r.ok ? null : lastLines(r.err) || 'git push failed'
+  }
+
   /** origin's URL, as git has it; null when there is no origin. */
   async originUrl(repo: string): Promise<string | null> {
     const r = await git(repo, ['remote', 'get-url', 'origin'])
@@ -159,6 +195,103 @@ export class StackGit {
     await git(repo, ['branch', '--quiet', `--set-upstream-to=origin/${base}`, branch])
     const r = await git(repo, ['branch', '-d', branch])
     return r.ok ? null : lastLines(r.err) || 'git branch -d failed'
+  }
+
+  /**
+   * The integration check's merge: `origin/<base>` (or the local base, without
+   * a remote) with every tip merged in, in order, as plain objects
+   * (merge-tree, commit-tree), so no branch moves. On a clean merge the
+   * result is checked out, detached, in a worktree kept for the purpose
+   * (`name`), reused on the next run. On a conflict, the units whose changes
+   * meet in the conflicting files, and nothing is checked out.
+   */
+  async integrate(repo: string, spec: { base: string; tips: Array<{ unit: number; branch: string }>; name: string }):
+    Promise<{ sha: string; base: string; worktree: string } | { conflict: { units: number[]; files: string[] } }> {
+    const base = await this.baseCommit(repo, spec.base)
+    const touched = new Map<number, string[]>()
+    const env = TRING_IDENTITY
+    let at = base
+    for (const tip of spec.tips) {
+      if (tip.branch.startsWith('-')) throw new Error(`"${tip.branch}" is not a branch`)
+      const diff = await git(repo, ['diff', '--name-only', `${base}...${tip.branch}`])
+      touched.set(tip.unit, diff.out.split(/\r?\n/).filter(Boolean))
+      const m = await git(repo, ['merge-tree', '--write-tree', '--name-only', '--no-messages', at, tip.branch])
+      if (!m.ok && m.code === 1) {
+        const files = [...new Set(m.out.split(/\r?\n/).slice(1).filter(Boolean))].sort()
+        const units = spec.tips.filter((x) => x.unit === tip.unit || (touched.get(x.unit) ?? []).some((f) => files.includes(f)))
+          .map((x) => x.unit)
+        return { conflict: { units: [...new Set(units)].sort((a, b) => a - b), files } }
+      }
+      if (!m.ok) throw new Error(`git merge-tree failed: ${lastLines(m.err)}`)
+      const tree = m.out.split(/\r?\n/)[0]!.trim()
+      const c = await git(repo, ['commit-tree', tree, '-p', at, '-p', tip.branch, '-m', `tring: integration check, unit ${tip.unit}`], { env })
+      if (!c.ok) throw new Error(`git commit-tree failed: ${lastLines(c.err)}`)
+      at = c.out.trim()
+    }
+    return { sha: at, base, worktree: await this.checkoutDetached(repo, spec.name, at) }
+  }
+
+  /**
+   * A single PR's branch, as objects: on the base, one commit per unit in
+   * order, each made of that unit's own change (`from`..`head`, applied with
+   * a three-way merge on `from`) and titled with `message`. A commit whose
+   * tree is the unit's own head tree is exactly what was reviewed and tested
+   * (verified). Checked out, detached, in the integration worktree. On a
+   * clash, the units whose changes meet there.
+   */
+  async assemble(repo: string, spec: { base: string; name: string; units: Array<{ unit: number; from: string; head: string; message: string }> }):
+    Promise<{ sha: string; base: string; worktree: string; commits: Array<{ unit: number; sha: string; verified: boolean }> } | { conflict: { units: number[]; files: string[] } }> {
+    const base = await this.baseCommit(repo, spec.base)
+    const touched = new Map<number, string[]>()
+    const commits: Array<{ unit: number; sha: string; verified: boolean }> = []
+    let at = base
+    for (const u of spec.units) {
+      if ([u.from, u.head].some((x) => x.startsWith('-')) || !u.head) throw new Error(`"${u.head}" is not a commit`)
+      // A unit whose base tring did not record (rebased onto the base): its change starts where it meets the base.
+      const from = u.from || (await git(repo, ['merge-base', base, u.head])).out.trim()
+      if (!from) throw new Error(`${u.head} shares no history with ${spec.base}`)
+      const diff = await git(repo, ['diff', '--name-only', from, u.head])
+      touched.set(u.unit, diff.out.split(/\r?\n/).filter(Boolean))
+      const m = await git(repo, ['merge-tree', '--write-tree', '--name-only', '--no-messages', `--merge-base=${from}`, at, u.head])
+      if (!m.ok && m.code === 1) {
+        const files = [...new Set(m.out.split(/\r?\n/).slice(1).filter(Boolean))].sort()
+        const units = spec.units.filter((x) => x.unit === u.unit || (touched.get(x.unit) ?? []).some((f) => files.includes(f))).map((x) => x.unit)
+        return { conflict: { units: [...new Set(units)].sort((a, b) => a - b), files } }
+      }
+      if (!m.ok) throw new Error(`git merge-tree failed: ${lastLines(m.err)}`)
+      const tree = m.out.split(/\r?\n/)[0]!.trim()
+      // The user's own identity, as for any commit of theirs; tring's only when git has none.
+      let c = await git(repo, ['commit-tree', tree, '-p', at, '-m', u.message])
+      if (!c.ok) c = await git(repo, ['commit-tree', tree, '-p', at, '-m', u.message], { env: TRING_IDENTITY })
+      if (!c.ok) throw new Error(`git commit-tree failed: ${lastLines(c.err)}`)
+      const own = await git(repo, ['rev-parse', `${u.head}^{tree}`])
+      at = c.out.trim()
+      commits.push({ unit: u.unit, sha: at, verified: own.ok && own.out.trim() === tree })
+    }
+    return { sha: at, base, worktree: await this.checkoutDetached(repo, spec.name, at), commits }
+  }
+
+  /** origin's `base` (or the local one, without a remote), as a commit. */
+  private async baseCommit(repo: string, name: string): Promise<string> {
+    for (const ref of [`refs/remotes/origin/${name}`, `refs/heads/${name}`]) {
+      const r = await git(repo, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])
+      if (r.ok) return r.out.trim()
+    }
+    throw new Error(`${name} does not exist in ${repo}`)
+  }
+
+  /** `sha` checked out, detached, in the worktree called `name`, made beside the others on first use. */
+  private async checkoutDetached(repo: string, name: string, sha: string): Promise<string> {
+    const place = await this.ops.place(repo)
+    if (!place) throw new Error(`${repo} is not a git repository`)
+    const trees = await this.ops.worktrees(repo)
+    const there = trees.find((w) => path.basename(w.path) === name && !w.prunable)
+    const dir = path.resolve(there ? there.path : defaultWorktreePath(place.commonDir, trees, name))
+    const r = there
+      ? await git(dir, ['checkout', '--quiet', '--detach', sha], { plain: true, timeout: 60_000 })
+      : await git(repo, ['worktree', 'add', '--quiet', '--detach', dir, sha], { plain: true, timeout: 60_000 })
+    if (!r.ok) throw new Error(`could not check out ${sha.slice(0, 8)}: ${lastLines(r.err)}`)
+    return dir
   }
 
   /** Whether `branch` would conflict with `onto` (merge-tree, nothing written to any worktree). */

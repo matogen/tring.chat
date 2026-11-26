@@ -1,6 +1,8 @@
 # Multi-PR workflow: one ticket, one tab, a stack of small reviewed PRs
 
-Status: **built 2026-11-25** on `feat/multi-pr-workflow` (commits 0–8 below; decisions Q1–Q20 at the end). Not pushed.
+Status: **built 2026-11-25** on `feat/multi-pr-workflow` (commits 0–8 below; decisions Q1–Q20 at the end). Pushed
+2026-11-25. Extended by `2026-11-25-adaptive-strategies-design.md` (independent PRs, single PR, the integration
+check that replaces the lane check, the plan card's strategy picker).
 
 ## Context
 
@@ -424,8 +426,8 @@ ticket tab like any project.
   unticked, and -d refuses it.
 - **Restarts**: tiles keep their flags through `Session.claudeArgs`; tile tokens and places are in
   `stack-tiles/tiles.json`; tickets in `tickets.json`.
-- **Not yet**: `maxPrLines`, `testFirst`, `integrationCheck` (shown
-  greyed in Settings), a global agents cap (dropped in Q19).
+- **Not yet**: `maxPrLines`, `testFirst` (shown greyed in Settings), a global agents cap (dropped in Q19).
+  `integrationCheck` was built in the adaptive-strategies change.
 
 ## 7. Building this feature
 

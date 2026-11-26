@@ -10,6 +10,7 @@ import type { StackGit } from '../src/workflow/git.ts'
 import { WorkflowRunner, type RunnerSession } from '../src/workflow/runner.ts'
 import { TicketStore } from '../src/workflow/tickets.ts'
 import { cardsFor } from '../src/workflow/engine.ts'
+import { advice } from './workflow-advice.ts'
 
 const ROOT = path.resolve('/src/api')
 
@@ -66,6 +67,7 @@ function fakeGit(over: Partial<Record<keyof StackGit, unknown>> = {}): StackGit 
     conflicts: async () => false,
     isMerged: async () => true,
     originUrl: async () => 'git@bitbucket.org:matogen/api.git',
+    integrate: async () => ({ sha: 'm1', base: 'b0', worktree: path.resolve('/wt/integration') }),
     removeWorktree: async () => null,
     deleteBranch: async () => null,
     ...over,
@@ -78,7 +80,7 @@ const planned = (over: Partial<PlannedPr> & Pick<PlannedPr, 'index'>): PlannedPr
 })
 
 const plan: Plan = {
-  version: 1, summary: 'two PRs', shared: [], deployOrder: null, addRepos: [], docs: { none: 'internal' },
+  version: 1, summary: 'two PRs', shared: [], deployOrder: null, addRepos: [], docs: { none: 'internal' }, advice: advice(),
   interfaces: [{ name: 'Table', owner: 1, contract: 'orders(id)' }],
   prs: [
     planned({ index: 1, title: 'Table', owns: ['db/**'] }),
@@ -106,11 +108,17 @@ async function rig(git = fakeGit(), forge?: Partial<Pick<Forge, 'pr' | 'open' | 
     tile: (name: string) => pm.projects.flatMap((p) => p.sessions).find((s) => s.name === name),
     /** Two pumps 2 s apart: an idle agent gets what is queued for it. */
     async flush() { await runner.pump(); now += 2000; await runner.pump() },
+    /** A tile's tools, called with its own token (read from the file its MCP config names, once it is there). */
     as(name: string) {
-      const s = r.tile(name)!
-      const who = runner.authorize(tokenOf(s))
-      if (!who) throw new Error(`no token for ${name}`)
-      return (tool: string, args: Record<string, unknown> = {}) => runner.call(who, tool, args)
+      return async (tool: string, args: Record<string, unknown> = {}) => {
+        const s = r.tile(name)
+        if (!s) throw new Error(`no tile ${name}`)
+        const end = Date.now() + 5000
+        while (!tokens.has(s.id) && Date.now() < end) await new Promise((res) => setTimeout(res, 10))
+        const who = runner.authorize(tokenOf(s))
+        if (!who) throw new Error(`no token for ${name}`)
+        return runner.call(who, tool, args)
+      }
     },
     ticket: () => store.list()[0]!,
   }
@@ -159,6 +167,20 @@ describe('WorkflowRunner: start_ticket', () => {
     await r.flush()
     expect(planner.typed[0]).toMatch(/You are the planner for ticket CHV-9/)
     expect(planner.typed[0]).toContain('show orders')
+    expect(planner.typed[0]).toMatch(/Independent PRs.*Stacked PRs.*Single PR/s)
+    expect(planner.typed[0]).toMatch(/The user's default is Auto: recommend what fits best/)
+  })
+
+  it('starts each role on the model and effort Settings give it, and on the Claude Code default otherwise', async () => {
+    const r = await rig()
+    r.settings.models = { ...r.settings.models, planner: { model: 'opus', effort: 'xhigh' }, coder: { model: 'sonnet', effort: null } }
+    await r.runner.startTicket({ key: 'CHV-9', title: 'Orders', text: 'x', source: 'goby', repos: [{ path: ROOT }] })
+    await new Promise((res) => setTimeout(res, 50))
+    expect(r.tile('CHV-9 planner')!.command).toMatch(/^claude --permission-mode auto --model opus --effort xhigh --settings /)
+    await r.as('CHV-9 planner')('submit_plan', { plan })
+    await r.runner.ticketAction({ ticket: 'CHV-9', action: 'approve' })
+    expect(r.tile('CHV-9-1')!.command).toMatch(/^claude --permission-mode auto --model sonnet --settings /)
+    expect(r.tile('CHV-9-1')!.command).not.toContain('--effort')
   })
 
   it('refuses a path that is not a repository, and a ticket that already has a tab', async () => {
@@ -410,10 +432,180 @@ describe('WorkflowRunner: after the push', () => {
   it('describes each ticket for its tab badge and stack rail', async () => {
     const r = await approved()
     const [v] = r.runner.ticketViews()
-    expect(v).toMatchObject({ localKey: 'CHV-9', projectId: 'p1', phase: 'building', done: 0, total: 2 })
+    expect(v).toMatchObject({ localKey: 'CHV-9', projectId: 'p1', phase: 'building', done: 0, total: 2, strategy: 'stacked' })
+    expect(v!.repos[0]).toMatchObject({ integration: null, combined: null })
     expect(v!.repos[0]!.prs.map((p) => [p.key, p.on, p.status, p.queued])).toEqual([
       ['CHV-9-1', 'develop', 'coding', false],
       ['CHV-9-2', 'CHV-9-1', 'planned', true],
     ])
+  })
+})
+
+describe('WorkflowRunner: the integration check', () => {
+  /** One unit, review-clean at a1: the next step is the api repo's integration check. */
+  async function clean(git = fakeGit()) {
+    const r = await rig(git)
+    await r.runner.startTicket({ key: 'CHV-9', title: 'Orders', text: 'x', source: 'goby', repos: [{ path: ROOT }] })
+    await new Promise((res) => setTimeout(res, 50))
+    await r.as('CHV-9 planner')('submit_plan', { plan: { ...plan, prs: [plan.prs[0]], interfaces: [] } })
+    await r.runner.ticketAction({ ticket: 'CHV-9', action: 'approve' })
+    await r.store.update(r.ticket().id, (t) => Object.assign(t.prs[0]!, { status: 'review-clean', work: 'idle', headSha: 'a1' }))
+    await r.runner.run(r.ticket().id, { type: 'tick' })
+    await new Promise((res) => setTimeout(res, 50))
+    return r
+  }
+
+  it('merges the units onto the base and opens a read-only integrator tile on the result', async () => {
+    const asked: unknown[] = []
+    const r = await clean(fakeGit({ integrate: async (...a: unknown[]) => { asked.push(a); return { sha: 'm1', base: 'b0', worktree: path.resolve('/wt/integration') } } }))
+    expect(asked).toEqual([[ROOT, { base: 'develop', tips: [{ unit: 1, branch: 'a1' }], name: 'tring-CHV-9-api-integration' }]])
+    const tile = r.tile('CHV-9 api integration')!
+    expect(tile.cwd).toBe(path.resolve('/wt/integration'))
+    const settings = JSON.parse(await readFile(/--settings "([^"]+)"/.exec(tile.command)![1]!, 'utf8'))
+    expect(settings.permissions).toEqual({ allow: ['Bash(npm test)'], deny: ['Edit', 'Write', 'NotebookEdit'] })
+    await r.flush()
+    expect(tile.typed[0]).toMatch(/integration check of ticket CHV-9 in api/)
+    expect(tile.typed[0]).toContain('m1')
+    expect(tile.typed[0]).toContain('- npm test')
+    expect(r.runner.gate(tile.id, 'Edit', { file_path: path.resolve('/wt/integration/x.ts') })).toMatchObject({ decision: 'deny' })
+    expect(r.runner.gate(tile.id, 'Bash', { command: 'git push' })).toMatchObject({ decision: 'deny' })
+    expect(r.ticket().integration['api']).toMatchObject({ status: 'running', sha: 'm1', base: 'b0' })
+  })
+
+  it('takes the integrator\'s verdict for that merge only', async () => {
+    const r = await clean()
+    const integrator = r.as('CHV-9 api integration')
+    await expect(integrator('report_integration', { sha: 'old', passed: true, evidence: 'ok' })).rejects.toThrow(/checking m1/)
+    expect(await integrator('report_integration', {
+      sha: 'm1', passed: false, evidence: 'npm test: 2 failed', failures: [{ test: 'orders.e2e', unit: 1 }],
+    })).toMatch(/Recorded/)
+    expect(r.ticket().integration['api']).toMatchObject({ status: 'failing', evidence: expect.stringMatching(/2 failed[\s\S]*orders\.e2e \(CHV-9-1\)/) })
+  })
+
+  it('lets the orchestrator send a failure to a PR, run the check again, or accept it', async () => {
+    const r = await clean()
+    await r.as('CHV-9 api integration')('report_integration', { sha: 'm1', passed: false, evidence: '1 failed' })
+    await expect(r.runner.ticketAction({ ticket: 'CHV-9', action: 'accept', repo: 'api' })).rejects.toThrow(/needs a reason/)
+    expect(await r.runner.ticketAction({ ticket: 'CHV-9', action: 'route', pr: 1 })).toMatch(/Done: route CHV-9-1/)
+    expect(r.ticket().prs[0]!.review!.findings.at(-1)).toMatchObject({ id: '1.i1', resolution: 'fix-requested' })
+  })
+
+  it('offers tring\'s integration worktree to Clean up, and removes it when ticked', async () => {
+    const removed: string[] = []
+    const r = await clean(fakeGit({ removeWorktree: async (_repo: string, wt: string) => { removed.push(wt); return null } }))
+    await r.store.update(r.ticket().id, (t) => { t.phase = 'done' })
+    const items = await r.runner.cleanupPlan(r.ticket().id)
+    expect(items.find((i) => i.id === 'integration:api')).toMatchObject({ safe: true, label: expect.stringContaining(path.resolve('/wt/integration')) })
+    await r.runner.cleanup(r.ticket().id, ['integration:api'])
+    expect(removed).toEqual([path.resolve('/wt/integration')])
+  })
+
+  it('reports a conflict without opening a tile, and a merge it could not make as a failure', async () => {
+    const r = await clean(fakeGit({ integrate: async () => ({ conflict: { units: [1], files: ['package-lock.json'] } }) }))
+    expect(r.ticket().integration['api']).toMatchObject({ status: 'conflict', conflict: { units: [1], files: ['package-lock.json'] } })
+    expect(r.tile('CHV-9 api integration')).toBeUndefined()
+    const broken = await clean(fakeGit({ integrate: async () => { throw new Error('develop does not exist') } }))
+    expect(broken.ticket().integration['api']).toMatchObject({ status: 'failing', evidence: expect.stringMatching(/could not run it: develop does not exist/) })
+  })
+})
+
+describe('WorkflowRunner: independent PRs and a final combined PR', () => {
+  const BB_FINAL = 'https://bitbucket.org/matogen/api/pull-requests/50'
+  async function approvedAs(strategy: string, combined: boolean, git = fakeGit(), forge?: Partial<Pick<Forge, 'pr' | 'open' | 'retarget'>>) {
+    const r = await rig(git, forge)
+    await r.runner.startTicket({ key: 'CHV-9', title: 'Orders', text: 'x', source: 'goby', repos: [{ path: ROOT }] })
+    await new Promise((res) => setTimeout(res, 50))
+    await r.as('CHV-9 planner')('submit_plan', { plan: { ...plan, prs: [plan.prs[0]], interfaces: [], advice: advice('independent') } })
+    await r.runner.ticketAction({ ticket: 'CHV-9', action: 'approve', strategy, combined })
+    await new Promise((res) => setTimeout(res, 50))
+    return r
+  }
+
+  it('approves as the strategy the orchestrator was told, with a final PR named like the repo\'s branches', async () => {
+    const r = await approvedAs('independent', true)
+    expect(r.ticket()).toMatchObject({ strategy: 'independent', combinedPr: true })
+    expect(r.ticket().combined['api']).toMatchObject({ branch: 'feat/CHV-9-orders', base: 'develop', status: 'local', onOrigin: false })
+  })
+
+  it('pushes the feature branch first, then lets the unit push against it', async () => {
+    const pushed: unknown[] = []
+    const r = await approvedAs('independent', true, fakeGit({ pushBranch: async (...a: unknown[]) => { pushed.push(a); return null } }))
+    await r.store.update(r.ticket().id, (t) => {
+      Object.assign(t.prs[0]!, { status: 'review-clean', work: 'idle', headSha: 'a1' })
+      t.integration['api'] = { status: 'passing', base: 'b0', tips: { 1: 'a1' }, sha: 'm1', conflict: null, evidence: 'ok' }
+    })
+    await r.runner.ticketAction({ ticket: 'CHV-9', action: 'push', pr: 1 })
+    expect(pushed).toEqual([[ROOT, 'origin/develop', 'feat/CHV-9-orders']])
+    expect(r.ticket().combined['api']!.onOrigin).toBe(true)
+    await r.flush()
+    expect(r.tile('CHV-9-1')!.typed.join('\n')).toContain('`feat/CHV-9-orders`')
+  })
+
+  it('opens the final PR once every unit is merged into the feature branch, and follows it to done', async () => {
+    const opened: unknown[] = []
+    let state: 'open' | 'merged' = 'open'
+    const r = await approvedAs('independent', true, fakeGit(), {
+      open: async (o) => { opened.push(o); return { url: BB_FINAL } },
+      pr: async (url) => (url === BB_FINAL ? { state, ci: 'green' } : { state: 'merged', ci: 'green' }),
+    })
+    await r.store.update(r.ticket().id, (t) => {
+      Object.assign(t.prs[0]!, { status: 'merged', work: 'idle', headSha: 'a1' })
+      t.combined['api']!.onOrigin = true
+    })
+    expect(await r.runner.ticketAction({ ticket: 'CHV-9', action: 'open-final', repo: 'api' })).toMatch(/Done/)
+    expect(opened).toEqual([expect.objectContaining({ head: 'feat/CHV-9-orders', base: 'develop', title: 'CHV-9 Orders' })])
+    expect(r.ticket().combined['api']).toMatchObject({ status: 'pushed', prUrl: BB_FINAL })
+    await r.runner.readForge(r.ticket())
+    expect(r.ticket().phase).not.toBe('done')
+    state = 'merged'
+    await r.runner.readForge(r.ticket())
+    expect(r.ticket()).toMatchObject({ phase: 'done', combined: { api: { status: 'merged' } } })
+  })
+})
+
+describe('WorkflowRunner: a single PR of agent commits', () => {
+  /** One unit, review-clean at a1, approved as a single PR: the next step is its assembly. */
+  async function clean(git = fakeGit(), forge?: Partial<Pick<Forge, 'pr' | 'open' | 'retarget'>>) {
+    const r = await rig(git, forge)
+    await r.runner.startTicket({ key: 'CHV-9', title: 'Orders', text: 'x', source: 'goby', repos: [{ path: ROOT }] })
+    await new Promise((res) => setTimeout(res, 50))
+    await r.as('CHV-9 planner')('submit_plan', { plan: { ...plan, prs: [plan.prs[0]], interfaces: [] } })
+    await r.runner.ticketAction({ ticket: 'CHV-9', action: 'approve', strategy: 'single' })
+    await r.store.update(r.ticket().id, (t) => Object.assign(t.prs[0]!, { status: 'review-clean', work: 'idle', headSha: 'a1', baseSha: 'b0' }))
+    await r.runner.run(r.ticket().id, { type: 'tick' })
+    await new Promise((res) => setTimeout(res, 50))
+    return r
+  }
+  const assembledGit = (over: Partial<Record<keyof StackGit, unknown>> = {}) => fakeGit({
+    assemble: async () => ({ sha: 's1', base: 'b0', worktree: path.resolve('/wt/integration'), commits: [{ unit: 1, sha: 's1', verified: false }] }),
+    ...over,
+  })
+
+  it('assembles the units into commits and has the integrator check the ones that differ from what was reviewed', async () => {
+    const asked: unknown[] = []
+    const r = await clean(assembledGit({ assemble: async (...a: unknown[]) => { asked.push(a); return { sha: 's1', base: 'b0', worktree: path.resolve('/wt/integration'), commits: [{ unit: 1, sha: 's1', verified: false }] } } }))
+    expect(asked).toEqual([[ROOT, {
+      base: 'develop', name: 'tring-CHV-9-api-integration',
+      units: [{ unit: 1, from: 'b0', head: 'a1', message: 'Table\n\nsmall\n\nCHV-9-1' }],
+    }]])
+    expect(r.ticket().combined['api']!.commits).toEqual([{ unit: 1, sha: 's1', verified: false }])
+    await r.flush()
+    const brief = r.tile('CHV-9 api integration')!.typed[0]!
+    expect(brief).toMatch(/one commit per unit/)
+    expect(brief).toMatch(/s1.*CHV-9-1.*check it out and run its tests/s)
+  })
+
+  it('pushes the assembled branch on the user\'s Push and opens its one PR', async () => {
+    const pushed: unknown[] = []
+    const opened: unknown[] = []
+    const r = await clean(assembledGit({ pushBranch: async (...a: unknown[]) => { pushed.push(a); return null } }), {
+      open: async (o) => { opened.push(o); return { url: 'https://bitbucket.org/matogen/api/pull-requests/7' } },
+    })
+    await r.as('CHV-9 api integration')('report_integration', { sha: 's1', passed: true, evidence: 'all pass' })
+    expect(await r.runner.ticketAction({ ticket: 'CHV-9', action: 'push-single', repo: 'api' })).toMatch(/Done/)
+    expect(pushed).toEqual([[ROOT, 's1', 'feat/CHV-9-orders', null]])
+    expect(opened).toEqual([expect.objectContaining({ head: 'feat/CHV-9-orders', base: 'develop', title: 'CHV-9 Orders' })])
+    expect(r.ticket().combined['api']).toMatchObject({ status: 'pushed', pushedSha: 's1', prUrl: 'https://bitbucket.org/matogen/api/pull-requests/7' })
+    expect(r.ticket().prs[0]).toMatchObject({ status: 'pushed', prUrl: 'https://bitbucket.org/matogen/api/pull-requests/7' })
   })
 })

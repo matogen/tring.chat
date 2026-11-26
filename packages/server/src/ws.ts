@@ -25,7 +25,7 @@ export interface HubOptions {
   agent?: OrchestratorAgent | null
   /** The multi-PR workflow: where its cards' buttons go. Resolves to why nothing happened, or null. */
   workflow?: {
-    act(ticketId: string, cardId: string, action: string, text?: string, value?: number): Promise<string | null>
+    act(ticketId: string, cardId: string, action: string, text?: string, value?: number | string): Promise<string | null>
     ticketViews(): TicketView[]
   } | null
 }
@@ -262,7 +262,9 @@ export class Hub {
         const wf = this.opts.workflow
         if (!item?.ticketId || !wf || typeof msg.actionId !== 'string') break
         const text = typeof msg.text === 'string' ? msg.text : undefined
-        const value = typeof msg.value === 'number' && Number.isFinite(msg.value) ? msg.value : undefined
+        // A number, or a choice's short value (independent, independent:combined…); nothing else.
+        const value = typeof msg.value === 'number' && Number.isFinite(msg.value) ? msg.value
+          : typeof msg.value === 'string' && /^[a-z][a-z:-]{0,40}$/.test(msg.value) ? msg.value : undefined
         void wf.act(item.ticketId, item.id, msg.actionId, text, value).then((notice) => {
           // Pressed on a card that is no longer current: say so here only. The
           // inbox broadcast with the current cards is already on its way.

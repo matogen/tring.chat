@@ -97,6 +97,8 @@ const WORKFLOW_PHRASE: Record<string, string> = {
   blocked: 'An agent is stuck',
   push: 'A PR is ready to push',
   amend: 'An interface change needs your call',
+  integration: 'An integration check failed',
+  conflict: 'Units conflict when merged together',
 }
 
 export class Notifier {
@@ -145,7 +147,7 @@ export class Notifier {
    * card it is and nothing from its content.
    */
   private async fireWorkflow(item: InboxItem): Promise<void> {
-    const kind = /:(plan|finding|review|restack|blocked|push|amend):/.exec(item.id)?.[1] ?? ''
+    const kind = /:(plan|finding|review|restack|blocked|push|amend|integration|conflict):/.exec(item.id)?.[1] ?? ''
     const payload: Payload = {
       title: 'Multi-PR ticket',
       body: WORKFLOW_PHRASE[kind] ?? 'Something is waiting for you',

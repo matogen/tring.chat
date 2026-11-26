@@ -20,7 +20,7 @@ import { Dictation, recognitionFactory } from './dictation.ts'
 import { Voice, type VoiceTarget } from './voice.ts'
 import { voiceSection } from './voice-settings.ts'
 import { workflowSection } from './workflow-settings.ts'
-import { railRows, tabBadges } from './workflow-view.ts'
+import { tabBadges, workRows, workTitle } from './workflow-view.ts'
 import type { TicketView } from '@tring/shared/workflow'
 import { attachTileDrag } from './tile-drag.ts'
 import { attachImagePaste, pasteFromClipboard, type PasteOptions } from './paste.ts'
@@ -399,15 +399,32 @@ function paintStack(): void {
   const t = tickets.find((x) => x.projectId === viewedId)
   stackEl.hidden = !t || viewMode === 'usage'
   if (!t) { stackEl.replaceChildren(); return }
-  const rows = railRows(t).map((r) => {
+  const rows = workRows(t).map((r) => {
     const row = document.createElement('div')
-    row.className = 'stack-row'
+    row.className = `stack-row shape-${r.shape}`
     const head = document.createElement('span')
     head.className = 'stack-repo'
     head.textContent = r.repo
     head.title = `builds on ${r.base}`
     row.append(head)
+    // A single PR: its units' commits inside one outline, with its branch.
+    const into = r.shape === 'single' ? document.createElement('span') : row
+    if (r.shape === 'single') {
+      into.className = 'stack-single'
+      const b = document.createElement('span')
+      b.className = 'stack-single-branch'
+      b.textContent = `${r.combined?.branch ?? 'single PR'} · ${r.combined?.label ?? ''}`
+      into.append(b)
+      row.append(into)
+    }
     for (const c of r.chips) {
+      if (c.joined) {
+        const arrow = document.createElement('span')
+        arrow.className = 'stack-join'
+        arrow.textContent = '←'
+        arrow.setAttribute('aria-hidden', 'true')
+        into.append(arrow)
+      }
       const chip = document.createElement('button')
       chip.type = 'button'
       chip.className = `stack-chip status-${c.status}${c.marks.length ? ' held' : ''}`
@@ -422,15 +439,29 @@ function paintStack(): void {
         m.textContent = c.marks.some((x) => x.startsWith('stuck')) ? '\u26a0' : c.marks.includes('needs restack') ? '\u27f3' : '\u23f8'
         chip.append(m)
       }
+      if (c.verified !== null) chip.classList.add(c.verified ? 'verified' : 'unverified')
       chip.disabled = c.slot === null
       chip.onclick = () => { if (c.slot !== null) focusSlot(c.slot) }
-      row.append(chip)
+      into.append(chip)
+    }
+    if (r.integration) {
+      const i = document.createElement('span')
+      i.className = `stack-integration ${r.integration.state}`
+      i.textContent = r.integration.label
+      row.append(i)
+    }
+    if (r.combined && r.shape !== 'single') {
+      const f = document.createElement('span')
+      f.className = 'stack-final'
+      f.textContent = `${r.combined.branch} · ${r.combined.label}`
+      if (r.combined.prUrl) f.title = r.combined.prUrl
+      row.append(f)
     }
     return row
   })
   const title = document.createElement('span')
   title.className = 'stack-title'
-  title.textContent = `${t.localKey} · ${t.phase.replace('-', ' ')}`
+  title.textContent = workTitle(t)
   stackEl.replaceChildren(title, ...rows)
 }
 

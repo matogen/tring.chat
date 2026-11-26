@@ -280,7 +280,11 @@ build that way), it becomes a ticket of its own:
    user's repository list (in their CLAUDE.md). Ask when unsure; never search
    the disk.
 3. \`start_ticket\` with the key, title, full text, source and repos. tring
-   opens a tab with a planner agent; the user approves the plan on a card.
+   opens a tab with a planner agent; the user approves the plan on a card,
+   choosing how it lands: independent PRs, stacked PRs or a single PR (the
+   planner recommends one). If they tell you instead, \`ticket_action\`
+   "approve" with that \`strategy\` (and \`combined\` for independent PRs
+   through one final PR).
 
 After that the ticket runs itself: tring starts, sequences, reviews and
 restacks its agents. Do not \`send_prompt\` to a ticket's tiles (it is

@@ -6,7 +6,7 @@ import type { ToolDef } from '../orchestrator-tools.ts'
  * from the tile's own token, never from the arguments.
  */
 
-export type Role = 'planner' | 'coder' | 'reviewer'
+export type Role = 'planner' | 'coder' | 'reviewer' | 'integrator'
 
 const COMMON: ToolDef[] = [
   {
@@ -29,7 +29,7 @@ const PLANNER: ToolDef[] = [{
     properties: {
       plan: {
         type: 'object',
-        description: '{ summary, prs: [{ index, repo, below, title, scope, owns, uses, tests: { add, run }, acceptance }], interfaces: [{ name, owner, contract }], shared: [{ repo, path, owner, why }], deployOrder: [repo…] | null, addRepos: [{ path, base, why }], docs: { files: [{ repo, path }] } | { none: "why" } }',
+        description: '{ summary, prs: [{ index, repo, below, title, scope, owns, uses, tests: { add, run }, acceptance }], interfaces: [{ name, owner, contract }], shared: [{ repo, path, owner, why }], deployOrder: [repo…] | null, addRepos: [{ path, base, why }], docs: { files: [{ repo, path }] } | { none: "why" }, advice: { recommended: "independent" | "stacked" | "single", factors: [{ factor: "coupling" | "overlap" | "size" | "repos" | "review" | "shipping", note, favours: strategy | null }], means: { independent, stacked, single } } }',
       },
     },
     required: ['plan'],
@@ -40,11 +40,11 @@ const PLANNER: ToolDef[] = [{
 const CODER: ToolDef[] = [
   {
     name: 'report',
-    description: 'Tell tring where your PR is. interface_ready: the interfaces you provide are committed. tests_passing / restacked / lane_passing: give the commit sha you ran the tests on and their summary lines (tring checks it is HEAD and nothing is uncommitted). tests_failing / lane_failing: what failed.',
+    description: 'Tell tring where your PR is. interface_ready: the interfaces you provide are committed. tests_passing / restacked: give the commit sha you ran the tests on and their summary lines (tring checks it is HEAD and nothing is uncommitted). tests_failing: what failed.',
     inputSchema: {
       type: 'object',
       properties: {
-        kind: { type: 'string', enum: ['interface_ready', 'tests_passing', 'tests_failing', 'restacked', 'lane_passing', 'lane_failing'] },
+        kind: { type: 'string', enum: ['interface_ready', 'tests_passing', 'tests_failing', 'restacked'] },
         sha: { type: 'string', description: 'The commit the tests ran on.' },
         evidence: { type: 'string', description: 'The test commands and their summary lines.' },
       },
@@ -126,6 +126,8 @@ const REVIEWER: ToolDef[] = [{
             file: { type: 'string' },
             line: { type: 'integer' },
             summary: { type: 'string' },
+            proof: { type: 'string', description: 'How you showed it: the failing command and its output, or the changed line. High and medium findings hold the PR only with proof.' },
+            pre_existing: { type: 'boolean', description: 'The problem was already on the base before this PR: it never holds the PR, and is listed as a follow-up.' },
           },
           required: ['severity', 'summary'],
           additionalProperties: false,
@@ -139,6 +141,30 @@ const REVIEWER: ToolDef[] = [{
   },
 }]
 
+const INTEGRATOR: ToolDef[] = [{
+  name: 'report_integration',
+  description: 'The integration check\'s result: the sha you tested (the merge your worktree is at), whether everything passed, the commands and their summary lines as evidence, and each failing test with the unit whose files it exercises when you can tell.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      sha: { type: 'string' },
+      passed: { type: 'boolean' },
+      evidence: { type: 'string' },
+      failures: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: { test: { type: 'string' }, unit: { type: 'integer', minimum: 1 } },
+          required: ['test'],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ['sha', 'passed', 'evidence'],
+    additionalProperties: false,
+  },
+}]
+
 export function toolsFor(role: Role): ToolDef[] {
-  return [...COMMON, ...(role === 'planner' ? PLANNER : role === 'coder' ? CODER : REVIEWER)]
+  return [...COMMON, ...(role === 'planner' ? PLANNER : role === 'coder' ? CODER : role === 'integrator' ? INTEGRATOR : REVIEWER)]
 }

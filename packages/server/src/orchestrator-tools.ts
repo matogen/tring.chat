@@ -256,18 +256,21 @@ export const TICKET_TOOLS: ToolDef[] = [
   },
   {
     name: 'ticket_action',
-    description: 'Do what a ticket\'s card buttons do, when the user says it to you: approve the plan, ask for changes, restack, fix or skip a finding, push, mark merged, nudge, pause, set agents, cancel. Or "tell" to pass the user\'s words to one PR\'s agent: the only way to message a ticket\'s agents.',
+    description: 'Do what a ticket\'s card buttons do, when the user says it to you: approve the plan, ask for changes, restack, fix or skip a finding, push, mark merged, nudge, pause, set agents, cancel; for a failed integration check, send it to a PR to fix (route, with pr), run it again (retry, with repo) or accept it (accept, with repo and the reason). Or "tell" to pass the user\'s words to one PR\'s agent: the only way to message a ticket\'s agents.',
     inputSchema: {
       type: 'object',
       properties: {
         ticket: { type: 'string', description: 'Its key or title.' },
         action: {
           type: 'string',
-          enum: ['approve', 'revise', 'cancel', 'agents', 'restack', 'fix', 'skip', 'fix-all', 'push', 'push-stack', 'merged', 'nudge', 'fresh', 'pause', 'resume', 'tell'],
+          enum: ['approve', 'revise', 'cancel', 'agents', 'restack', 'fix', 'skip', 'fix-all', 'push', 'push-stack', 'merged', 'open-final', 'push-single', 'merged-final', 'nudge', 'fresh', 'pause', 'resume', 'route', 'retry', 'accept', 'tell'],
         },
+        strategy: { type: 'string', enum: ['independent', 'stacked', 'single'], description: 'approve: how the units land, as the user chose; without it, the plan card\'s pre-selected one.' },
+        combined: { type: 'boolean', description: 'approve with independent: through a feature branch and one final PR.' },
         pr: { type: 'integer', minimum: 1, description: 'The PR it is about (the n in <KEY>-n).' },
+        repo: { type: 'string', description: 'retry, accept: the repo whose integration check it is about; open-final, push-single, merged-final: the repo of the final or single PR.' },
         finding: { type: 'string', description: 'fix/skip: the finding id from ticket_status.' },
-        text: { type: 'string', description: 'revise, skip: the reason; tell: the message.' },
+        text: { type: 'string', description: 'revise, skip, accept: the reason; tell: the message.' },
         value: { type: 'integer', description: 'agents: how many, 4 to 16.' },
       },
       required: ['ticket', 'action'], additionalProperties: false,
