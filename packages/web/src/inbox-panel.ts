@@ -1,7 +1,7 @@
 import type { AgentInfo, AutoDecision, InboxDecision, InboxItem } from '@tring/shared/protocol'
 import { age, answersFor, describe } from './inbox-view.ts'
 import { renderMarkdown } from './markdown.ts'
-import { answerText, parseChoices } from './choices.ts'
+import { answerText, parseChoices, shortAnswer } from './choices.ts'
 import { MOBILE_QUERY as PHONE } from './switcher.ts'
 import { cardSignature, orderCards, pickerLabel, pickerValue, workflowCard } from './workflow-view.ts'
 import {
@@ -1018,7 +1018,7 @@ export class InboxPanel {
    * agent cannot misread even if it scrolled, or "yes" for its recommendation.
    * Several (a grilling round): sending on the first click would answer only
    * Q1, so each click fills that question's line in the reply box instead
-   * ("Q1: yes", "Q2: (b) One day") and Send goes once they are done.
+   * ("Q1: yes", "Q2: B. One day") and Send goes once they are done.
    * "Something else" and "Other" open the reply box rather than sending.
    *
    * Returns the card's extra keys: 1–9 for an option and y for yes, when there
@@ -1041,7 +1041,8 @@ export class InboxPanel {
 
     for (const q of questions) {
       const block = el('div', 'card-choices')
-      if (!single) block.append(el('p', 'card-choice-q', `${q.id} · ${q.title}`))
+      // A question the agent numbered keeps its number even when it is the only one found, so the buttons say what they answer.
+      if (!single || q.id) block.append(el('p', 'card-choice-q', q.id ? `${q.id} · ${q.title}` : q.title))
       const opts = el('div', 'card-options')
       const choose = (b: HTMLButtonElement, answerFor: string): void => {
         if (single) { send(answerFor); return }
@@ -1053,7 +1054,7 @@ export class InboxPanel {
       if (q.acceptsYes && rec) {
         const b = el('button', 'option yes')
         b.type = 'button'
-        b.append(el('b', undefined, 'y'), el('span', undefined, 'Yes'), el('small', undefined, `Go with the recommendation, (${rec.key})`))
+        b.append(el('b', undefined, 'y'), el('span', undefined, 'Yes'), el('small', undefined, `Go with the recommendation, (${rec.mark})`))
         b.onclick = (e) => { e.stopPropagation(); choose(b, 'yes') }
         opts.append(b)
         if (single) yesButton = b
@@ -1061,11 +1062,11 @@ export class InboxPanel {
       for (const o of q.options) {
         const b = el('button', `option${o.recommended ? ' recommended' : ''}${o.other ? ' other' : ''}`)
         b.type = 'button'
-        b.append(el('b', undefined, o.key), el('span', undefined, o.label))
+        b.append(el('b', undefined, o.mark), el('span', undefined, o.label))
         if (o.recommended) b.append(el('small', 'option-tag', 'Recommended'))
         b.onclick = (e) => {
           e.stopPropagation()
-          if (!o.other) { choose(b, answerText(o)); return }
+          if (!o.other) { choose(b, single ? answerText(o) : shortAnswer(o)); return }
           // "Something else": the reply box, ready for it.
           if (!single) { picks.set(q.id!, ''); compose() }
           focusEnd()
