@@ -1271,8 +1271,9 @@ pre.card-body {
 /* The same option buttons as Claude Code's own questions (.card-options .option
    above); they wrap like them, on a phone too. */
 .card-choices { margin-top: 10px; }
-.card-choices + .card-choices { margin-top: 12px; }
+.card-choices + .card-choices { margin-top: 14px; }
 .card-choice-q { margin: 0 0 6px; font-weight: 600; }
+.card-choice-hint { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
 .option.recommended { border-color: var(--emerald); }
 .option-tag {
   justify-self: start;
@@ -1374,8 +1375,8 @@ pre.card-body {
   border-top: 1px solid var(--line);
   background: var(--panel);
 }
-.card.full .card-foot .card-choices:first-child { margin-top: 0; }
-.card.full .card-foot > .card-choices { flex: 0 1 auto; min-height: 48px; overflow-y: auto; overscroll-behavior: contain; }
+.card.full .card-foot .card-choice-set > .card-choices:first-child { margin-top: 0; }
+.card.full .card-foot > .card-choice-set { flex: 0 1 auto; min-height: 48px; overflow-y: auto; overscroll-behavior: contain; }
 .card.full .card-foot > .card-reply, .card.full .card-foot > .card-actions, .card.full .card-foot > .card-reason { flex: none; }
 .card.full .option { padding: 10px 12px; font-size: 15px; }
 /* iOS zooms the page into an input under 16px. */

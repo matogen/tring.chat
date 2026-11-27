@@ -1029,8 +1029,12 @@ export class InboxPanel {
     if (!questions.length) return () => false
     const single = questions.length === 1
     const picks = new Map<string, string>()
+    // All the questions scroll together, so on a phone each is not squeezed into a box of its own.
+    const set = el('div', 'card-choice-set')
+    const hint = single ? null : el('p', 'card-choice-hint')
     const compose = (): void => {
       box.value = questions.filter((q) => picks.has(q.id!)).map((q) => `${q.id}: ${picks.get(q.id!)}`).join('\n')
+      if (hint) hint.textContent = `${picks.size} of ${questions.length} answered. Send goes once, with all of them.`
     }
     const focusEnd = (): void => {
       box.focus()
@@ -1075,8 +1079,10 @@ export class InboxPanel {
         if (single) numbered.push(b)
       }
       block.append(opts)
-      into.append(block)
+      set.append(block)
     }
+    if (hint) { compose(); set.append(hint) }
+    into.append(set)
 
     return (e) => {
       if (!single) return false

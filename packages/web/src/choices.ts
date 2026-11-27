@@ -23,12 +23,19 @@
  *   Recommended: B                                 2. How long should entries live?
  *                                                     a) One hour …
  *
- * Conservative on purpose: a wrong button is worse than none. A run of
- * options counts only with consecutive keys (a, b, c… or 1, 2, 3…), at least
- * two of them, and a cue that it is a choice — a question mark or a word like
- * "choose" or "options" — above it: anywhere in a question the agent marked
- * (❓, Q1, a numbered question), otherwise in the few lines just above. A
- * numbered list of findings with no question in front of it is just a list.
+ * Conservative on purpose: a wrong button is worse than none, and agents end
+ * most turns with a numbered list nobody is asked to pick from ("It will:
+ * 1. Check staging 2. …"). A run of options needs consecutive keys (a, b, c…
+ * or 1, 2, 3…), at least two of them, and one of these:
+ *
+ * - The line just above it asks: it ends in "?" ("Which approach do you
+ *   prefer?"), or its last sentence says to pick ("Pick one:", "Some
+ *   options:", "(choose one)"). "It will:", "Next steps:", "I fixed three
+ *   things:" introduce a list, and a "?" further up does not reach past them.
+ * - A recommendation after it names one of its keys: "➡️ A.", "Recommended: B".
+ * - It is lettered, under a question the agent marked (❓, Q1, a numbered
+ *   question) with a ❓ or a "?", however much scenario sits between, unless
+ *   the line just above it introduces a list instead ("You picked A. It will:").
  */
 
 export interface Choice {
@@ -36,6 +43,8 @@ export interface Choice {
   key: string
   /** The key as the agent wrote it, "A" or "a", for the answer. */
   mark: string
+  /** The key in the agent's own form, "(a)", "a)" or "A.", for a reply to several questions. */
+  written: string
   /** The option's text, markdown stripped, without the key. */
   label: string
   /** "Something else", "Other": a button that opens the reply box instead of sending. */
@@ -71,7 +80,7 @@ function plain(s: string): string {
  * (a) a) a. a: (1) 1) 1. — then the text. Upper-case letters count as their
  * lower-case selves.
  */
-const OPTION = /^\s*(?:[-*•]\s+)?(?:option\s+)?(?:\(([A-Za-z]|\d{1,2})\)|([A-Za-z]|\d{1,2})[.):])\s+(\S.*)$/i
+const OPTION = /^\s*(?:[-*•]\s+)?(?:option\s+)?(?:\(([A-Za-z]|\d{1,2})\)|([A-Za-z]|\d{1,2})([.):]))\s+(\S.*)$/i
 
 /** "Something else you'd like", "Other", "None of these": these open the reply box. */
 const OTHER = /^(something else|other\b|another\b|none of (the|these|those)|custom\b|your own|i('ll| will) (type|write|describe)|let me (type|write|describe)|write (my|your) own)/i
@@ -80,10 +89,11 @@ const OTHER = /^(something else|other\b|another\b|none of (the|these|those)|cust
 const MARKED = /\((?:recommended|my pick|suggested)\)|\s[—–-]\s*recommended\b/i
 
 /**
- * Words that say the list is a choice. Not a bare "which" or "answer": "here's
- * which files changed:" introduces a list of findings, not a question.
+ * Words that say the list is a choice, in the sentence that leads into it. Not
+ * a bare "which" or "answer": "here's which files changed:" introduces a list
+ * of findings, not a question.
  */
-const CUE = /\b(choose|choice|choices|pick|select|options?|prefer|decide|vote|go with|which (?:one|of|do you|would you|should))\b/i
+const PICK = /\b(choose|choice|choices|pick|select|options?|prefer|decide|vote|go with|which (?:one|of|do you|would you|should)|would you like|do you want|should I|shall I)\b/i
 
 /** A line marking the agent's recommendation: ➡️, or "Recommended: …". */
 const RECOMMEND = /^\s*(?:➡️|➡|→|=>|recommend(?:ed|ation)?\b|my (?:pick|recommendation|suggestion)\b|i(?:'d| would)? (?:suggest|recommend|go with)\b)/i
@@ -151,7 +161,7 @@ function numberedQuestions(lines: string[]): Block[] | null {
   const starts = lines.flatMap((l, i) => (NUMBERED_QUESTION.test(l) ? [i] : []))
   if (starts.length < 2) return null
   const parts = starts.map((s, n) => lines.slice(s, starts[n + 1] ?? lines.length))
-  if (!parts.every((p) => optionsIn(p.slice(1))?.options[0]?.key === 'a')) return null
+  if (!parts.every((p) => runsIn(p.slice(1))[0]?.options[0]?.key === 'a')) return null
   const head = lines.slice(0, starts[0])
   const before: Block[] = head.some((l) => l.trim()) ? [{ lines: head, id: null, marked: false }] : []
   return [...before, ...parts.map((p) => ({ lines: p, id: `Q${NUMBERED_QUESTION.exec(p[0]!)![1]}`, marked: true }))]
@@ -166,22 +176,28 @@ function questionTitle(lines: string[]): string {
   return t.length > 80 ? `${t.slice(0, 79)}…` : t
 }
 
+interface Option { key: string; mark: string; written: string; label: string }
+/** A run of options: the line it starts on, the line after its last option, and the options. */
+interface Run { start: number; end: number; options: Option[] }
+
 /**
- * The run of options in a block, if it is one: keys in order from a or 1, two
- * or more. Each option may have a few lines of explanation under it; a
- * recommendation or a new question ends the run.
+ * Every run of options in a block: keys in order from a or 1, two or more.
+ * Each option may have a few lines of explanation under it; a recommendation
+ * or a new question ends the run.
  */
-function optionsIn(raw: string[]): { start: number; options: Array<{ key: string; mark: string; label: string }> } | null {
+function runsIn(raw: string[]): Run[] {
   // "- **(a)** One hour": the bold goes before the key is looked for.
   const lines = raw.map((l) => l.replace(/\*\*|__/g, ''))
+  const runs: Run[] = []
   for (let i = 0; i < lines.length; i++) {
     const first = OPTION.exec(lines[i]!)
     if (!first) continue
     const key = (first[1] ?? first[2]!).toLowerCase()
     if (key !== 'a' && key !== '1') continue
     const numeric = key === '1'
-    const options: Array<{ key: string; mark: string; label: string }> = []
+    const options: Option[] = []
     let j = i
+    let end = i + 1
     let between = 0
     while (j < lines.length && options.length < MAX_OPTIONS) {
       const line = lines[j]!
@@ -196,23 +212,55 @@ function optionsIn(raw: string[]): { start: number; options: Array<{ key: string
       const k = mark.toLowerCase()
       const want = numeric ? String(options.length + 1) : LETTERS[options.length]
       if (k !== want) break
-      options.push({ key: k, mark, label: plain(m[3]!) })
+      options.push({ key: k, mark, written: m[1] ? `(${mark})` : m[3] === ")" ? `${mark})` : `${mark}.`, label: plain(m[4]!) })
       between = 0
-      j++
+      end = ++j
     }
-    if (options.length >= 2) return { start: i, options }
+    if (options.length >= 2) {
+      runs.push({ start: i, end, options })
+      i = end - 1
+    }
+  }
+  return runs
+}
+
+/**
+ * The line leads into a choice: it ends in a question ("Which one?", "Store
+ * tokens where? (choose one)"), or its last sentence says to pick and is not a
+ * statement ("Pick one:", "Some options:", "Pick the runtimes (choose any)").
+ * Only the last sentence: "I looked at the options. It will:" leads into steps.
+ */
+function asks(line: string): boolean {
+  const t = plain(line).replace(/[*_\s]+$/, '')
+  if (/\?\s*(?:\([^)]*\))?\s*:?$/.test(t)) return true
+  const last = t.split(/(?<=[.!?])\s+(?=\S)/).pop() ?? t
+  return PICK.test(last) && !/\.$/.test(last)
+}
+
+/** The line introduces a list that is not a choice: "It will:", "Next steps:", "Done:". */
+function introduces(line: string): boolean {
+  return /:\s*$/.test(plain(line)) && !asks(line)
+}
+
+/** The key a recommendation just after the run names, if it is one of the run's. */
+function recommendationFor(lines: string[], run: Run): string | null {
+  const keys = new Set(run.options.map((o) => o.key))
+  for (const line of lines.slice(run.end, run.end + MAX_BETWEEN + 1)) {
+    if (OPTION.test(line.replace(/\*\*|__/g, ''))) break // the next list, not this one's verdict
+    if (!RECOMMEND.test(line.replace(/\*\*|__/g, ''))) continue
+    const k = keyIn(line)
+    if (k && keys.has(k)) return k
   }
   return null
 }
 
-/**
- * The text above the options: where a choice announces itself. All of a
- * question the agent marked, however much scenario sits between the question
- * and its options; otherwise only the few lines just above.
- */
-function cued(block: Block, start: number): boolean {
-  const above = block.lines.slice(block.marked ? 0 : Math.max(0, start - 3), start).map(plain).join(' ')
-  return /\?/.test(above) || CUE.test(above)
+/** Whether a run is a choice the user is asked to make: the rules at the top of this file. */
+function isChoice(block: Block, run: Run): boolean {
+  const lead = block.lines.slice(0, run.start).reverse().find((l) => l.trim()) ?? ''
+  if (asks(lead) || recommendationFor(block.lines, run)) return true
+  if (!block.marked || run.options[0]!.key !== 'a' || introduces(lead)) return false
+  const above = block.lines.slice(0, run.start)
+  return /^\s*❓/.test(above.find((l) => l.trim()) ?? '') || above.some((l) => plain(l).includes('?'))
 }
 
 export function parseChoices(message: string): ChoiceQuestion[] {
@@ -220,16 +268,10 @@ export function parseChoices(message: string): ChoiceQuestion[] {
   const out: ChoiceQuestion[] = []
   for (const block of blocks(message)) {
     const lines = block.lines
-    const found = optionsIn(lines)
-    if (!found || !cued(block, found.start)) continue
-    const keys = new Set(found.options.map((o) => o.key))
-    let recommended: string | null = null
-    for (const line of lines.slice(found.start)) {
-      if (!RECOMMEND.test(line)) continue
-      const k = keyIn(line)
-      if (k && keys.has(k)) { recommended = k; break }
-    }
-    recommended ??= found.options.find((o) => MARKED.test(o.label))?.key ?? null
+    // The last run that is a choice: a list of what was done can come first.
+    const found = runsIn(lines).filter((r) => isChoice(block, r)).pop()
+    if (!found) continue
+    const recommended = recommendationFor(lines, found) ?? found.options.find((o) => MARKED.test(o.label))?.key ?? null
     // The grilling skill words every question so "yes" takes its ➡️ answer;
     // anything else has to say so.
     const text = lines.join('\n')
@@ -252,10 +294,13 @@ export function answerText(c: Choice): string {
   return `(${c.mark}) ${c.label}`
 }
 
-/** One question's line in a reply to several, "Q1: A. Keep it in the browser…": the letter, and enough text to be sure. */
+/**
+ * One question's line in a reply to several, "Q1: A. Keep it in the browser…"
+ * or "Q2: (a) Daily": the key as the agent wrote it, and enough text to be sure.
+ */
 export function shortAnswer(c: Choice, max = 60): string {
-  if (c.label.length <= max) return `${c.mark}. ${c.label}`
+  if (c.label.length <= max) return `${c.written} ${c.label}`
   const cut = c.label.slice(0, max + 1)
   const at = cut.lastIndexOf(' ')
-  return `${c.mark}. ${(at > max / 2 ? cut.slice(0, at) : c.label.slice(0, max)).replace(/[\s,;:]+$/, '')}…`
+  return `${c.written} ${(at > max / 2 ? cut.slice(0, at) : c.label.slice(0, max)).replace(/[\s,;:]+$/, '')}…`
 }
