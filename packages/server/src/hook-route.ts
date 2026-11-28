@@ -1,4 +1,5 @@
 import type { InboxItem } from '@tring/shared/protocol'
+import { handBackDelay } from './hand-back.ts'
 import { hookOutput, questionsOf, sameInput, type HookPayload, type Inbox } from './inbox.ts'
 
 /** The slice of a Session this needs, so tests can pass a stub. */
@@ -25,6 +26,13 @@ export interface HookSession {
  * should reopen.
  */
 const USER_ENDED = new Set(['prompt_input_exit', 'logout', 'clear'])
+
+/**
+ * Events that mean the agent is at work again: a reply card still settling
+ * after its Stop is not a hand-back after all (a queued prompt it picked up,
+ * a Stop hook that sent it back to work).
+ */
+const ACTIVE = new Set(['PreToolUse', 'PostToolUse', 'PostToolUseFailure', 'PermissionRequest', 'UserPromptSubmit'])
 
 export interface HookRequest {
   inbox: Inbox
@@ -67,6 +75,7 @@ export function routeHook(req: HookRequest): Promise<Record<string, unknown> | n
   if (event === 'SessionEnd') session.agentAt?.(null)
   else if (typeof payload.cwd === 'string' && payload.cwd) session.agentAt?.(payload.cwd)
   if (typeof payload.transcript_path === 'string' && payload.transcript_path) session.transcriptAt?.(payload.transcript_path)
+  if (ACTIVE.has(event)) inbox.cancelReply(session.id)
 
   switch (event) {
     case 'PermissionRequest':
@@ -86,13 +95,25 @@ export function routeHook(req: HookRequest): Promise<Record<string, unknown> | n
       return hold(req, { sessionId: session.id, kind: 'question', tool, input: input ?? {}, questions })
     }
 
+    // The end of a turn, which is a card only when it hands the work back to
+    // you: not while background work, a Monitor or a wakeup will wake the
+    // agent again (hand-back.ts), and not until it has stayed quiet a moment.
     case 'Stop': {
       session.hook()
-      const said = payload.last_assistant_message?.trim()
-      session.said?.(said ?? '')
-      if (said) inbox.reply(session.id, said)
+      const said = payload.last_assistant_message?.trim() ?? ''
+      session.said?.(said)
+      if (!said) return Promise.resolve(null)
+      const delay = handBackDelay(payload, said)
+      // Paused, not finished: a card from an earlier hand-back is over too.
+      if (delay === null) { inbox.cancelReply(session.id); inbox.working(session.id) }
+      else inbox.replySoon(session.id, said, delay)
       return Promise.resolve(null)
     }
+
+    // A subagent inside the tile finished its part; the agent carries on.
+    // tring does not install this hook, but one set up by hand lands here.
+    case 'SubagentStop':
+      return Promise.resolve(null)
 
     case 'Notification':
       session.hook()

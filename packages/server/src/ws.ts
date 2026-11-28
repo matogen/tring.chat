@@ -64,6 +64,7 @@ export class Hub {
       // A killed or deleted session never sends `exit` here, and its cards
       // would otherwise wait for an agent that no longer exists.
       opts.inbox?.drop((i) => !pm.findSession(i.sessionId))
+      for (const id of opts.inbox?.settlingSessions() ?? []) if (!pm.findSession(id)) opts.inbox?.cancelReply(id)
       this.broadcastState()
     }
     pm.onSessionStatus = (s) => {
