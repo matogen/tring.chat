@@ -1,11 +1,14 @@
 import type { AgentInfo, AutoDecision, InboxDecision, InboxItem } from '@tring/shared/protocol'
 import { age, answersFor, describe } from './inbox-view.ts'
 import { renderMarkdown } from './markdown.ts'
-import { answerText, parseChoices } from './choices.ts'
+import { answerText, parseChoices, shortAnswer } from './choices.ts'
 import { MOBILE_QUERY as PHONE } from './switcher.ts'
+import { cardSignature, orderCards, pickerLabel, pickerValue, workflowCard } from './workflow-view.ts'
 import {
   clampSplit, MIN_CARDS_HEIGHT, MIN_CARDS_WIDTH, MIN_TERMINAL_HEIGHT, MIN_TERMINAL_WIDTH,
 } from './split.ts'
+import { PendingFiles, pastedFiles, replyText, sizeLabel, uploadAll } from './attachments.ts'
+import { filePicker } from './drop.ts'
 
 const WIDTH_KEY = 'tring.inboxWidth'
 const HEIGHT_KEY = 'tring.inboxHeight'
@@ -46,6 +49,26 @@ export interface InboxCallbacks {
   onLayout?: () => void
   /** The reply box's microphone (voice.ts): start or stop talking into `box`. */
   onVoice?: (box: HTMLTextAreaElement, button: HTMLButtonElement) => void
+  /** A button on a multi-PR workflow card, with the words or number it asked for. */
+  onAction?: (itemId: string, actionId: string, text?: string, value?: number | string) => void
+  /**
+   * Sends a file to the daemon and resolves with its path there (ws-client.ts),
+   * for images and files attached to a reply. No attaching without it.
+   */
+  upload?: (file: Blob) => Promise<string>
+}
+
+const CLIP_ICON = '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 7.5 8 13a3.5 3.5 0 0 1-5-5l5.8-5.8a2.3 2.3 0 0 1 3.3 3.3L6.3 11.3a1.2 1.2 0 0 1-1.6-1.6L10 4.4"/></svg>'
+
+/** The reply box's attachments: the chips, and what sending them needs. */
+interface ReplyFiles {
+  pending: PendingFiles
+  /** The chips row and the line that says what went wrong, for the card's foot. */
+  els: HTMLElement[]
+  /** The paperclip, for the card's buttons. */
+  button: HTMLButtonElement
+  busy: (on: boolean) => void
+  fail: (message: string) => void
 }
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -94,6 +117,8 @@ interface Card {
   /** Only ever called with a fresh item for the same id, to refresh labels. */
   paintHeader: () => void
   key: (e: KeyboardEvent) => boolean
+  /** Workflow cards only: what it shows, so it is drawn again when that changes. */
+  sig?: string
 }
 
 /**
@@ -122,6 +147,9 @@ export class InboxPanel {
   private readonly historyList = el('ol', 'inbox-history-list')
   private readonly historySummary = el('summary')
   private readonly cards = new Map<string, Card>()
+  /** One file picker for every card (an input each would outlive its card); it fills whichever card opened it. */
+  private pickFiles: (() => void) | null = null
+  private pickInto: ((files: File[]) => void) | null = null
   private items: InboxItem[] = []
   private shown = false
   private armedAt = 0
@@ -459,8 +487,16 @@ export class InboxPanel {
       if (!keep.has(id)) { card.root.remove(); this.cards.delete(id) }
     }
     let prev: Node | null = null
-    for (const item of this.items) {
+    for (const item of orderCards(this.items)) {
       let card = this.cards.get(item.id)
+      // A ticket's card shows its state, which moves on: redraw it, unless
+      // someone is typing in it (a reason, the changes they want).
+      if (card?.sig !== undefined && card.sig !== cardSignature(item) && !card.root.contains(document.activeElement)) {
+        const fresh = this.build(item)
+        card.root.replaceWith(fresh.root)
+        this.cards.set(item.id, fresh)
+        card = fresh
+      }
       if (!card) {
         card = this.build(item)
         this.cards.set(item.id, card)
@@ -475,6 +511,110 @@ export class InboxPanel {
     if (this.fullId && !this.cards.has(this.fullId)) this.fullGone()
     this.empty.hidden = this.items.length > 0
     this.empty.textContent = 'Nothing is waiting on you. Cards appear here when an agent asks for permission, asks a question, or finishes.'
+  }
+
+  /**
+   * A multi-PR workflow card: the ticket's status (pinned), or a call for the
+   * user — a plan, a finding, a restack, a push. Its buttons go to the stack
+   * engine; one that asks for words or a number opens a box for it first.
+   */
+  private buildWorkflow(item: InboxItem): Card {
+    const v = workflowCard(item)
+    const root = el('section', `card card-${item.kind}${v.pinned ? ' pinned' : ''}`)
+    root.tabIndex = 0
+    const head = el('header', 'card-head')
+    head.append(
+      el('span', 'card-slot', v.pinned ? '\u25c6' : '\u2022'),
+      el('span', 'card-heading', v.heading),
+      el('span', 'card-age', age(Date.now() - item.createdAt)),
+    )
+    const main = el('div', 'card-main')
+    main.append(...expandable(renderMarkdown(v.body, 'card-message md')))
+    const foot = el('div', 'card-foot')
+    const actions = el('div', 'card-actions')
+    const ask = el('div', 'card-ask')
+    ask.hidden = true
+    const send = (id: string, text?: string, value?: number | string): void => this.cb.onAction?.(item.id, id, text, value)
+    const plain: HTMLButtonElement[] = []
+    // The strategy picker: radio buttons above the buttons; its pick goes with its button, whose label follows it.
+    const picker = v.picker
+    let picked = picker?.selected ?? ''
+    let ticked = picker?.option?.checked ?? false
+    let pickerButton: HTMLButtonElement | null = null
+    if (picker) {
+      const group = el('fieldset', 'card-picker')
+      group.append(el('legend', undefined, 'Strategy'))
+      const note = el('p', 'card-picker-note')
+      const option = el('label', 'card-picker-option')
+      const box = el('input')
+      box.type = 'checkbox'
+      box.id = `${item.id}-option`
+      box.checked = ticked
+      box.onchange = () => { ticked = box.checked }
+      if (picker.option) option.append(box, el('span', undefined, picker.option.label))
+      const paint = (): void => {
+        const c = picker.choices.find((x) => x.value === picked)
+        note.textContent = c ? [c.note, c.misfit ? `Needs a re-plan: ${c.misfit}` : ''].filter(Boolean).join(' ') : ''
+        option.hidden = !picker.option || picker.option.for !== picked
+        if (pickerButton) pickerButton.textContent = pickerLabel(picker, picked)
+      }
+      for (const c of picker.choices) {
+        const row = el('label', 'card-picker-choice')
+        const radio = el('input')
+        radio.type = 'radio'
+        radio.name = `${item.id}-strategy`
+        radio.id = `${item.id}-strategy-${c.value}`
+        radio.value = c.value
+        radio.checked = c.value === picked
+        radio.onchange = () => { picked = c.value; paint() }
+        row.append(radio, el('span', undefined, c.label))
+        group.append(row)
+      }
+      group.append(note, option)
+      main.append(group)
+      queueMicrotask(paint)
+    }
+    for (const b of v.buttons) {
+      const btn = button(picker && b.id === picker.action ? pickerLabel(picker, picked) : b.label, b.primary ? 'primary' : '', () => {
+        if (picker && b.id === picker.action) return send(b.id, undefined, pickerValue(picker, picked, ticked))
+        if (b.input === 'none') return send(b.id)
+        ask.hidden = false
+        if (b.input === 'text') {
+          const box = el('input', 'card-reason')
+          box.placeholder = `${b.label.replace(/…$/, '')}: why? (Enter sends)`
+          box.onkeydown = (e) => {
+            if (e.key === 'Enter' && box.value.trim()) { e.preventDefault(); send(b.id, box.value.trim()) }
+            if (e.key === 'Escape') { e.preventDefault(); ask.hidden = true; root.focus() }
+          }
+          ask.replaceChildren(box, button('Send', 'primary', () => { if (box.value.trim()) send(b.id, box.value.trim()) }))
+          box.focus()
+        } else {
+          const range = el('input', 'card-range')
+          range.type = 'range'
+          range.min = String(b.min ?? 0)
+          range.max = String(b.max ?? 0)
+          range.value = String(b.value ?? b.min ?? 0)
+          const shown = el('b', 'card-range-value', range.value)
+          range.oninput = () => { shown.textContent = range.value }
+          ask.replaceChildren(el('span', undefined, b.label), range, shown, button('Set', 'primary', () => send(b.id, undefined, Number(range.value))))
+          range.focus()
+        }
+      })
+      if (picker && b.id === picker.action) pickerButton = btn
+      if (b.input === 'none') plain.push(btn)
+      actions.append(btn)
+    }
+    foot.append(actions, ask)
+    root.append(head, main, foot)
+    return {
+      item, root, sig: cardSignature(item), paintHeader: () => {},
+      // 1-9 press the card's buttons that need nothing more, in order.
+      key: (e) => {
+        const n = Number(e.key)
+        if (n >= 1 && n <= 9 && plain[n - 1]) { plain[n - 1]!.click(); return true }
+        return false
+      },
+    }
   }
 
   private async checkHooks(): Promise<void> {
@@ -536,6 +676,7 @@ export class InboxPanel {
   }
 
   private build(item: InboxItem): Card {
+    if (item.kind === 'workflow' || item.kind === 'feature') return this.buildWorkflow(item)
     const text = describe(item)
     const root = el('section', `card card-${item.kind}`)
     root.tabIndex = 0
@@ -693,23 +834,47 @@ export class InboxPanel {
       main.append(...expandable(renderMarkdown(text.body, 'card-message md')))
       const box = el('textarea', 'card-reply')
       box.rows = 2
-      box.placeholder = 'Reply… (Enter sends, Shift+Enter for a new line)'
-      const send = (): void => {
-        const v = box.value.trim()
-        if (v) this.reply(item.id, v)
+      box.placeholder = this.cb.upload
+        ? 'Reply… (Enter sends, Shift+Enter for a new line, paste or drop images and files)'
+        : 'Reply… (Enter sends, Shift+Enter for a new line)'
+      const upload = this.cb.upload
+      const files = upload ? this.replyFiles(root, box) : null
+      const sendButton = button('Send', 'primary', () => send(box.value))
+      let sending = false
+      // Whatever sends the reply — Enter, the button, an option — takes the
+      // attached files along: up first, then their paths ahead of the words.
+      const send = (text: string): void => {
+        const words = text.trim()
+        const attached = files?.pending.list ?? []
+        if (sending || (!words && attached.length === 0)) return
+        if (!files || !upload || attached.length === 0) { this.reply(item.id, words); return }
+        sending = true
+        sendButton.disabled = true
+        files.busy(true)
+        void uploadAll(attached, upload).then((paths) => {
+          files.pending.clear()
+          this.reply(item.id, replyText(words, paths))
+        }, (err: unknown) => {
+          files.fail((err as Error).message)
+        }).finally(() => {
+          sending = false
+          sendButton.disabled = false
+          files.busy(false)
+        })
       }
       // A plain-text multiple choice at the end of its turn (the grilling
       // skill's rounds): one button per option, outside the folded message so
       // they show whether it is folded or not. See choices.ts.
-      const choiceKeys = this.choiceButtons(item, foot, box)
+      const choiceKeys = this.choiceButtons(item, foot, box, send)
       box.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); send() }
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); send(box.value) }
         if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); root.focus() }
       })
       actions.append(
-        button('Send', 'primary', send),
+        sendButton,
         button('Dismiss', '', () => answer('terminal'), 'x'),
         button('Open', '', open, 'o'),
+        ...(files ? [files.button] : []),
       )
       // Talk instead of typing (desktop; a phone has its keyboard's dictation).
       if (this.cb.onVoice) {
@@ -722,7 +887,7 @@ export class InboxPanel {
         mic.onclick = (e) => { e.stopPropagation(); onVoice(box, mic) }
         actions.append(mic)
       }
-      foot.append(box, actions)
+      foot.append(...(files?.els ?? []), box, actions)
       key = (e) => {
         if (e.target !== root) return false
         if (choiceKeys(e)) return true
@@ -737,6 +902,115 @@ export class InboxPanel {
   }
 
   /**
+   * Images and files for a reply: pasted into its box (a screenshot off the
+   * clipboard), dropped anywhere on the card, or picked with the paperclip,
+   * which on a phone opens the camera, the photo library or the files app.
+   * Each shows as a chip, a thumbnail for an image, with × to take it off.
+   *
+   * The card sits inside the terminal's cell, whose own drop types into the
+   * focused terminal (drop.ts), so a drop here goes no further than the card.
+   */
+  private replyFiles(root: HTMLElement, box: HTMLTextAreaElement): ReplyFiles {
+    const chips = el('div', 'card-files')
+    chips.hidden = true
+    const error = el('p', 'card-error')
+    error.hidden = true
+    const thumbs = new Map<number, string>()
+    const paint = (): void => {
+      const list = pending.list
+      for (const [id, url] of thumbs) {
+        if (!list.some((a) => a.id === id)) { URL.revokeObjectURL(url); thumbs.delete(id) }
+      }
+      chips.replaceChildren(...list.map((a) => {
+        const chip = el('span', `card-file${a.image ? ' image' : ''}`)
+        chip.title = `${a.name} · ${sizeLabel(a.file.size)}`
+        if (a.image) {
+          const img = el('img')
+          img.alt = ''
+          img.src = thumbs.get(a.id) ?? URL.createObjectURL(a.file)
+          thumbs.set(a.id, img.src)
+          chip.append(img)
+        }
+        chip.append(el('span', 'card-file-name', a.name))
+        const x = el('button', 'card-file-remove', '×')
+        x.type = 'button'
+        x.title = `Remove ${a.name}`
+        x.setAttribute('aria-label', `Remove ${a.name}`)
+        x.onclick = (e) => { e.stopPropagation(); pending.remove(a.id); box.focus() }
+        chip.append(x)
+        return chip
+      }))
+      chips.hidden = list.length === 0
+      error.hidden = true
+    }
+    const pending = new PendingFiles(paint)
+
+    box.addEventListener('paste', (e) => {
+      const files = pastedFiles(e.clipboardData)
+      if (files.length === 0) return
+      e.preventDefault()
+      pending.add(files)
+    })
+
+    const carriesFiles = (e: DragEvent): boolean => Array.from(e.dataTransfer?.types ?? []).includes('Files')
+    let depth = 0
+    root.addEventListener('dragenter', (e) => {
+      if (!carriesFiles(e)) return
+      e.preventDefault()
+      e.stopPropagation()
+      depth++
+      root.classList.add('dropping')
+    })
+    root.addEventListener('dragover', (e) => {
+      if (!carriesFiles(e)) return
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+    })
+    root.addEventListener('dragleave', (e) => {
+      e.stopPropagation()
+      depth = Math.max(0, depth - 1)
+      if (depth === 0) root.classList.remove('dropping')
+    })
+    root.addEventListener('drop', (e) => {
+      if (!carriesFiles(e)) return
+      e.preventDefault()
+      e.stopPropagation()
+      depth = 0
+      root.classList.remove('dropping')
+      pending.add(Array.from(e.dataTransfer?.files ?? []))
+      box.focus()
+    })
+
+    const clip = el('button', 'btn card-attach')
+    clip.type = 'button'
+    clip.title = 'Attach images or files (or paste or drop them on the card)'
+    clip.setAttribute('aria-label', 'Attach images or files')
+    clip.innerHTML = CLIP_ICON
+    clip.onclick = (e) => {
+      e.stopPropagation()
+      this.pickInto = (files) => { pending.add(files); box.focus() }
+      this.pickFiles ??= filePicker((files) => this.pickInto?.(files))
+      this.pickFiles()
+    }
+
+    return {
+      pending,
+      els: [chips, error],
+      button: clip,
+      busy: (on) => {
+        box.readOnly = on
+        clip.disabled = on
+        chips.classList.toggle('sending', on)
+      },
+      fail: (message) => {
+        error.textContent = `Not sent: ${message}`
+        error.hidden = false
+      },
+    }
+  }
+
+  /**
    * The option buttons for a finished card whose message ends in a choice,
    * styled like Claude Code's own questions (AskUserQuestion) above.
    *
@@ -744,19 +1018,23 @@ export class InboxPanel {
    * agent cannot misread even if it scrolled, or "yes" for its recommendation.
    * Several (a grilling round): sending on the first click would answer only
    * Q1, so each click fills that question's line in the reply box instead
-   * ("Q1: yes", "Q2: (b) One day") and Send goes once they are done.
+   * ("Q1: yes", "Q2: B. One day") and Send goes once they are done.
    * "Something else" and "Other" open the reply box rather than sending.
    *
    * Returns the card's extra keys: 1–9 for an option and y for yes, when there
    * is a single question.
    */
-  private choiceButtons(item: InboxItem, into: HTMLElement, box: HTMLTextAreaElement): (e: KeyboardEvent) => boolean {
+  private choiceButtons(item: InboxItem, into: HTMLElement, box: HTMLTextAreaElement, send: (text: string) => void): (e: KeyboardEvent) => boolean {
     const questions = parseChoices(item.message ?? '')
     if (!questions.length) return () => false
     const single = questions.length === 1
     const picks = new Map<string, string>()
+    // All the questions scroll together, so on a phone each is not squeezed into a box of its own.
+    const set = el('div', 'card-choice-set')
+    const hint = single ? null : el('p', 'card-choice-hint')
     const compose = (): void => {
       box.value = questions.filter((q) => picks.has(q.id!)).map((q) => `${q.id}: ${picks.get(q.id!)}`).join('\n')
+      if (hint) hint.textContent = `${picks.size} of ${questions.length} answered. Send goes once, with all of them.`
     }
     const focusEnd = (): void => {
       box.focus()
@@ -767,10 +1045,11 @@ export class InboxPanel {
 
     for (const q of questions) {
       const block = el('div', 'card-choices')
-      if (!single) block.append(el('p', 'card-choice-q', `${q.id} · ${q.title}`))
+      // A question the agent numbered keeps its number even when it is the only one found, so the buttons say what they answer.
+      if (!single || q.id) block.append(el('p', 'card-choice-q', q.id ? `${q.id} · ${q.title}` : q.title))
       const opts = el('div', 'card-options')
       const choose = (b: HTMLButtonElement, answerFor: string): void => {
-        if (single) { this.reply(item.id, answerFor); return }
+        if (single) { send(answerFor); return }
         picks.set(q.id!, answerFor)
         compose()
         for (const sib of Array.from(opts.querySelectorAll('.option'))) sib.classList.toggle('picked', sib === b)
@@ -779,7 +1058,7 @@ export class InboxPanel {
       if (q.acceptsYes && rec) {
         const b = el('button', 'option yes')
         b.type = 'button'
-        b.append(el('b', undefined, 'y'), el('span', undefined, 'Yes'), el('small', undefined, `Go with the recommendation, (${rec.key})`))
+        b.append(el('b', undefined, 'y'), el('span', undefined, 'Yes'), el('small', undefined, `Go with the recommendation, (${rec.mark})`))
         b.onclick = (e) => { e.stopPropagation(); choose(b, 'yes') }
         opts.append(b)
         if (single) yesButton = b
@@ -787,11 +1066,11 @@ export class InboxPanel {
       for (const o of q.options) {
         const b = el('button', `option${o.recommended ? ' recommended' : ''}${o.other ? ' other' : ''}`)
         b.type = 'button'
-        b.append(el('b', undefined, o.key), el('span', undefined, o.label))
+        b.append(el('b', undefined, o.mark), el('span', undefined, o.label))
         if (o.recommended) b.append(el('small', 'option-tag', 'Recommended'))
         b.onclick = (e) => {
           e.stopPropagation()
-          if (!o.other) { choose(b, answerText(o)); return }
+          if (!o.other) { choose(b, single ? answerText(o) : shortAnswer(o)); return }
           // "Something else": the reply box, ready for it.
           if (!single) { picks.set(q.id!, ''); compose() }
           focusEnd()
@@ -800,8 +1079,10 @@ export class InboxPanel {
         if (single) numbered.push(b)
       }
       block.append(opts)
-      into.append(block)
+      set.append(block)
     }
+    if (hint) { compose(); set.append(hint) }
+    into.append(set)
 
     return (e) => {
       if (!single) return false

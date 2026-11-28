@@ -28,10 +28,22 @@ export function imagesIn(files: ArrayLike<File> | null | undefined): File[] {
   return Array.from(files ?? []).filter((f) => IMAGE.test(f.type))
 }
 
+/**
+ * A text box of the page's own, rather than the one xterm listens on: a card's
+ * reply box sits inside the terminal's cell, and a screenshot pasted there is
+ * for that reply (see attachments.ts), not for the terminal behind it.
+ */
+export function ownTextField(target: unknown): boolean {
+  const t = target as { tagName?: unknown; classList?: { contains(c: string): boolean } } | null
+  if (!t || (t.tagName !== 'TEXTAREA' && t.tagName !== 'INPUT')) return false
+  return !t.classList?.contains('xterm-helper-textarea')
+}
+
 export function attachImagePaste(el: HTMLElement, opts: PasteOptions): void {
   el.addEventListener(
     'paste',
     (e) => {
+      if (ownTextField(e.target)) return
       const images = imagesIn(e.clipboardData?.files)
       // Text is xterm's: its own handler on the textarea does the wrapping.
       if (images.length === 0) return

@@ -26,6 +26,8 @@ export function renderBar(
   update?: UpdateInfo | null,
   usageActive = false,
   inbox: { open: boolean; count: number } = { open: false, count: 0 },
+  /** Multi-PR ticket tabs, by project id: their progress, e.g. "2/5". */
+  tickets: Record<string, string> = {},
 ): void {
   container.replaceChildren()
 
@@ -46,6 +48,14 @@ export function renderBar(
     nm.className = 'nm'
     nm.textContent = p.name
     tab.append(nm)
+    // A multi-PR ticket's tab: how far its stack is.
+    const ticket = tickets[p.id]
+    if (ticket) {
+      const tb = document.createElement('span')
+      tb.className = 'ticket-badge'
+      tb.textContent = ticket
+      tab.append(tb)
+    }
 
     if (done > 0) {
       const badge = document.createElement('span')

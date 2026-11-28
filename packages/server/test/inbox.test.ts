@@ -90,10 +90,13 @@ describe('Inbox after a restart', () => {
   })
 
   it('ends a restored card the ways every card ends: a prompt, a newer reply, a dismissal', async () => {
+    vi.useFakeTimers()
     const inbox = mkInbox()
     inbox.restore([saved('c1', 's1'), saved('c2', 's2'), saved('c3', 's3')])
     await routeHook({ inbox, session: session('s1'), event: 'UserPromptSubmit', payload: {}, signal: new AbortController().signal })
     await routeHook({ inbox, session: session('s2'), event: 'Stop', payload: { last_assistant_message: 'newer' }, signal: new AbortController().signal })
+    vi.runAllTimers()
+    vi.useRealTimers()
     expect(inbox.answer('c3', { decision: 'terminal' })).toBe(true)
     expect(inbox.list().map((i) => [i.sessionId, i.message])).toEqual([['s2', 'newer']])
   })
@@ -205,11 +208,14 @@ describe('routeHook', () => {
     })
   })
 
-  it('turns the tile green and leaves a reply card on Stop', async () => {
+  it('turns the tile green and leaves a reply card on Stop, once it has settled', async () => {
+    vi.useFakeTimers()
     const inbox = mkInbox()
     const s = session()
     await run(inbox, s, 'Stop', { last_assistant_message: 'All tests pass.' })
     expect(s.hooks).toBe(1)
+    vi.runAllTimers()
+    vi.useRealTimers()
     expect(inbox.list()).toMatchObject([{ kind: 'reply', message: 'All tests pass.' }])
     await run(inbox, s, 'Notification', { notification_type: 'idle_prompt' })
     expect(s.hooks).toBe(2)

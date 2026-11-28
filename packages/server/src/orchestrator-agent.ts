@@ -21,6 +21,9 @@ import { claudeConversation, Session, type ClaudeConversation } from './session.
 export const PRE_ALLOWED = ['list_sessions', 'list_worktrees', 'find_work', 'session_history', 'read_session', 'session_changes', 'send_prompt', 'wait_for']
   .map((t) => `mcp__tring__${t}`)
 
+/** With the multi-PR workflow on, reading tickets needs no asking either. */
+export const TICKET_PRE_ALLOWED = ['list_tickets', 'ticket_status'].map((t) => `mcp__tring__${t}`)
+
 /**
  * The orchestrator allocates work and looks things up. It never does the work:
  * caught testing in the browser itself after "use the browser to test", in
@@ -61,6 +64,8 @@ export interface AgentOptions {
   node: string
   /** Builds the session; replaced in tests so nothing spawns. */
   spawn?: (opts: ConstructorParameters<typeof Session>[0]) => Session
+  /** Whether the multi-PR workflow is on: its instructions and tools are added only then. */
+  multiPr?: () => boolean
 }
 
 interface Saved {
@@ -240,8 +245,9 @@ export class OrchestratorAgent {
       },
     }
     await writeFile(path.join(dir, 'tring-mcp.json'), JSON.stringify(mcp, null, 2) + '\n', 'utf8')
-    await writeFile(path.join(dir, '.claude', 'settings.json'), JSON.stringify(workspaceSettings(), null, 2) + '\n', 'utf8')
-    await writeFile(path.join(dir, 'TRING.md'), INSTRUCTIONS, 'utf8')
+    const multiPr = this.opts.multiPr?.() ?? false
+    await writeFile(path.join(dir, '.claude', 'settings.json'), JSON.stringify(workspaceSettings(multiPr), null, 2) + '\n', 'utf8')
+    await writeFile(path.join(dir, 'TRING.md'), multiPr ? INSTRUCTIONS + TICKET_INSTRUCTIONS : INSTRUCTIONS, 'utf8')
     const claudeMd = path.join(dir, 'CLAUDE.md')
     try {
       await access(claudeMd)
@@ -256,9 +262,36 @@ export class OrchestratorAgent {
  * a global auto mode (project settings win over user settings), so anything
  * neither allowed here nor in the user's settings.local.json asks first.
  */
-export function workspaceSettings(): Record<string, unknown> {
-  return { permissions: { defaultMode: 'default', allow: PRE_ALLOWED, deny: DENIED } }
+export function workspaceSettings(multiPr = false): Record<string, unknown> {
+  return { permissions: { defaultMode: 'default', allow: multiPr ? [...PRE_ALLOWED, ...TICKET_PRE_ALLOWED] : PRE_ALLOWED, deny: DENIED } }
 }
+
+/** Added to TRING.md while the multi-PR workflow is on. */
+export const TICKET_INSTRUCTIONS = `
+## Tickets: the multi-PR workflow (on)
+
+When the user says "work on ticket X" (or describes a feature or bug fix to
+build that way), it becomes a ticket of its own:
+
+1. Get the ticket's text. Look it up with the lookups the user allows (their
+   ticket skill, e.g. goby); if none works, ask them to paste it. Never create,
+   edit or comment on tickets in their tracker: tring keeps its own.
+2. Work out which local repositories it touches, from the ticket and the
+   user's repository list (in their CLAUDE.md). Ask when unsure; never search
+   the disk.
+3. \`start_ticket\` with the key, title, full text, source and repos. tring
+   opens a tab with a planner agent; the user approves the plan on a card,
+   choosing how it lands: independent PRs, stacked PRs or a single PR (the
+   planner recommends one). If they tell you instead, \`ticket_action\`
+   "approve" with that \`strategy\` (and \`combined\` for independent PRs
+   through one final PR).
+
+After that the ticket runs itself: tring starts, sequences, reviews and
+restacks its agents. Do not \`send_prompt\` to a ticket's tiles (it is
+refused); pass the user's words on with \`ticket_action\` "tell". When the
+user answers a ticket's card by talking to you ("approve the plan", "skip that
+one, it's intended"), use \`ticket_action\`. Report from \`ticket_status\`.
+`
 
 export const INSTRUCTIONS = `# You are the tring orchestrator
 

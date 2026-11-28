@@ -974,6 +974,44 @@ pre.card-body {
 }
 .card-reason:focus, .card-other:focus, .card-reply:focus { outline: none; border-color: var(--emerald); }
 .card-reason[hidden] { display: none; }
+/* Images and files going with a reply (attachments.ts): a chip each, a
+   thumbnail for an image, × to take it off. */
+.card-files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.card-files[hidden], .card-error[hidden] { display: none; }
+.card-files.sending { opacity: 0.6; }
+.card-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 3px 4px 3px 8px;
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  background: var(--bg-2);
+  color: var(--text);
+  font: 12px var(--sans);
+}
+.card-file.image { padding-left: 3px; }
+.card-file img { width: 40px; height: 40px; object-fit: cover; border-radius: 3px; flex: none; }
+.card-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-file-remove {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.card-file-remove:hover { color: var(--text); background: var(--line); }
+.card-attach { display: inline-flex; align-items: center; justify-content: center; padding: 0 10px; color: var(--muted); }
+.card-error { margin: 6px 0 0; color: var(--red); font: 12px var(--sans); }
+.card.dropping { box-shadow: inset 0 0 0 2px var(--mint); }
+.card.full .card-foot > .card-files, .card.full .card-foot > .card-error { flex: none; }
+@media (max-width: 720px) { .card-file-remove { width: 32px; height: 32px; } }
 .card-question + .card-question { margin-top: 12px; }
 .card-chip {
   display: inline-block;
@@ -1221,14 +1259,21 @@ pre.card-body {
 .notify-body .field.toggle.notify-choice { margin: 6px 0; padding: 0; border: none; }
 .notify-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
 .notify-result { color: var(--muted); font-size: 12px; }
+.workflow-control { margin: 8px 0; }
+.workflow-control .hint { margin: 2px 0 0; }
+.workflow-control.later { opacity: 0.5; }
+.workflow-label { color: var(--text); font-size: 12.5px; display: block; margin-bottom: 4px; }
+.workflow-slider { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 10px; }
+.workflow-slider input[type=range] { grid-column: 1 / -1; width: 100%; accent-color: var(--emerald); }
 
 /* ---------- choice buttons on finished cards (choices.ts) ---------- */
 
 /* The same option buttons as Claude Code's own questions (.card-options .option
    above); they wrap like them, on a phone too. */
 .card-choices { margin-top: 10px; }
-.card-choices + .card-choices { margin-top: 12px; }
+.card-choices + .card-choices { margin-top: 14px; }
 .card-choice-q { margin: 0 0 6px; font-weight: 600; }
+.card-choice-hint { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
 .option.recommended { border-color: var(--emerald); }
 .option-tag {
   justify-self: start;
@@ -1330,8 +1375,8 @@ pre.card-body {
   border-top: 1px solid var(--line);
   background: var(--panel);
 }
-.card.full .card-foot .card-choices:first-child { margin-top: 0; }
-.card.full .card-foot > .card-choices { flex: 0 1 auto; min-height: 48px; overflow-y: auto; overscroll-behavior: contain; }
+.card.full .card-foot .card-choice-set > .card-choices:first-child { margin-top: 0; }
+.card.full .card-foot > .card-choice-set { flex: 0 1 auto; min-height: 48px; overflow-y: auto; overscroll-behavior: contain; }
 .card.full .card-foot > .card-reply, .card.full .card-foot > .card-actions, .card.full .card-foot > .card-reason { flex: none; }
 .card.full .option { padding: 10px 12px; font-size: 15px; }
 /* iOS zooms the page into an input under 16px. */
@@ -1376,3 +1421,50 @@ body.card-full-open .term-voice { display: none; }
 .voice-rec .btn { justify-self: start; }
 .voice-pick { margin: 0; color: var(--text); font-weight: 600; }
 .voice-error { color: var(--amber); }
+
+/* ---- the multi-PR workflow's cards ---- */
+.card-feature { border-color: var(--emerald); }
+.card-feature .card-slot, .card-workflow .card-slot { color: var(--emerald); }
+.card-feature .card-heading, .card-workflow .card-heading { font-weight: 600; }
+.card-ask { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.card-ask .card-reason { flex: 1 1 200px; }
+.card-range { flex: 1 1 140px; accent-color: var(--emerald); }
+.card-range-value { min-width: 2ch; text-align: right; }
+
+/* ---- a ticket tab's stack rail ---- */
+#stack { flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 4px 8px; border-bottom: 1px solid var(--line); font-size: 12px; }
+#stack[hidden] { display: none; }
+.stack-title { color: var(--muted); font-weight: 600; margin-right: 4px; }
+.stack-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.stack-repo { color: var(--muted); margin-right: 2px; }
+.stack-chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; background: none; color: var(--text); font: inherit; cursor: pointer; }
+.stack-chip:disabled { cursor: default; opacity: 0.75; }
+.stack-chip.status-coding, .stack-chip.status-in-review { border-color: var(--amber, #d9a400); }
+.stack-chip.status-tests-passing, .stack-chip.status-review-clean { border-color: var(--emerald); }
+.stack-chip.status-pushed, .stack-chip.status-merged { border-color: var(--emerald); background: color-mix(in srgb, var(--emerald) 15%, transparent); }
+.stack-chip.held { border-style: dashed; }
+.ticket-badge { margin-left: 6px; font-size: 11px; color: var(--muted); }
+.cleanup-row small { display: block; margin-left: 22px; }
+
+.workflow-model { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.workflow-model select { min-width: 0; }
+
+/* ---- the plan card's strategy picker ---- */
+.card-picker { border: 1px solid var(--line); border-radius: 8px; margin: 10px 0 0; padding: 6px 10px 8px; display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: center; }
+.card-picker legend { color: var(--muted); font-size: 12px; padding: 0 4px; }
+.card-picker-choice { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.card-picker-note { flex-basis: 100%; margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+.card-picker-option { flex-basis: 100%; display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.card-picker-option[hidden] { display: none; }
+@media (max-width: 600px) { .card-picker-choice { flex-basis: 100%; } }
+
+/* ---- the work view: stacked, side by side, or one PR of commits ---- */
+.stack-join { color: var(--muted); margin: 0 -2px; }
+.stack-single { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 10px; }
+.stack-single-branch { color: var(--muted); font-size: 11px; margin-right: 2px; }
+.stack-chip.verified b::after { content: ' \2713'; color: var(--emerald); }
+.stack-integration { padding: 2px 8px; border-radius: 999px; border: 1px dashed var(--line); color: var(--muted); }
+.stack-integration.passing { border-style: solid; border-color: var(--emerald); color: var(--text); }
+.stack-integration.failing, .stack-integration.conflict { border-style: solid; border-color: var(--red, #d33); color: var(--text); }
+.stack-integration.running { border-color: var(--amber, #d9a400); }
+.stack-final { color: var(--muted); font-size: 11px; }

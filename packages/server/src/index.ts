@@ -19,6 +19,7 @@ import { UploadStore } from './uploads.ts'
 import { checkForUpdate, currentVersion } from './update-check.ts'
 import { Inbox } from './inbox.ts'
 import { CardStore, restoreCards } from './card-store.ts'
+import { KeepAwake, wantsKeepAwake } from './keep-awake.ts'
 import { AutoAnswerer } from './auto-answer.ts'
 import { hooksStatus, installHooks, uninstallHooks } from './hooks-install.ts'
 import { prependPath, writeHookShim } from './hook-shim.ts'
@@ -31,6 +32,12 @@ import { pushApi } from './push-api.ts'
 import { sendPush } from './web-push.ts'
 import { vocabulary, Whisper } from './whisper.ts'
 import { realGit } from './git-worktrees.ts'
+import { WorkflowSettingsStore } from './workflow/settings.ts'
+import { TicketStore } from './workflow/tickets.ts'
+import { StackGit } from './workflow/git.ts'
+import { Forge, bitbucketCreds } from './workflow/forge.ts'
+import { WorkflowRunner } from './workflow/runner.ts'
+import type { Limit } from './usage.ts'
 
 interface Auth {
   token: string | null
@@ -224,6 +231,37 @@ async function main(): Promise<void> {
   // The orchestrator agent (off by default): a Claude Code of its own that
   // drives the tiles through the tools below, relayed by tring-mcp.
   const configDir = path.dirname(pm.statePath)
+  const workflow = new WorkflowSettingsStore(path.join(configDir, 'workflow.json'))
+  await workflow.load()
+  const tickets = new TicketStore(path.join(configDir, 'tickets.json'), path.join(configDir, 'tickets'))
+  await tickets.load()
+  let limits: Limit[] = []
+  /** Redraws the workflow's cards when a ticket changes; set once the inbox can show them. */
+  let onTickets: () => void = () => {}
+  const mcpScript = [path.resolve(here, 'tring-mcp.js'), path.resolve(here, 'mcp-cli.ts')].find((p) => existsSync(p)) ?? null
+  const runner = new WorkflowRunner({
+    store: tickets,
+    settings: workflow,
+    git: new StackGit(),
+    pm: {
+      list: () => pm.list(),
+      createProject: (name, root, activate) => pm.createProject(name, root, activate),
+      create: (projectId, spec) => pm.create(projectId, spec),
+      findSession: (id) => pm.findSession(id),
+      kill: (id) => pm.findManager(id)?.kill(id),
+      deleteProject: (id) => pm.deleteProject(id),
+    },
+    inbox,
+    quotaHigh: () => limits.some((l) => l.percent >= 90),
+    tileDir: path.join(configDir, 'stack-tiles'),
+    url,
+    mcpScript,
+    node: process.execPath,
+    onChange: () => onTickets(),
+    forge: new Forge({ bitbucket: () => bitbucketCreds(configDir) }),
+  })
+  await runner.load()
+  runner.start()
   const agent = new OrchestratorAgent({
     dir: path.join(configDir, 'orchestrator'),
     statePath: path.join(configDir, 'orchestrator-agent.json'),
@@ -232,10 +270,11 @@ async function main(): Promise<void> {
     scrollback: args.scrollback,
     idleMs: args.idleMs,
     ...(args.shell ? { shell: args.shell } : {}),
-    mcpScript: [path.resolve(here, 'tring-mcp.js'), path.resolve(here, 'mcp-cli.ts')].find((p) => existsSync(p)) ?? null,
+    mcpScript,
     node: process.execPath,
+    multiPr: () => workflow.get().multiPr,
   })
-  const tools = new OrchestratorTools({ pm, inbox })
+  const tools = new OrchestratorTools({ pm, inbox, workflow: runner })
   // The cards survive a restart (card-store.ts). Brought back before the hub
   // exists, so the first inbox any screen sees already has them, and before
   // anything is listening for new cards, so none of them buzzes a phone twice.
@@ -243,7 +282,11 @@ async function main(): Promise<void> {
     const s = pm.findSession(id)
     return s?.claude ? { projectId: s.projectId, slot: s.slot, claudeId: s.claude.id } : null
   })
-  inbox.restore(restoreCards(await cards.load(), (projectId, claudeId) => pm.tilesWith(projectId, claudeId)))
+  const savedCards = await cards.load()
+  const restored = restoreCards(savedCards, (projectId, claudeId) => pm.tilesWith(projectId, claudeId))
+  inbox.restore(restored)
+  // Said out loud, so "my cards are gone" can be told apart from "this build never kept them".
+  if (savedCards.length) console.log(`inbox: ${restored.length} of ${savedCards.length} saved cards came back`)
   // Phone notifications for orchestrator cards: off until a device turns
   // them on in settings. The VAPID key is made on first run and kept.
   const pushStore = new PushStore(path.join(configDir, 'push.json'))
@@ -294,6 +337,24 @@ async function main(): Promise<void> {
     tools,
     agentSession: (id) => agent.find(id),
     push: pushApi(pushStore, notifier),
+    // Switching the workflow on or off changes the orchestrator's tools and
+    // instructions, which Claude reads when it starts: so it starts again, in
+    // the same conversation.
+    workflow: {
+      get: () => workflow.get(),
+      update: async (patch) => {
+        const was = workflow.get().multiPr
+        const next = await workflow.update(patch)
+        if (next.multiPr !== was && agent.enabled) await agent.restart(false)
+        return next
+      },
+    },
+    forges: () => ({ bitbucket: bitbucketCreds(configDir) !== null, file: path.join(configDir, 'bitbucket.json') }),
+    stack: runner,
+    gate: (id, tool, input) => runner.gate(id, tool, input),
+    onHook: (id) => runner.onHook(id),
+    onUsage: (report) => { limits = report.limits },
+    cleanup: { plan: (id) => runner.cleanupPlan(id), run: (id, items) => runner.cleanup(id, items) },
     voice: {
       status: () => whisper.status(),
       install: (model) => whisper.install(model),
@@ -311,7 +372,9 @@ async function main(): Promise<void> {
   // Rejected at the handshake, before Hub ever sees a socket: an origin that
   // is refused here never gets to send a `hello` at all.
   const wss = new WebSocketServer({ server, verifyClient: upgradeGuard(sameOrigin) })
-  const hub = new Hub({ pm, token, inbox, auto, agent })
+  const hub = new Hub({ pm, token, inbox, auto, agent, workflow: runner })
+  onTickets = () => { inbox.syncWorkflow(runner.cardItems()); hub.refreshTickets() }
+  inbox.syncWorkflow(runner.cardItems(), false)
   hubRef = hub
   hub.attach(wss)
   // The hub owns both change callbacks; saving the cards rides along. Tiles
@@ -366,11 +429,20 @@ async function main(): Promise<void> {
     }
   })
 
+  // A sleeping machine drops every phone until someone wakes it at the
+  // keyboard, so while phones can reach tring it is kept from idle sleep.
+  const awake = new KeepAwake()
+  if (wantsKeepAwake({ allowSleep: args.allowSleep, allowOrigin: args.allowOrigin, loopbackOnly: isLoopbackBind(args.host) }) && awake.start()) {
+    console.log('keeping this machine from idle sleep so phones can reach it (--allow-sleep to let it sleep)')
+  }
+
   const shutdown = async (): Promise<void> => {
     // First: ending the tiles below drops their cards, which must not be saved.
     await cards.close()
+    awake.stop()
     hub.dispose()
     agent.dispose()
+    runner.stop()
     whisper.stopServer()
     await uploads.dispose()
     await pm.dispose()

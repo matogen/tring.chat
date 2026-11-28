@@ -134,4 +134,9 @@ describe('defaults', () => {
     expect(args.fsRoot).toEqual(['/a', '/b', '/c'])
     expect(args.allowOrigin).toEqual(['http://localhost:5173'])
   })
+
+  it('keeps the machine awake for phones unless told it may sleep', () => {
+    expect(parseArgs([]).allowSleep).toBe(false)
+    expect(parseArgs(['--allow-sleep']).allowSleep).toBe(true)
+  })
 })

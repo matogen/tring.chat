@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { imagesIn, sortClipboard, type ClipboardEntry } from '../src/paste.ts'
+import { imagesIn, ownTextField, sortClipboard, type ClipboardEntry } from '../src/paste.ts'
 
 const file = (type: string): File => new File([new Uint8Array([1, 2, 3])], 'x', { type })
 
@@ -45,5 +45,23 @@ describe('sortClipboard', () => {
       entry({ 'text/plain': new Blob(['b']) }),
     ])
     expect(out.text).toBe('ab')
+  })
+})
+
+describe('ownTextField', () => {
+  const field = (tagName: string, ...classes: string[]) => ({ tagName, classList: { contains: (c: string) => classes.includes(c) } })
+
+  it('is a card reply box or any other box of the page', () => {
+    expect(ownTextField(field('TEXTAREA', 'card-reply'))).toBe(true)
+    expect(ownTextField(field('INPUT', 'card-other'))).toBe(true)
+  })
+
+  it('is not the textarea xterm listens on, whose pastes are the terminal’s', () => {
+    expect(ownTextField(field('TEXTAREA', 'xterm-helper-textarea'))).toBe(false)
+  })
+
+  it('is not anything else', () => {
+    expect(ownTextField(field('DIV'))).toBe(false)
+    expect(ownTextField(null)).toBe(false)
   })
 })

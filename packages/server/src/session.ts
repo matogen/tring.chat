@@ -86,6 +86,12 @@ export interface SessionOptions {
    * the tile the shell it was before. Ignored when `command` autoruns.
    */
   resume?: ClaudeConversation | null
+  /**
+   * Options typed in front of `--resume` when that conversation is reopened
+   * (a multi-PR workflow tile's settings, tools and permission mode). Built by
+   * tring, never from user input; kept so a restart reopens the tile as it was.
+   */
+  claudeArgs?: string | null
 }
 
 /**
@@ -102,6 +108,7 @@ export class Session {
   /** Changes only through SessionManager.move; `$TRING_SLOT` keeps the spawn-time value. */
   slot: number
   readonly command: string | null
+  readonly claudeArgs: string | null
   name: string | null
   color: string | null
   title: string | null = null
@@ -161,6 +168,7 @@ export class Session {
     this.slot = opts.slot
     this.spawnCwd = opts.cwd
     this.command = opts.command ?? null
+    this.claudeArgs = opts.claudeArgs ?? null
     this.name = opts.name ?? null
     this.color = opts.color ?? null
     this.tracker = new ActivityTracker(Date.now(), opts.idleMs ?? DEFAULT_IDLE_MS)
@@ -417,7 +425,7 @@ export class Session {
   private typeResume(conv: ClaudeConversation, posix: boolean): void {
     if (this.disposed || this.hasInput) return
     const cd = posix && conv.cwd && conv.cwd !== this.spawnCwd ? `cd -- ${shQuote(conv.cwd)} && ` : ''
-    this.pty.write(`${cd}claude --resume ${conv.id}\r`)
+    this.pty.write(`${cd}claude ${this.claudeArgs ? `${this.claudeArgs} ` : ''}--resume ${conv.id}\r`)
   }
 
   /** Runs once, only if the shell is not where it was asked to be. */

@@ -173,13 +173,13 @@ describe('ProjectManager', () => {
     expect(pm.findSession(s2.id)?.projectId).toBe(b)
   })
 
-  it('allocates the first empty slot and refuses a seventeenth session', async () => {
+  it('allocates the first empty slot and refuses a twenty-fifth session', async () => {
     const { dir, pm } = await fixture()
     const id = pm.createProject('full', dir)
     const mgr = pm.managerFor(id)!
-    for (let i = 0; i < 16; i++) mgr.create({})
-    expect(mgr.list().map((s) => s.slot)).toEqual([...Array(16)].map((_, i) => i + 1))
-    expect(() => mgr.create({})).toThrow(/full/)
+    for (let i = 0; i < 24; i++) mgr.create({})
+    expect(mgr.list().map((s) => s.slot)).toEqual([...Array(24)].map((_, i) => i + 1))
+    expect(() => mgr.create({})).toThrow(/all 24 slots are full/)
 
     mgr.kill(mgr.at(7)!.id)
     expect(mgr.create({}).slot).toBe(7)
@@ -227,5 +227,23 @@ describe('ProjectManager.tilesWith', () => {
     expect(pm.activeProjectId).toBe('a') // Opened behind the scenes, not switched to.
     // Before the resume is typed: the real `claude` may be on this PATH.
     await pm.dispose()
+  })
+})
+
+describe('ProjectManager: tiles of the multi-PR workflow', () => {
+  it('keeps the options a tile reopens Claude with, so a restart brings back its settings and tools', async () => {
+    const { dir, statePath, pm } = await fixture()
+    const id = pm.createProject('CHV-9 Orders', dir)
+    pm.create(id, { cwd: dir, command: 'claude', claudeArgs: '--permission-mode auto --settings "x.json"' })
+    await pm.save()
+    const saved = JSON.parse(await readFile(statePath, 'utf8')) as PersistedState
+    expect(saved.projects[0]!.sessions[0]!.claudeArgs).toBe('--permission-mode auto --settings "x.json"')
+  })
+
+  it('opens a project without moving the view when asked to', async () => {
+    const { dir, pm } = await fixture()
+    const first = pm.createProject('mine', dir)
+    pm.createProject('CHV-9 Orders', dir, false)
+    expect(pm.activeProjectId).toBe(first)
   })
 })

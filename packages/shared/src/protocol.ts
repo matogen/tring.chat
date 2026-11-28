@@ -1,6 +1,7 @@
 /** WebSocket and REST payloads shared by both sides (spec §4.4, §4.5). */
 
 import type { SessionStatus } from './status.ts'
+import type { TicketView } from './workflow.ts'
 
 export type { SessionStatus }
 
@@ -82,6 +83,9 @@ export type ClientMessage =
       /** Shown to the agent with a deny. */
       message?: string
     }
+  /** A button on a multi-PR workflow card, with the words or number it asked for. */
+  /** value: a number (the agents slider) or a choice (the strategy picker). */
+  | { type: 'action'; itemId: string; actionId: string; text?: string; value?: number | string }
   /** Types a follow-up prompt into a session that finished and is waiting. */
   | { type: 'reply'; itemId: string; text: string }
   /** Turns the supervisor that approves routine permission prompts on or off. */
@@ -104,6 +108,8 @@ export type ServerMessage =
       projects: ProjectInfo[]
       activeProjectId: string | null
       update?: UpdateInfo | null
+      /** The multi-PR workflow's tickets, for tab badges and stack rails; absent while it has none. */
+      tickets?: TicketView[]
     }
   | {
       type: 'status'
@@ -175,7 +181,31 @@ export type DiffResult =
  * hook payload says exactly which tool and which input, where a scraped
  * prompt is a guess that breaks with every TUI redesign.
  */
-export type InboxKind = 'permission' | 'question' | 'reply'
+export type InboxKind = 'permission' | 'question' | 'reply' | 'workflow' | 'feature'
+
+/**
+ * A button on a multi-PR workflow card. Its answer goes to the stack engine
+ * (an `action` message), never into a tile.
+ */
+export interface InboxAction {
+  id: string
+  label: string
+  primary?: boolean
+  /** Asks for words first: a reason to skip, the changes wanted. */
+  needsText?: boolean
+  /** Asks for a number first: the agents slider. */
+  needsValue?: { min: number; max: number; value: number }
+  /**
+   * A choice shown above the buttons and sent with this one as its value:
+   * the plan card's strategy picker. `misfit`: why the plan does not fit it as
+   * it is (picking it re-plans); `note`: what it would mean.
+   */
+  choices?: Array<{ value: string; label: string; recommended?: boolean; note?: string; misfit?: string | null }>
+  /** The choice pre-selected. */
+  selected?: string
+  /** A checkbox shown with one choice, sent as `<value>:<id>` when ticked: the final combined PR, with independent PRs. */
+  option?: { id: string; label: string; for: string; checked: boolean }
+}
 
 /** `terminal` hands the prompt back to the session's own TUI unanswered. */
 export type InboxDecision = 'allow' | 'deny' | 'terminal'
@@ -213,6 +243,14 @@ export interface InboxItem {
    * was asking.
    */
   interrupted?: 'permission' | 'question'
+  /** workflow, feature: the ticket it is about. Its body is `message`, as markdown. */
+  ticketId?: string
+  /** workflow, feature: the card's heading. */
+  title?: string
+  /** workflow, feature: its buttons. */
+  actions?: InboxAction[]
+  /** workflow: the PR it is about. */
+  prIndex?: number
 }
 
 /**

@@ -114,4 +114,8 @@ describe('security headers', () => {
     expect(SECURITY_HEADERS['content-security-policy']).toContain("default-src 'self'")
     expect(SECURITY_HEADERS['x-content-type-options']).toBe('nosniff')
   })
+
+  it('shows images only from this origin, inline data and the page’s own blobs (reply thumbnails)', () => {
+    expect(SECURITY_HEADERS['content-security-policy']).toContain("img-src 'self' data: blob:;")
+  })
 })

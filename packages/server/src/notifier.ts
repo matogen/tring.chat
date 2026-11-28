@@ -88,6 +88,19 @@ export function message(item: InboxItem, label: string, tag = item.sessionId): {
   return null
 }
 
+/** What a workflow card asks, by the kind in its id (workflow/engine.ts cardsFor). */
+const WORKFLOW_PHRASE: Record<string, string> = {
+  plan: 'A plan is waiting for your approval',
+  finding: 'A review finding needs your call',
+  review: 'A review finding needs your call',
+  restack: 'A restack is waiting for you',
+  blocked: 'An agent is stuck',
+  push: 'A PR is ready to push',
+  amend: 'An interface change needs your call',
+  integration: 'An integration check failed',
+  conflict: 'Units conflict when merged together',
+}
+
 export class Notifier {
   private readonly last = new Map<string, number>()
 
@@ -107,6 +120,9 @@ export class Notifier {
   /** Sends for `item` to every device that wants it. Exposed for tests. */
   async fire(item: InboxItem): Promise<void> {
     if (!this.o.stillOpen(item.id)) return
+    // A ticket's status card changes all day; only its questions buzz a phone.
+    if (item.kind === 'feature') return
+    if (item.kind === 'workflow') return this.fireWorkflow(item)
     const label = this.o.label(item.sessionId)
     if (!label) return
     const tile = this.o.tile?.(item.sessionId) ?? item.sessionId
@@ -122,6 +138,28 @@ export class Notifier {
       if (this.now - (this.last.get(key) ?? -Infinity) < PER_TILE_MS) continue
       this.last.set(key, this.now)
       await this.deliver(d, msg.payload, msg.urgency, item.sessionId)
+    }
+  }
+
+  /**
+   * A multi-PR workflow card: the user's call on a plan, a finding, a push.
+   * Sent as a question is, and like every notification it says what kind of
+   * card it is and nothing from its content.
+   */
+  private async fireWorkflow(item: InboxItem): Promise<void> {
+    const kind = /:(plan|finding|review|restack|blocked|push|amend|integration|conflict):/.exec(item.id)?.[1] ?? ''
+    const payload: Payload = {
+      title: 'Multi-PR ticket',
+      body: WORKFLOW_PHRASE[kind] ?? 'Something is waiting for you',
+      tag: item.id,
+      url: '/?inbox=1',
+    }
+    const away = !this.o.anyoneActive()
+    for (const d of this.o.devices()) {
+      if (d.phone === false || legacyDesktop(d)) continue
+      if (!d.prefs.question) continue
+      if (d.prefs.onlyWhenAway && !away) continue
+      await this.deliver(d, payload, 'normal', item.ticketId ?? item.id)
     }
   }
 

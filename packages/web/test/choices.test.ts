@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { answerText, parseChoices } from '../src/choices.ts'
+import { answerText, parseChoices, shortAnswer } from '../src/choices.ts'
 
 /** The card from GENERAL/3, as the grilling skill really writes it (with its markdown). */
 const GRILL = [
@@ -123,5 +123,232 @@ describe('parseChoices: what is not a choice', () => {
     const [q] = parseChoices('Which one?\n(a) Red\n(b) Blue\n\n➡️ Green, honestly.')
     expect(q!.options.some((o) => o.recommended)).toBe(false)
     expect(q!.acceptsYes).toBe(false)
+  })
+})
+
+/** A real round from a Claude Code tile, where only Q2's options used to show (and with no heading). */
+const SCHEDULER = [
+  "I've written up the scheduler design. Two decisions are yours before I build it.",
+  '',
+  'Questions',
+  '❓ Q1: Where does draft "Run now" run?',
+  '',
+  'Scenario: a developer builds a "daily trip summary" app and clicks Run now before publishing.',
+  '',
+  'A. Keep it in the browser (where it is today), but run the same file as the real 06:00 run. The toolkit runs the app\'s worker/run.js in the hidden frame. Reads use the developer\'s login, and the screen shows "This notification would be sent: Yesterday: 42 trips, 3,180 km". What you test is what runs on schedule, nothing is sent, and the web app doesn\'t change.',
+  'B. Move it to the server, through the same supervisor as real runs (what ADR CHV-3061 planned). That catches server-only problems, but a draft has no installation, so it has no identity for reading data. The store would need a new "draft run" identity, which is Kristopher\'s side plus a security review.',
+  '➡️ A. Then I\'ll update ADR CHV-3061 to say so.',
+  '',
+  '❓ Q2: Do runs start exactly on the hour, or spread out a little?',
+  '',
+  'Scenario: 400 customers pick "Every day at 06:00". At exactly 06:00:00, 400 apps all hit the Fleet API in the same second.',
+  '',
+  'A. Each installation gets its own fixed minute in the first 10 minutes. Lynx\'s digest always runs at 06:04 and another client\'s always at 06:07: the same time every day, and the load is spread out.',
+  'B. Exactly on the hour. Predictable, but every run lands in the same second.',
+  'C. Spread across the whole hour. The least load, but "06:00" could mean 06:55.',
+  '➡️ A. If you pick A, the schedule option\'s label "Every day at 06:00 UTC" should probably read "around 06:00 UTC". That\'s a one-word change in the generator.',
+  '',
+  "Defaults I'll use unless you object:",
+  '- Times are in UTC.',
+  '- A failed run is not retried.',
+].join('\n')
+
+describe('parseChoices: questions separated from their options', () => {
+  it('reads both questions of the scheduler round, each with its own options and recommendation', () => {
+    const qs = parseChoices(SCHEDULER)
+    expect(qs.map((q) => q.id)).toEqual(['Q1', 'Q2'])
+    expect(qs[0]!.title).toBe('Where does draft "Run now" run?')
+    expect(qs[0]!.options.map((o) => [o.key, o.recommended])).toEqual([['a', true], ['b', false]])
+    expect(qs[0]!.options[1]!.label).toMatch(/^Move it to the server/)
+    expect(qs[1]!.title).toBe('Do runs start exactly on the hour, or spread out a little?')
+    expect(qs[1]!.options.map((o) => [o.key, o.recommended])).toEqual([['a', true], ['b', false], ['c', false]])
+    expect(qs.every((q) => q.acceptsYes)).toBe(true)
+  })
+
+  it('answers in the agent\'s own letters', () => {
+    const [q1] = parseChoices(SCHEDULER)
+    expect(answerText(q1!.options[1]!)).toMatch(/^\(B\) Move it to the server/)
+    expect(shortAnswer(q1!.options[0]!)).toBe('A. Keep it in the browser (where it is today), but run the same…')
+  })
+
+  it('reads a message far longer than a screen', () => {
+    const long = `${'Some context that goes on. '.repeat(2000)}\n\n${SCHEDULER}`
+    expect(long.length).toBeGreaterThan(50_000)
+    expect(parseChoices(long).map((q) => q.id)).toEqual(['Q1', 'Q2'])
+  })
+})
+
+describe('parseChoices: more ways agents write a round', () => {
+  it('numbered questions with lettered options under each, and no ❓', () => {
+    const msg = [
+      'A few decisions before I start:',
+      '',
+      '1. Which database should back the cache?',
+      '   a) Redis',
+      '   b) Postgres',
+      '2. How long should entries live?',
+      '   a) One hour',
+      '   b) One day',
+      '   c) Forever',
+    ].join('\n')
+    const qs = parseChoices(msg)
+    expect(qs.map((q) => [q.id, q.title, q.options.map((o) => o.label)])).toEqual([
+      ['Q1', 'Which database should back the cache?', ['Redis', 'Postgres']],
+      ['Q2', 'How long should entries live?', ['One hour', 'One day', 'Forever']],
+    ])
+  })
+
+  it('### Q1 headings, **A.** options with their explanation on the next line, and "(recommended)"', () => {
+    const msg = [
+      '### Q1. Where should the toggle live?',
+      '',
+      '**A.** In Settings',
+      'Everything in one place, one more click.',
+      '',
+      '**B.** On the card (recommended)',
+      'One click, but the card gets busier.',
+      '',
+      '### Q2. Should it default to on?',
+      '',
+      '**A.** Yes',
+      '**B.** No',
+    ].join('\n')
+    const qs = parseChoices(msg)
+    expect(qs.map((q) => q.id)).toEqual(['Q1', 'Q2'])
+    expect(qs[0]!.options.map((o) => [o.label, o.recommended])).toEqual([['In Settings', false], ['On the card (recommended)', true]])
+    expect(qs[1]!.options.map((o) => o.label)).toEqual(['Yes', 'No'])
+  })
+
+  it('"Option A:" keys and a "Recommended: B" line', () => {
+    const [q] = parseChoices('Which way should I fix the flaky test?\n\nOption A: Retry it twice\nOption B: Fix the race in the setup\n\nRecommended: B, the retry only hides it.')
+    expect(q!.options.map((o) => [o.key, o.label, o.recommended])).toEqual([['a', 'Retry it twice', false], ['b', 'Fix the race in the setup', true]])
+  })
+
+  it('an AskUserQuestion prompt cut off by a restart, as the saved card writes it', () => {
+    const msg = [
+      'tring restarted while this question was open, so the agent never got your answer. Reply to answer it now.',
+      '',
+      '❓ **Q1** - **Which auth method?**',
+      '- (a) OAuth — Sign in with the provider',
+      '- (b) API key',
+      '',
+      '❓ **Q2** - **Store tokens where?** (choose one)',
+      '- (a) Keychain',
+      '- (b) A file in the config dir',
+    ].join('\n')
+    expect(parseChoices(msg).map((q) => [q.id, q.options.length])).toEqual([['Q1', 2], ['Q2', 2]])
+  })
+
+  it('still nothing for a plain report with no question, however it is laid out', () => {
+    expect(parseChoices('### Summary\n\nA. The build passes.\nB. The lint passes.')).toEqual([])
+    expect(parseChoices('Done:\n1. Fixed the login\n   Explained in the PR.\n2. Fixed the CSS')).toEqual([])
+  })
+})
+
+/** A report that ended a real turn and came up with 1/2/3 buttons, though nothing was asked. */
+const REPORT = [
+  'It will:',
+  '1. Check the deployment on staging.',
+  '2. Then carry on with the recommendations.',
+  "3. Commit each one on its branch, but don't push.",
+].join('\n')
+
+describe('parseChoices: numbered steps in a report are not choices', () => {
+  it('the report on its own', () => {
+    expect(parseChoices(REPORT)).toEqual([])
+  })
+
+  it('with a question, or a choice word, further up: "It will:" introduces the steps', () => {
+    expect(parseChoices(`I've started a tile for the fixes. Want me to watch it?\n\n${REPORT}`)).toEqual([])
+    expect(parseChoices(`Should I go ahead? I can start it now.\n${REPORT}`)).toEqual([])
+    expect(parseChoices(`I looked at the options. ${REPORT}`)).toEqual([])
+    expect(parseChoices(`I'll go with option A.\n\n${REPORT}`)).toEqual([])
+  })
+
+  it('a plan, a summary and next steps', () => {
+    expect(parseChoices('Plan:\n1. Write the test\n2. Fix the parser\n3. Commit')).toEqual([])
+    expect(parseChoices('## Summary\n\n1. The build passes.\n2. The lint passes.\n\nAnything else?')).toEqual([])
+    expect(parseChoices('Next steps:\n(a) Rebase\n(b) Push')).toEqual([])
+  })
+
+  it('after the question was answered, in the same Q1 block', () => {
+    expect(parseChoices(`❓ Q1: Which tile should run it?\n\nYou picked A, so I started it. ${REPORT}`)).toEqual([])
+    expect(parseChoices('Q1: A — got it. I will:\na) Update the ADR\nb) Rewrite the runner')).toEqual([])
+  })
+
+  it('a report first and a real question after it: only the question gets buttons', () => {
+    const [q, ...rest] = parseChoices(`${REPORT}\n\nWhich should I start with?\n(a) Staging\n(b) The recommendations`)
+    expect(rest).toEqual([])
+    expect(q!.options.map((o) => o.label)).toEqual(['Staging', 'The recommendations'])
+  })
+})
+
+/** The other round format seen: ❓ **Q1 – …** with no "?", (a)/(b) bullets, ➡️ (a)., --- between. */
+const DASHED = [
+  'Three things to settle before I build the scheduler.',
+  '',
+  '❓ **Q1 – Default schedule.**',
+  '',
+  'Scenario: a developer publishes an app without choosing a schedule.',
+  '',
+  '- (a) Every day at 06:00, in the installation\'s time zone.',
+  '- (b) No schedule: the app only runs when someone clicks Run now.',
+  '',
+  '➡️ (a).',
+  '',
+  '---',
+  '',
+  '❓ **Q2 – Retries.**',
+  '',
+  '- (a) None: a failed run waits for the next one.',
+  '- (b) Once, after five minutes.',
+  '- (c) Three times, backing off.',
+  '',
+  '➡️ (b). One retry covers a Fleet API blip without piling up runs.',
+  '',
+  '---',
+  '',
+  '❓ **Q3 – Where should failures show?**',
+  '',
+  '- (a) On the app\'s page in the store',
+  '- (b) An email to the developer',
+].join('\n')
+
+describe('parseChoices: several questions, grill-me style', () => {
+  it('reads every question of the dashed round, each with its own options and recommendation', () => {
+    const qs = parseChoices(DASHED)
+    expect(qs.map((q) => [q.id, q.title])).toEqual([['Q1', 'Default schedule.'], ['Q2', 'Retries.'], ['Q3', 'Where should failures show?']])
+    expect(qs.map((q) => q.options.map((o) => `${o.mark}${o.recommended ? '*' : ''}`))).toEqual([['a*', 'b'], ['a', 'b*', 'c'], ['a', 'b']])
+    expect(qs.map((q) => q.acceptsYes)).toEqual([true, true, false])
+  })
+
+  it('answers each question in the agent\'s own form, for one reply', () => {
+    const qs = parseChoices(DASHED)
+    const reply = [`Q1: ${shortAnswer(qs[0]!.options[0]!)}`, `Q2: ${shortAnswer(qs[1]!.options[2]!)}`].join('\n')
+    expect(reply).toBe("Q1: (a) Every day at 06:00, in the installation's time zone.\nQ2: (c) Three times, backing off.")
+    const [s1, s2] = parseChoices(SCHEDULER)
+    expect(`Q1: ${shortAnswer(s1!.options[1]!, 20)}, Q2: ${shortAnswer(s2!.options[0]!, 20)}`).toBe('Q1: B. Move it to the…, Q2: A. Each installation…')
+    expect(shortAnswer(parseChoices('Pick one:\na) Ship it\nb) Wait')[0]!.options[1]!)).toBe('b) Wait')
+  })
+
+  it('a ❓ question with no "?" and no recommendation still counts, when its options are lettered', () => {
+    const qs = parseChoices('❓ **Q1 – Naming.**\n- (a) cache\n- (b) store\n\n---\n\n❓ **Q2 – Which folder?**\n- (a) src\n- (b) lib')
+    expect(qs.map((q) => [q.id, q.options.length])).toEqual([['Q1', 2], ['Q2', 2]])
+  })
+})
+
+describe('parseChoices: one question', () => {
+  it('a list led in by a statement, with a ➡️ recommendation naming one of its options', () => {
+    const [q] = parseChoices('Two ways to fix the flaky test:\n(a) Retry it twice\n(b) Fix the race in setup\n\n➡️ (b), the retry only hides it.')
+    expect(q!.options.map((o) => o.recommended)).toEqual([false, true])
+  })
+
+  it('"(choose one)" after a title with no "?", as an AskUserQuestion prompt saved on restart reads', () => {
+    const [q] = parseChoices('tring restarted while this question was open. Reply to answer it now.\n\n❓ **Pick the deploy target** (choose one)\n- (a) Staging\n- (b) Production')
+    expect(q!.options.map((o) => o.label)).toEqual(['Staging', 'Production'])
+  })
+
+  it('a yes/no question straight above its list still asks', () => {
+    expect(parseChoices('Want me to start the tile?\n\n1. Yes, now\n2. Not yet')[0]!.options).toHaveLength(2)
   })
 })

@@ -69,6 +69,19 @@ export interface ToolDeps {
   now?: () => number
   /** Typing a prompt; replaced in tests so nothing waits on a timer. */
   type?: (s: ToolSession, text: string) => void
+  /** The multi-PR workflow (workflow/runner.ts); its tools are listed only while it is switched on. */
+  workflow?: WorkflowTools | null
+}
+
+/** What the orchestrator's ticket tools call. */
+export interface WorkflowTools {
+  enabled(): boolean
+  /** The local key of the ticket a tile belongs to, or null for any other tile. */
+  ticketOf(sessionId: string): string | null
+  startTicket(args: Record<string, unknown>): Promise<string>
+  listTickets(): string
+  ticketStatus(ref: string): string
+  ticketAction(args: Record<string, unknown>): Promise<string>
 }
 
 /** A mistake the agent can fix — a wrong ref, a tile that cannot take a prompt. */
@@ -199,6 +212,72 @@ export const TOOLS: ToolDef[] = [
   },
 ]
 
+/** The multi-PR workflow's tools, listed while Settings → Workflow → Multi-PR workflow is on. */
+export const TICKET_TOOLS: ToolDef[] = [
+  {
+    name: 'start_ticket',
+    description: 'Start the multi-PR workflow for a ticket: tring opens a tab for it with a planner agent that splits it into small stacked PRs, each built, tested and freshly reviewed in its own worktree. Look the ticket up first (or ask the user to paste it) and pass its text. Name every local repository it touches; the planner may add more.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        key: { type: 'string', description: 'The tracker key, e.g. "CHV-3193". Omit for work that has no ticket: tring keys it TRING-<n>.' },
+        title: { type: 'string', description: 'A short title.' },
+        text: { type: 'string', description: 'The ticket text, in full.' },
+        source: { type: 'string', description: 'Where the text came from: "goby", "github", "pasted"…' },
+        repos: {
+          type: 'array', minItems: 1,
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string', description: 'The local clone\'s main checkout.' },
+              base: { type: 'string', description: 'Branch to build on; default develop when the repo has one, else its default branch.' },
+            },
+            required: ['path'], additionalProperties: false,
+          },
+        },
+      },
+      required: ['title', 'text', 'source', 'repos'],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'list_tickets',
+    description: 'Every multi-PR ticket: its phase, each PR\'s status, and what is waiting on the user.',
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
+    name: 'ticket_status',
+    description: 'One ticket in full: its plan, each PR (status, branch, worktree, flags, findings), the checklist and the work log.',
+    inputSchema: {
+      type: 'object',
+      properties: { ticket: { type: 'string', description: 'Its key (CHV-3193, TRING-2) or title.' } },
+      required: ['ticket'], additionalProperties: false,
+    },
+  },
+  {
+    name: 'ticket_action',
+    description: 'Do what a ticket\'s card buttons do, when the user says it to you: approve the plan, ask for changes, restack, fix or skip a finding, push, mark merged, nudge, pause, set agents, cancel; for a failed integration check, send it to a PR to fix (route, with pr), run it again (retry, with repo) or accept it (accept, with repo and the reason). Or "tell" to pass the user\'s words to one PR\'s agent: the only way to message a ticket\'s agents.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ticket: { type: 'string', description: 'Its key or title.' },
+        action: {
+          type: 'string',
+          enum: ['approve', 'revise', 'cancel', 'agents', 'restack', 'fix', 'skip', 'fix-all', 'push', 'push-stack', 'merged', 'open-final', 'push-single', 'merged-final', 'nudge', 'fresh', 'pause', 'resume', 'route', 'retry', 'accept', 'tell'],
+        },
+        strategy: { type: 'string', enum: ['independent', 'stacked', 'single'], description: 'approve: how the units land, as the user chose; without it, the plan card\'s pre-selected one.' },
+        combined: { type: 'boolean', description: 'approve with independent: through a feature branch and one final PR.' },
+        pr: { type: 'integer', minimum: 1, description: 'The PR it is about (the n in <KEY>-n).' },
+        repo: { type: 'string', description: 'retry, accept: the repo whose integration check it is about; open-final, push-single, merged-final: the repo of the final or single PR.' },
+        finding: { type: 'string', description: 'fix/skip: the finding id from ticket_status.' },
+        text: { type: 'string', description: 'revise, skip, accept: the reason; tell: the message.' },
+        value: { type: 'integer', description: 'agents: how many, 4 to 16.' },
+      },
+      required: ['ticket', 'action'], additionalProperties: false,
+    },
+  },
+]
+
 const MAX_LAST_MESSAGE = 600
 const MAX_PATCH_CHARS = 16_000
 const READY_TIMEOUT_MS = 30_000
@@ -237,7 +316,22 @@ export class OrchestratorTools {
     return (this.d.sleep ?? ((t) => new Promise((r) => setTimeout(r, t))))(ms)
   }
 
+  /** The tools to offer: the ticket tools only while the workflow is on, so off means off. */
+  list(): ToolDef[] {
+    return this.d.workflow?.enabled() ? [...TOOLS, ...TICKET_TOOLS] : TOOLS
+  }
+
   async call(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+    const wf = this.d.workflow
+    if (TICKET_TOOLS.some((t) => t.name === name)) {
+      if (!wf?.enabled()) throw new ToolError('the multi-PR workflow is off (Settings → Workflow)')
+      switch (name) {
+        case 'start_ticket': return wf.startTicket(args)
+        case 'list_tickets': return wf.listTickets()
+        case 'ticket_status': return wf.ticketStatus(String(args['ticket'] ?? ''))
+        case 'ticket_action': return wf.ticketAction(args)
+      }
+    }
     switch (name) {
       case 'list_sessions': return this.listSessions(str(args['project']))
       case 'list_worktrees': return this.listWorktrees(str(args['project']))
@@ -590,6 +684,11 @@ export class OrchestratorTools {
   /** Why this tile cannot take a prompt now, or null when it can. */
   private refusal(s: ToolSession): string | null {
     if (s.tracker.status === 'exited') return `${this.label(s)} has exited`
+    const ticket = this.d.workflow?.ticketOf(s.id) ?? null
+    if (ticket) {
+      return `${this.label(s)} is managed by ticket ${ticket}. Use ticket_action with action "tell" to pass it a message; ` +
+        'its work is sequenced by the ticket, not by prompts.'
+    }
     if (!s.claude) {
       return `${this.label(s)} is not running Claude Code (or tring's hooks are not installed, so it cannot tell). ` +
         'send_prompt only talks to agents; use create_session to start one.'

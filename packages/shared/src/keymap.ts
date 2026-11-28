@@ -5,12 +5,13 @@
  * keyboard-layout independent — Digit1 is Digit1 on AZERTY too.
  */
 
-export const SLOT_COUNT = 16
+export const SLOT_COUNT = 24
 
 export interface Chord {
   code: string
   ctrl?: boolean
   shift?: boolean
+  alt?: boolean
 }
 
 /** Configurable: an input method or window manager may claim Ctrl+Space. */
@@ -28,11 +29,18 @@ function build(): SlotBinding[] {
     const digit = slot === 10 ? 0 : slot
     out.push({ slot, code: `Digit${digit}`, legend: String(digit) })
   }
-  // Slots 11–16: Ctrl+digit where the browser allows it, Shift+digit always.
-  for (let slot = 11; slot <= SLOT_COUNT; slot++) {
-    const digit = slot - 10
+  // Slots 11–20: Ctrl+digit where the browser allows it, Shift+digit always.
+  for (let slot = 11; slot <= 20; slot++) {
+    const digit = (slot - 10) % 10
     out.push({ slot, code: `Digit${digit}`, ctrl: true, legend: `Ctrl+${digit}` })
     out.push({ slot, code: `Digit${digit}`, shift: true, legend: `Shift+${digit}` })
+  }
+  // Slots 21–24: Alt+1…4. Not Ctrl+Alt, which is AltGr on Windows and types
+  // characters; on a Mac Option+digit types them too, so there the picker and
+  // the phone switcher are the way to these four.
+  for (let slot = 21; slot <= SLOT_COUNT; slot++) {
+    const digit = slot - 20
+    out.push({ slot, code: `Digit${digit}`, alt: true, legend: `Alt+${digit}` })
   }
   return out
 }
@@ -68,7 +76,7 @@ function matches(chord: Chord, e: KeyEventLike): boolean {
     e.code === chord.code &&
     e.ctrlKey === Boolean(chord.ctrl) &&
     e.shiftKey === Boolean(chord.shift) &&
-    !e.altKey &&
+    e.altKey === Boolean(chord.alt) &&
     !e.metaKey
   )
 }
@@ -114,7 +122,7 @@ export function isPasteKey(e: KeyEventLike, isMac: boolean): boolean {
   return !isMac && e.code === 'KeyV' && e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey
 }
 
-/** Both forms are printed on tiles 11–16, since only one may reach the page. */
+/** Both forms are printed on tiles 11–20, since only one may reach the page. */
 export function legendForSlot(slot: number): string {
   return SLOT_BINDINGS.filter((b) => b.slot === slot)
     .map((b) => b.legend)

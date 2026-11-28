@@ -67,7 +67,7 @@ All of this goes away when node-pty publishes a stable release carrying the fix.
 
 `tring` starts the daemon and opens a chromeless browser window — no address bar, no
 tab strip, its own taskbar entry. In that window the browser stops reserving
-`Ctrl+1`–`Ctrl+8` for tab switching, so slots 11–16 get their natural keys.
+`Ctrl+1`–`Ctrl+8` for tab switching, so slots 11–20 get their natural keys.
 
 ### Windows
 
@@ -114,7 +114,7 @@ npm i -g ./packages/server          # install this checkout as `tring`
 
 Flags: `--port` (7331), `--host` (127.0.0.1), `--token`, `--tls-cert`, `--tls-key`,
 `--scrollback` (5000), `--idle-ms` (3000), `--shell`, `--fs-root`, `--allow-origin`,
-`--insecure-no-token`, `--no-open`, `--no-update-check`, `--version`.
+`--insecure-no-token`, `--no-open`, `--no-update-check`, `--allow-sleep`, `--version`.
 
 ## On a phone
 
@@ -230,7 +230,7 @@ with a new token replaces the remembered one.
 
 ## Projects
 
-A project is a name and a root directory, and it owns its own 16 slots and its own
+A project is a name and a root directory, and it owns its own 24 slots and its own
 picker. The first run asks you to create one. Add more with `+` in the tab bar, and
 switch with a click or `p` inside the picker.
 
@@ -261,7 +261,8 @@ streams thumbnails, which is what keeps several projects cheap.
 |---|---|
 | `Ctrl+Space` | open the picker |
 | `1`–`9`, `0` | focus slot 1–10 |
-| `Ctrl+1`–`Ctrl+6` or `Shift+1`–`Shift+6` | focus slot 11–16 |
+| `Ctrl+1`–`Ctrl+0` or `Shift+1`–`Shift+0` | focus slot 11–20 |
+| `Alt+1`–`Alt+4` | focus slot 21–24 (on a Mac Option+digit types characters: use the switcher) |
 | `n` | focus the next finished session |
 | `p` | switch project |
 | `Space` | back to the previous session |
@@ -325,12 +326,25 @@ Running sessions are unaffected until you restart the daemon. The check never
 blocks startup and fails silently when offline. Opt out with
 `--no-update-check` or `TRING_NO_UPDATE_CHECK=1`.
 
+## Staying awake for phones
+
+A phone reaches tring through this machine, so when the machine sleeps the phone
+gets nothing until someone wakes it at the keyboard. Windows' idle sleep counts
+only local input: a PC left locked while you work from your phone sleeps after
+45 minutes on mains, however busy the phone keeps it.
+
+So while phones can reach tring (an `--allow-origin`, or bound off localhost) the
+daemon holds a request that blocks idle sleep only, the way a video player does;
+the lid, the power button and Start → Sleep still sleep the machine. On Windows
+it shows in `powercfg /requests` (as admin) as a `powershell.exe` under SYSTEM.
+Opt out with `--allow-sleep` or `TRING_ALLOW_SLEEP=1`.
+
 ## Ring size
 
-Sixteen terminals is the default. The gear in the tab bar offers 4, 8, 12 and 16, and the
+Sixteen terminals is the default. The gear in the tab bar offers 4, 8, 12, 16 and 24, and the
 choice is remembered per browser.
 
-Twelve and sixteen are rings. Four and eight are bands — a row above and a row below, with
+Twelve, sixteen and twenty-four are rings. Four and eight are bands — a row above and a row below, with
 the focus terminal spanning the full width, because below twelve slots a ring's side
 columns cost the centre more width than the tiles are worth:
 
@@ -345,10 +359,11 @@ columns cost the centre more width than the tiles are worth:
 └────────┴────────┘      └────┴────┴────┴────┘
 ```
 
-The daemon is unaffected: every project still owns sixteen slots, so this is a view onto
+The daemon is unaffected: every project owns twenty-four slots, so this is a view onto
 them rather than a limit on them. Shrinking below a slot that is in use is refused with a
 notice rather than hiding a session that would still ring and still count in the tab badge
-— close those sessions first, or switch back up.
+— close those sessions first, or switch back up. The same goes the other way: a project
+with a session above slot 16 shows the ring of 24 until that slot is free again.
 
 ## Claude usage
 
@@ -658,6 +673,98 @@ Orchestrator is the inbox it always was.
 
 It needs the hooks (`tring hooks install`): they are how it knows which tiles run Claude
 and when an agent has finished.
+
+### Multi-PR workflow
+
+For a complex feature or bug fix, built by several agents as small, tested, reviewed units,
+landed the way that suits the ticket: independent PRs, a stack, or one PR of their commits.
+Switch it on in **Settings → Workflow → Multi-PR workflow** (off by default; off, nothing
+of it runs or shows). The orchestrator agent restarts in the same conversation to pick up
+its ticket tools.
+
+Then tell the orchestrator *work on ticket CHV-3193* (or describe the work). It looks the
+ticket up the way it already does (or asks you to paste it), works out which local repos
+it touches, and calls `start_ticket`. tring opens a tab for the ticket without moving your
+view, and in it:
+
+- A **planner** (read-only) splits the ticket into 1–16 small units (aim: 100–400 changed
+  lines each): each with its scope, the files only it may edit, the interfaces it provides
+  and uses, its tests and acceptance criteria. It also **recommends how they land**, with a
+  line each on coupling, file overlap, size, repos, review load and shipping. tring keeps
+  its own local tickets (`<KEY>-1`, `<KEY>-2`… under `~/.config/tring/tickets/`); it never
+  writes to your tracker.
+- **You choose, on every plan card**, with one *Approve plan* under a strategy picker
+  (the planner's pick marked ★; your Settings default pre-selected):
+
+  | | Independent PRs | Stacked PRs | Single PR |
+  | --- | --- | --- | --- |
+  | For | units that do not depend on each other | layers that build on each other | tightly coupled or small changes, or one PR per ticket |
+  | Branches | each off the base | each on the unit below | local only; tring makes one branch |
+  | PRs | one per unit, into the base (or a feature branch and one final PR) | one per unit, on the one below | one per repo, a commit per unit |
+  | Merge | any order | bottom up | once |
+  | Base moves | only a unit that would conflict is rebased | the stack is restacked bottom up | tring re-assembles |
+
+  A pick the plan does not fit (independent PRs for units that depend on each other)
+  reads *(re-plans)*: the planner reshapes the plan for it, and you choose again.
+- A **coder** per unit, in its own worktree. Units commit their interfaces first; the ones
+  using them start once those exist and code against the plan.
+- A **fresh reviewer** per review round, read-only, using a code-review skill if you have
+  one. A high or medium finding holds the unit only with proof (a failing command, or a
+  line it changed); one already on the base becomes a follow-up instead. Each held one is
+  a card: *Fix* (the coder looks into it, and may decline it with a reason) or *Skip with
+  reason…*. A review stands across a rebase as long as the unit's change has the same
+  `git patch-id`.
+- An **integration check** per repo once its units are all reviewed: tring merges them
+  onto the base (or, for a single PR, assembles one commit per unit) in a worktree of its
+  own, and a read-only **integrator** runs every unit's tests and the full suite there.
+  Pushes wait for it; a failure is a card that sends it to the unit that should fix it.
+- *Push* is yours to click. Coders push their units and tring opens each PR itself; a
+  single PR tring pushes and opens on its own (see
+  [Pull requests](#pull-requests-github-and-bitbucket)). You merge; tring follows the
+  merge and CI, and keeps a stack's PRs pointed at the right base. When it is done,
+  *Clean up…* offers to remove the tab, worktrees and branches, ticking only what is safe
+  and never forcing git.
+
+The rules are enforced, not just asked for: each tile runs `claude --permission-mode
+auto` with its own settings, and tring's hook denies an edit outside the PR's files, any
+push before you click Push, and any merge. Agents report through a `tring-stack` MCP
+server that only their own token opens, and a "tests pass" counts only for a committed
+HEAD. At most *Agents per ticket* (4–16) work at once, and none start while the usage
+panel shows a limit at 90 % or more. The ticket's feature card (pinned at the top of the
+inbox, on the phone too) shows its progress and checklist; the tab shows a work view: a
+stack joined bottom up, independent units side by side, or a single PR's commits, each
+repo ending with its integration check.
+
+Settings → Workflow also sets the default strategy, the final combined PR for independent
+PRs, the integration check, and a model and effort for each role (planner, coders,
+reviewers, integration checks; each tile starts with `claude --model … --effort …`).
+
+### Pull requests: GitHub and Bitbucket
+
+The agents never hold a forge token and never open, edit or merge a PR; tring does the
+opening and retargeting, and only reads the rest. It knows the forge from each repo's
+`origin`.
+
+- **GitHub** goes through your own `gh` (`gh pr create --draft`, `gh pr edit --base`,
+  `gh pr view` for the merge and checks).
+- **Bitbucket Cloud** goes through its REST API with a scoped
+  [API token](https://support.atlassian.com/bitbucket-cloud/docs/create-an-api-token/)
+  you create for tring: *Create API token with scopes*, app Bitbucket, scopes
+  `read:pullrequest:bitbucket` and `write:pullrequest:bitbucket`. Put it in
+  `~/.config/tring/bitbucket.json` (keep it to yourself: `chmod 600`):
+
+  ```json
+  { "token": "ATATT…", "email": "you@example.com" }
+  ```
+
+  With `email` (your Atlassian account email) the token goes as basic auth; without it,
+  as a bearer token, which also suits a repository or workspace access token. Or set
+  `TRING_BITBUCKET_TOKEN` (and `TRING_BITBUCKET_EMAIL`) for the daemon. It is read on
+  each use, so no restart is needed; Settings → Workflow says whether tring has one.
+  Builds on the PR (Pipelines or any CI that posts commit statuses) go on the checklist.
+- **Without a token** (or when `gh` fails), the push is still recorded and the card gives
+  you the link to open the PR yourself. A merge is then seen once the branch is in the
+  base on `origin` (a merge commit or fast-forward); a squash merge needs *Mark merged*.
 
 ## Claude Code
 

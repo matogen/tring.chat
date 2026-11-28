@@ -29,6 +29,8 @@ function flag(name: string): string | undefined {
 // the environment: a $TRING_TOKEN inherited from some other tring (a daemon
 // started from inside a tile) belongs to a different daemon than --url.
 const urlFlag = flag('--url')
+// `--api stack`: a multi-PR workflow tile's tools, behind its own token.
+const api = flag('--api') === 'stack' ? 'stack' : 'orchestrator'
 const base = urlFlag ?? process.env['TRING_URL'] ?? ''
 const token = ((): string | undefined => {
   const file = flag('--token-file')
@@ -85,8 +87,10 @@ async function handle(req: Request): Promise<void> {
       return reply({
         protocolVersion: typeof params?.['protocolVersion'] === 'string' ? params['protocolVersion'] : PROTOCOL,
         capabilities: { tools: {} },
-        serverInfo: { name: 'tring', version: '1' },
-        instructions: 'Tools for the tiles in tring: list them, read them, prompt their agents, start new ones, wait for them.',
+        serverInfo: { name: api === 'stack' ? 'tring-stack' : 'tring', version: '1' },
+        instructions: api === 'stack'
+          ? 'Your place in a multi-PR ticket: your brief, the stack, and how you report to it.'
+          : 'Tools for the tiles in tring: list them, read them, prompt their agents, start new ones, wait for them.',
       })
     case 'ping':
       return reply({})
@@ -97,7 +101,7 @@ async function handle(req: Request): Promise<void> {
     }
     case 'tools/list': {
       try {
-        const r = await call('GET', '/api/orchestrator/tools')
+        const r = await call('GET', `/api/${api}/tools`)
         if (r.status !== 200) return fail(-32603, `tring answered ${r.status}`)
         return reply({ tools: (JSON.parse(r.body) as { tools: unknown[] }).tools })
       } catch (err) {
@@ -108,7 +112,7 @@ async function handle(req: Request): Promise<void> {
       const abort = new AbortController()
       if (id !== undefined) pending.set(id, abort)
       try {
-        const r = await call('POST', '/api/orchestrator/call', { name: params?.['name'], arguments: params?.['arguments'] ?? {} }, abort.signal)
+        const r = await call('POST', `/api/${api}/call`, { name: params?.['name'], arguments: params?.['arguments'] ?? {} }, abort.signal)
         const parsed = r.status === 200 ? JSON.parse(r.body) as { text: string; isError: boolean } : null
         const text = parsed?.text ?? `tring answered ${r.status}: ${r.body.slice(0, 300)}`
         return reply({ content: [{ type: 'text', text }], isError: parsed?.isError ?? true })

@@ -19,12 +19,15 @@ import { attachFileDrop, filePicker, insertFiles, refuseStrayDrops } from './dro
 import { Dictation, recognitionFactory } from './dictation.ts'
 import { Voice, type VoiceTarget } from './voice.ts'
 import { voiceSection } from './voice-settings.ts'
+import { workflowSection } from './workflow-settings.ts'
+import { tabBadges, workRows, workTitle } from './workflow-view.ts'
+import type { TicketView } from '@tring/shared/workflow'
 import { attachTileDrag } from './tile-drag.ts'
 import { attachImagePaste, pasteFromClipboard, type PasteOptions } from './paste.ts'
 import { copyToClipboard, recentLinks, screenText } from './copy.ts'
 import { Thumbnail } from './thumbnail.ts'
 import {
-  applyRing, placeInGrid, RING_SIZES, ringSize, setRingSize, type RingSize,
+  applyRing, fitRing, placeInGrid, ringSize, setRingSize, type RingSize,
 } from './ring-layout.ts'
 import { renderBar } from './project-bar.ts'
 import { MOBILE_QUERY, renderSwitcher } from './switcher.ts'
@@ -36,6 +39,11 @@ import { tring } from './sound.ts'
 const barEl = document.getElementById('bar') as HTMLElement
 const switcherEl = document.getElementById('switcher') as HTMLElement
 const ringEl = document.getElementById('ring') as HTMLElement
+const stackEl = document.getElementById('stack') as HTMLElement
+/** The multi-PR workflow's tickets, from the daemon's state. */
+let tickets: TicketView[] = []
+/** The inbox as last sent, for the ticket a card button belongs to. */
+let inboxItems: import('@tring/shared/protocol').InboxItem[] = []
 const usageEl = document.getElementById('usage') as HTMLElement
 
 let projects: ProjectInfo[] = []
@@ -94,6 +102,12 @@ const inboxPanel = new InboxPanel(focusCell, {
   },
   onAnswer: (itemId, decision, extra) => ws.send({ type: 'answer', itemId, decision, ...extra }),
   onReply: (itemId, text) => ws.send({ type: 'reply', itemId, text }),
+  upload: uploadFile,
+  onAction: (itemId, actionId, text, value) => actionId === 'cleanup'
+    ? void openCleanup(inboxItems.find((i) => i.id === itemId)?.ticketId ?? '')
+    : ws.send({
+    type: 'action', itemId, actionId, ...(text !== undefined ? { text } : {}), ...(value !== undefined ? { value } : {}),
+  }),
   onOpen: (id) => openFromInbox(id),
   hooks: () => api<{ installed: boolean; path: string }>('/api/hooks'),
   installHooks: async () => { await apiPost('/api/hooks') },
@@ -273,16 +287,9 @@ const sessionAt = (slot: number): SessionInfo | undefined => sessions().find((s)
 const sessionById = (id: string): SessionInfo | undefined =>
   projects.flatMap((p) => p.sessions).find((s) => s.id === id)
 
-/**
- * The ring you chose, grown to fit if the viewed project holds sessions in
- * higher slots. A restored project can arrive with slot 13 occupied long after
- * you picked a ring of 8, and a running session that renders nowhere — still
- * ringing, still counted in the tab badge — is the one outcome worth spending
- * code to make impossible.
- */
+/** The ring you chose, grown to fit the viewed project's sessions (fitRing). */
 function effectiveSize(): RingSize {
-  const highest = Math.max(0, ...sessions().map((s) => s.slot))
-  return RING_SIZES.find((n) => n >= highest && n >= ringSize()) ?? RING_SIZES[RING_SIZES.length - 1]!
+  return fitRing(ringSize(), Math.max(0, ...sessions().map((s) => s.slot)))
 }
 
 /** Global across every project: the title's job is to reach you elsewhere. */
@@ -294,6 +301,7 @@ function handleMessage(msg: ServerMessage): void {
     case 'state': {
       projects = msg.projects
       update = msg.update ?? update
+      tickets = msg.tickets ?? []
       const alive = new Set(projects.flatMap((p) => p.sessions).map((s) => s.id))
       for (const id of lastShots.keys()) if (!alive.has(id)) lastShots.delete(id)
       viewedId = msg.activeProjectId ?? projects[0]?.id ?? null
@@ -357,6 +365,7 @@ function handleMessage(msg: ServerMessage): void {
       paintSwitcher()
       break
     case 'inbox': {
+      inboxItems = msg.items
       const fresh = inboxPanel.setItems(msg.items)
       if (inboxSeen && fresh.length > 0) tring()
       inboxSeen = true
@@ -381,10 +390,102 @@ const barCallbacks = () => ({
 
 const paintBar = (): void =>
   renderBar(barEl, projects, viewedId, barCallbacks(), update, viewMode === 'usage',
-    { open: inboxPanel.isOpen, count: inboxPanel.count })
+    { open: inboxPanel.isOpen, count: inboxPanel.count }, tabBadges(tickets))
+
+/**
+ * A ticket tab's stack: one row per repo, its PRs bottom up with their
+ * status and what holds them. A click on a PR focuses its coder's tile.
+ */
+function paintStack(): void {
+  const t = tickets.find((x) => x.projectId === viewedId)
+  stackEl.hidden = !t || viewMode === 'usage'
+  if (!t) { stackEl.replaceChildren(); return }
+  const rows = workRows(t).map((r) => {
+    const row = document.createElement('div')
+    row.className = `stack-row shape-${r.shape}`
+    const head = document.createElement('span')
+    head.className = 'stack-repo'
+    head.textContent = r.repo
+    head.title = `builds on ${r.base}`
+    row.append(head)
+    // A single PR: its units' commits inside one outline, with its branch.
+    const into = r.shape === 'single' ? document.createElement('span') : row
+    if (r.shape === 'single') {
+      into.className = 'stack-single'
+      const b = document.createElement('span')
+      b.className = 'stack-single-branch'
+      b.textContent = `${r.combined?.branch ?? 'single PR'} · ${r.combined?.label ?? ''}`
+      into.append(b)
+      row.append(into)
+    }
+    for (const c of r.chips) {
+      if (c.joined) {
+        const arrow = document.createElement('span')
+        arrow.className = 'stack-join'
+        arrow.textContent = '←'
+        arrow.setAttribute('aria-hidden', 'true')
+        into.append(arrow)
+      }
+      const chip = document.createElement('button')
+      chip.type = 'button'
+      chip.className = `stack-chip status-${c.status}${c.marks.length ? ' held' : ''}`
+      chip.title = [`${c.key} ${c.title}`, `on ${c.on}`, ...c.marks, ...(c.prUrl ? [c.prUrl] : [])].join('\n')
+      const k = document.createElement('b')
+      k.textContent = c.key.replace(`${t.localKey}-`, '')
+      const label = document.createElement('span')
+      label.textContent = `${c.title} · ${c.label}`
+      chip.append(k, label)
+      if (c.marks.length) {
+        const m = document.createElement('i')
+        m.textContent = c.marks.some((x) => x.startsWith('stuck')) ? '\u26a0' : c.marks.includes('needs restack') ? '\u27f3' : '\u23f8'
+        chip.append(m)
+      }
+      if (c.verified !== null) chip.classList.add(c.verified ? 'verified' : 'unverified')
+      chip.disabled = c.slot === null
+      chip.onclick = () => { if (c.slot !== null) focusSlot(c.slot) }
+      into.append(chip)
+    }
+    if (r.integration) {
+      const i = document.createElement('span')
+      i.className = `stack-integration ${r.integration.state}`
+      i.textContent = r.integration.label
+      row.append(i)
+    }
+    if (r.combined && r.shape !== 'single') {
+      const f = document.createElement('span')
+      f.className = 'stack-final'
+      f.textContent = `${r.combined.branch} · ${r.combined.label}`
+      if (r.combined.prUrl) f.title = r.combined.prUrl
+      row.append(f)
+    }
+    return row
+  })
+  const title = document.createElement('span')
+  title.className = 'stack-title'
+  title.textContent = workTitle(t)
+  stackEl.replaceChildren(title, ...rows)
+}
+
+/** Clean up… on a finished ticket's card: the dialog, then only what was ticked. */
+async function openCleanup(ticketId: string): Promise<void> {
+  try {
+    const { items } = await api<{ items: ui.CleanupChoice[] }>(`/api/tickets/${encodeURIComponent(ticketId)}/cleanup`)
+    const t = tickets.find((x) => x.id === ticketId)
+    ui.openCleanupDialog(`Clean up ${t?.localKey ?? 'the ticket'}`, items, (ids) => {
+      void apiPost<{ results: Array<{ id: string; error: string | null }> }>(`/api/tickets/${encodeURIComponent(ticketId)}/cleanup`, { items: ids })
+        .then((r) => {
+          const failed = r.results.filter((x) => x.error)
+          showToast(failed.length ? `not removed: ${failed.map((x) => `${x.id} (${x.error})`).join('; ')}` : 'cleaned up')
+        }, (err: Error) => showToast(`could not clean up: ${err.message}`))
+    })
+  } catch (err) {
+    showToast(`could not clean up: ${(err as Error).message}`)
+  }
+}
 
 function render(): void {
   paintBar()
+  paintStack()
   renderRing()
   paintStatuses()
 }
@@ -899,10 +1000,11 @@ function openSettings(): void {
     if (v.ring !== ringSize()) changeRingSize(v.ring)
     else { paintBar(); void refreshUsage() }
     // Notifications are a phone's: a desktop is not offered them at all.
-  }, detectPhone() ? [notificationsSection()] : [voiceSection(() => {
+    // The workflow is the daemon's, so both are offered it.
+  }, detectPhone() ? [notificationsSection(), workflowSection()] : [voiceSection(() => {
     voice.forget()
     void voice.engine().then((engine) => document.body.classList.toggle('no-voice', engine === null))
-  })])
+  }), workflowSection()])
 }
 
 function changeRingSize(size: RingSize): void {
@@ -1113,7 +1215,7 @@ function pickerKey(e: KeyboardEvent): void {
   }
 
   const slot = slotForEvent(e)
-  // The keymap always binds all 16; a smaller ring simply has no slot 13.
+  // The keymap always binds all 24; a smaller ring simply has no slot 13.
   if (slot !== null && slot <= effectiveSize() && overlayMode === 'picker') {
     e.preventDefault()
     ui.close()

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { BackgroundTask, SessionCron } from './hand-back.ts'
 import type {
   InboxDecision, InboxItem, InboxQuestion,
 } from '@tring/shared/protocol'
@@ -40,6 +41,8 @@ export interface HookPayload {
   last_assistant_message?: string
   notification_type?: string
   message?: string
+  /** UserPromptSubmit: what was typed. */
+  prompt?: string
   session_id?: string
   /** Where Claude Code records the conversation; sent with every event. */
   transcript_path?: string
@@ -48,10 +51,31 @@ export interface HookPayload {
   source?: string
   /** SessionEnd: clear | logout | prompt_input_exit | other … */
   reason?: string
+  /** Stop: this Stop follows one that another Stop hook blocked. */
+  stop_hook_active?: boolean
+  /** Stop: background work still in flight, which will wake the agent (hand-back.ts). */
+  background_tasks?: BackgroundTask[]
+  /** Stop: wakeups scheduled for this session: ScheduleWakeup, CronCreate, /loop. */
+  session_crons?: SessionCron[]
+  /** SubagentStop: which subagent. */
+  agent_id?: string
+}
+
+/** Timers, so tests can run the settle delay by hand. */
+export interface Timers {
+  set(fn: () => void, ms: number): unknown
+  clear(handle: unknown): void
+}
+
+const realTimers: Timers = {
+  set: (fn, ms) => { const t = setTimeout(fn, ms); t.unref?.(); return t },
+  clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
 }
 
 export class Inbox {
   private readonly entries = new Map<string, Entry>()
+  /** Reply cards waiting out their settle delay, per session (replySoon). */
+  private readonly settling = new Map<string, unknown>()
   onChange: (() => void) | null = null
   /** A new card, every kind; phone notifications start here (notifier.ts). */
   onAdded: ((item: InboxItem) => void) | null = null
@@ -59,6 +83,7 @@ export class Inbox {
   constructor(
     private readonly now: () => number = Date.now,
     private readonly newId: () => string = randomUUID,
+    private readonly timers: Timers = realTimers,
   ) {}
 
   list(): InboxItem[] {
@@ -82,8 +107,70 @@ export class Inbox {
 
   /** A finished session's last word. One per session: a newer one replaces it. */
   reply(sessionId: string, message: string): InboxItem {
+    this.cancelReply(sessionId)
     this.drop((i) => i.sessionId === sessionId && i.kind === 'reply')
     return this.open({ sessionId, kind: 'reply', message }, null)
+  }
+
+  /**
+   * The reply card, once the session has stayed quiet for `ms`: a hook event
+   * that shows it at work first (a queued prompt, a tool call) cancels it,
+   * through cancelReply or dropSession. A newer one replaces it. Not the tile
+   * going busy: that is read off the screen, and a short turn that never
+   * looked busy can look busy on the repaint after its Stop. A card that is
+   * already showing still ends that way (working).
+   */
+  replySoon(sessionId: string, message: string, ms: number): void {
+    this.cancelReply(sessionId)
+    this.settling.set(sessionId, this.timers.set(() => {
+      this.settling.delete(sessionId)
+      this.reply(sessionId, message)
+    }, ms))
+  }
+
+  /** The session did something, so the reply card it was settling is stale. True when there was one. */
+  cancelReply(sessionId: string): boolean {
+    const t = this.settling.get(sessionId)
+    if (t === undefined) return false
+    this.timers.clear(t)
+    this.settling.delete(sessionId)
+    return true
+  }
+
+  /** Sessions with a reply card waiting out its delay. */
+  settlingSessions(): string[] {
+    return [...this.settling.keys()]
+  }
+
+  /**
+   * The multi-PR workflow's cards, made to match `items`: new ones added
+   * (and announced, for phone notifications), changed ones updated in place,
+   * ones no longer in `items` removed. They are derived from the tickets, so
+   * this is the only way they change. Every other card is left alone.
+   * `announce` false for the first sync after a restart: those were announced before it.
+   */
+  syncWorkflow(items: InboxItem[], announce = true): void {
+    const want = new Map(items.map((i) => [i.id, i]))
+    let changed = false
+    for (const [id, e] of this.entries) {
+      if (e.item.kind !== 'workflow' && e.item.kind !== 'feature') continue
+      if (!want.has(id)) { this.entries.delete(id); changed = true }
+    }
+    const added: InboxItem[] = []
+    for (const item of items) {
+      const had = this.entries.get(item.id)
+      if (!had) {
+        const fresh = { ...item, createdAt: this.now() }
+        this.entries.set(item.id, { item: fresh, settle: null })
+        added.push(fresh)
+        changed = true
+      } else if (JSON.stringify({ ...had.item, createdAt: 0 }) !== JSON.stringify({ ...item, createdAt: 0 })) {
+        had.item = { ...item, createdAt: had.item.createdAt }
+        changed = true
+      }
+    }
+    if (changed) this.onChange?.()
+    if (announce) for (const item of added) this.onAdded?.(item)
   }
 
   /**
@@ -141,6 +228,7 @@ export class Inbox {
   }
 
   dropSession(sessionId: string, kind?: InboxItem['kind']): number {
+    if (!kind || kind === 'reply') this.cancelReply(sessionId)
     return this.drop((i) => i.sessionId === sessionId && (!kind || i.kind === kind))
   }
 }

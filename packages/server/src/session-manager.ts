@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { SLOT_COUNT } from '@tring/shared/keymap'
 import { Session, type ClaudeConversation } from './session.ts'
 
 export interface SessionSpec {
@@ -11,6 +12,8 @@ export interface SessionSpec {
   autorun?: boolean
   /** A Claude conversation to reopen in the new shell; see Session's `resume`. */
   resume?: ClaudeConversation | null
+  /** See Session's `claudeArgs`. */
+  claudeArgs?: string | null
 }
 
 export interface SessionManagerOptions {
@@ -24,11 +27,12 @@ export interface SessionManagerOptions {
   shell?: string
 }
 
-export const SLOT_COUNT = 16
+/** One number for both sides: the keymap binds exactly these slots. */
+export { SLOT_COUNT }
 
 const HEX = /^#[0-9a-f]{6}$/i
 
-/** The 16 fixed slots of one project (spec §4.3). */
+/** The fixed slots of one project (spec §4.3): SLOT_COUNT of them. */
 export class SessionManager {
   private readonly bySlot = new Map<number, Session>()
   private readonly byId = new Map<string, Session>()
@@ -44,7 +48,7 @@ export class SessionManager {
 
   create(spec: SessionSpec = {}): Session {
     const slot = spec.slot ?? this.firstEmptySlot()
-    if (slot === null) throw new Error('all 16 slots are full')
+    if (slot === null) throw new Error(`all ${SLOT_COUNT} slots are full`)
     if (slot < 1 || slot > SLOT_COUNT) throw new Error(`slot ${slot} out of range`)
     if (this.bySlot.has(slot)) throw new Error(`slot ${slot} is occupied`)
 
@@ -67,6 +71,7 @@ export class SessionManager {
       ...(this.opts.shell ? { shell: this.opts.shell } : {}),
       autorun: spec.autorun,
       resume: spec.resume ?? null,
+      claudeArgs: spec.claudeArgs ?? null,
     })
 
     session.onData = (data) => this.onSessionData?.(session, data)
@@ -160,6 +165,7 @@ export class SessionManager {
       // A dead tile that was a shell running Claude comes back to the same
       // conversation; one with its own command re-runs that instead.
       resume: old.claude,
+      claudeArgs: old.claudeArgs,
     }
     // One change, not two. The new PTY gets a new id, so a client watching
     // this slot has to follow it there — and a client that is first told the
